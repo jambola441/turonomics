@@ -1,0 +1,30 @@
+# Node / Extension
+node_modules/
+extension/dist/
+*.crx
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.env
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

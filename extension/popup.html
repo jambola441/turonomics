@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Turonomics</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="container">
+      <h1>Turonomics</h1>
+      <p class="subtitle">Turo trip CSV exporter</p>
+
+      <div id="status" class="status hidden"></div>
+
+      <button id="exportBtn" class="btn">Export Last 90 Days</button>
+
+      <div id="result" class="result hidden">
+        <span id="tripCount"></span> trips exported.
+      </div>
+    </div>
+    <script src="dist/popup.js" type="module"></script>
+  </body>
+</html>

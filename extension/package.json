@@ -1,0 +1,17 @@
+{
+  "name": "turonomics-extension",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "lint": "eslint 'src/**/*.ts'"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.268",
+    "@typescript-eslint/eslint-plugin": "^7.0.0",
+    "@typescript-eslint/parser": "^7.0.0",
+    "eslint": "^8.57.0",
+    "typescript": "^5.4.0"
+  }
+}

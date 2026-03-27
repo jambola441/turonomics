@@ -17,21 +17,28 @@ import type { TuroTrip, MessageType } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Configurable selectors — update these if Turo changes their markup
+//
+// CONFIRMED from real page HTML (examples/turo/trips_history.html):
+//   tripCard: data-testid="baseTripCard" on the <a> element
+//   Trip ID:  parsed from href="/us/en/reservation/{id}"
+//
+// INFERRED (plausible based on Turo's data-testid conventions — verify in
+// DevTools on https://turo.com/us/en/trips/history while logged in):
+//   startTime, endTime, licensePlate
 // ---------------------------------------------------------------------------
 const SELECTORS = {
-  // Each row in the trips list
-  tripRow: "[data-testid='trip-card'], .trip-card, [class*='TripCard']",
-  // Trip ID (reservation number)
-  tripId:
-    "[data-testid='trip-id'], [class*='reservationId'], [class*='tripId']",
-  // Date/time fields — Turo typically shows them as text spans
+  // CONFIRMED: each trip is an <a data-testid="baseTripCard"> link
+  tripCard: "[data-testid='baseTripCard']",
+
+  // INFERRED: <time> elements with ISO datetime attribute
   startTime:
-    "[data-testid='trip-start'], [class*='startDate'], [class*='StartDate'], time[data-type='start']",
+    "[data-testid='tripStartDate'], time[data-testid*='start'], time[data-testid*='Start']",
   endTime:
-    "[data-testid='trip-end'], [class*='endDate'], [class*='EndDate'], time[data-type='end']",
-  // License plate
+    "[data-testid='tripEndDate'], time[data-testid*='end'], time[data-testid*='End']",
+
+  // INFERRED: license plate span
   licensePlate:
-    "[data-testid='license-plate'], [class*='licensePlate'], [class*='LicensePlate'], [class*='plate']",
+    "[data-testid='vehiclePlate'], [data-testid*='plate'], [data-testid*='Plate']",
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -55,20 +62,21 @@ function getText(root: Element, selector: string): string {
 }
 
 function parseTripsFromDOM(): TuroTrip[] {
-  const rows = document.querySelectorAll(SELECTORS.tripRow);
+  const cards = document.querySelectorAll(SELECTORS.tripCard);
   const trips: TuroTrip[] = [];
 
-  rows.forEach((row) => {
-    const startTime = getText(row, SELECTORS.startTime);
-    const endTime = getText(row, SELECTORS.endTime);
-    const licensePlate = getText(row, SELECTORS.licensePlate)
-      .toUpperCase()
-      .replace(/\s+/g, "");
-    const tripId =
-      getText(row, SELECTORS.tripId) ||
-      row.getAttribute("data-trip-id") ||
-      row.getAttribute("data-reservation-id") ||
-      "";
+  cards.forEach((card) => {
+    // Trip ID: extracted from href="/us/en/reservation/54727605"
+    const href = card.getAttribute("href") ?? "";
+    const tripId = href.split("/").pop() ?? "";
+
+    const startTime = getText(card, SELECTORS.startTime);
+    const endTime = getText(card, SELECTORS.endTime);
+
+    // Normalize plate: strip state prefix separator (·), spaces, hyphens
+    const licensePlate = getText(card, SELECTORS.licensePlate)
+      .replace(/[·\s\-]/g, "")
+      .toUpperCase();
 
     if (!startTime || !endTime || !licensePlate) return;
     if (!isCutoff(startTime)) return;

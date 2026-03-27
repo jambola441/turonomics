@@ -81,7 +81,11 @@ def match_tolls_to_trips(
 
     for toll in tolls:
         # Determine what identity this toll belongs to
-        toll_owner: str | None = transponder_to_owner.get(toll.transponder_id)
+        toll_owner: str | None = (
+            transponder_to_owner.get(toll.transponder_id)
+            if toll.transponder_id
+            else None
+        )
         if toll_owner is None and toll.license_plate:
             toll_owner = plate_to_owner.get(toll.license_plate)
 

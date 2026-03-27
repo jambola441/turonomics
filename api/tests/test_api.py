@@ -46,11 +46,11 @@ class TestMatchHappyPath:
         assert len(body["trips"]) == 3  # 3 trips in TURO_CSV_VALID
 
     def test_toll_matched_to_trip(self, client: TestClient) -> None:
-        """Verrazano toll (06/01) should match T001 (06/01–06/03, plate ABC1234)."""
+        """LNT toll (06/01) should match T001 (06/01–06/03, plate NYABC1234)."""
         body = _post_match(client).json()
         t001 = next(t for t in body["trips"] if t["trip_id"] == "T001")
         assert t001["total_toll_amount"] > 0
-        assert any(toll["plaza"] == "Verrazano Bridge" for toll in t001["tolls"])
+        assert any(toll["plaza"] == "LNT" for toll in t001["tolls"])
 
     def test_unknown_plate_toll_unmatched(self, client: TestClient) -> None:
         """Toll with QQQ0000 plate (not in any trip) should be unmatched."""

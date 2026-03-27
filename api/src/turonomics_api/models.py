@@ -18,8 +18,8 @@ class EZPassToll(BaseModel):
     timestamp: datetime
     plaza: str
     amount: float
-    transponder_id: str
-    license_plate: str | None = None
+    transponder_id: str | None = None  # None when tag/plate field contains a license plate
+    license_plate: str | None = None   # None when tag/plate field contains a transponder
 
     @field_validator("license_plate")
     @classmethod
@@ -31,8 +31,10 @@ class EZPassToll(BaseModel):
 
     @field_validator("transponder_id")
     @classmethod
-    def normalize_transponder(cls, v: str) -> str:
-        return v.strip()
+    def normalize_transponder(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        return v.strip() or None
 
 
 class OwnerAliases(BaseModel):
@@ -56,7 +58,7 @@ class TollEntry(BaseModel):
     timestamp: datetime
     plaza: str
     amount: float
-    transponder_id: str
+    transponder_id: str | None = None
 
 
 class TripTollResult(BaseModel):

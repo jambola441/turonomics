@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<!--
+  EXAMPLE: Turo trips history page (https://turo.com/us/en/trips/history)
+
+  This file is a representative mock of the Turo trip history page DOM,
+  used as a test fixture for the Turonomics Chrome extension content script.
+
+  CONFIRMED attributes (observed from real page HTML):
+    - data-testid="baseTripCard"  on the <a> card element
+    - href="/us/en/reservation/{id}"  on the same <a> element (trip ID source)
+
+  INFERRED attributes (plausible based on Turo's data-testid naming conventions,
+  but NOT confirmed from the live page — update after inspecting in DevTools):
+    - data-testid="tripStartDate"   start datetime in ISO format on <time> element
+    - data-testid="tripEndDate"     end datetime in ISO format on <time> element
+    - data-testid="vehiclePlate"    license plate text
+
+  HOW TO VERIFY / UPDATE SELECTORS:
+    1. Log into turo.com and navigate to /us/en/trips/history
+    2. Open DevTools → inspect a trip card
+    3. Find the actual data-testid (or class) on the date/plate elements
+    4. Update SELECTORS in extension/src/content.ts to match
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Trips | Turo</title>
+</head>
+<body>
+  <main>
+    <section aria-label="Trip history">
+
+      <!-- Trip 1: Dec 28–31 2025 | plate NY LZA7293 | reservation 54727605 -->
+      <a
+        data-testid="baseTripCard"
+        class="css-1gbirfv-cardLinkStyles"
+        href="/us/en/reservation/54727605"
+        aria-label="Trip Dec 28 – Dec 31, 2025"
+      >
+        <div class="css-tripcard-inner">
+          <div class="css-dates">
+            <!-- INFERRED: data-testid on <time> with ISO datetime attribute -->
+            <time data-testid="tripStartDate" datetime="2025-12-28T10:00:00">
+              Dec 28, 2025
+            </time>
+            <span aria-hidden="true">–</span>
+            <time data-testid="tripEndDate" datetime="2025-12-31T09:00:00">
+              Dec 31, 2025
+            </time>
+          </div>
+          <div class="css-vehicle">
+            <span class="css-vehicle-name">2022 Toyota Camry</span>
+            <!-- INFERRED: data-testid on license plate span -->
+            <span data-testid="vehiclePlate">NY · LZA7293</span>
+          </div>
+          <div class="css-guest">
+            <span>John Smith</span>
+          </div>
+        </div>
+      </a>
+
+      <!-- Trip 2: Dec 14–16 2025 | plate NY LEH9892 | reservation 54201837 -->
+      <a
+        data-testid="baseTripCard"
+        class="css-1gbirfv-cardLinkStyles"
+        href="/us/en/reservation/54201837"
+        aria-label="Trip Dec 14 – Dec 16, 2025"
+      >
+        <div class="css-tripcard-inner">
+          <div class="css-dates">
+            <time data-testid="tripStartDate" datetime="2025-12-14T08:00:00">
+              Dec 14, 2025
+            </time>
+            <span aria-hidden="true">–</span>
+            <time data-testid="tripEndDate" datetime="2025-12-16T20:00:00">
+              Dec 16, 2025
+            </time>
+          </div>
+          <div class="css-vehicle">
+            <span class="css-vehicle-name">2021 Honda Civic</span>
+            <span data-testid="vehiclePlate">NY · LEH9892</span>
+          </div>
+          <div class="css-guest">
+            <span>Jane Doe</span>
+          </div>
+        </div>
+      </a>
+
+      <!-- Trip 3: Nov 18–22 2025 | transponder tag only, plate NJ ABC1234 | reservation 53887401 -->
+      <a
+        data-testid="baseTripCard"
+        class="css-1gbirfv-cardLinkStyles"
+        href="/us/en/reservation/53887401"
+        aria-label="Trip Nov 18 – Nov 22, 2025"
+      >
+        <div class="css-tripcard-inner">
+          <div class="css-dates">
+            <time data-testid="tripStartDate" datetime="2025-11-18T12:00:00">
+              Nov 18, 2025
+            </time>
+            <span aria-hidden="true">–</span>
+            <time data-testid="tripEndDate" datetime="2025-11-22T10:00:00">
+              Nov 22, 2025
+            </time>
+          </div>
+          <div class="css-vehicle">
+            <span class="css-vehicle-name">2023 Ford Escape</span>
+            <span data-testid="vehiclePlate">NJ · ABC1234</span>
+          </div>
+          <div class="css-guest">
+            <span>Bob Jones</span>
+          </div>
+        </div>
+      </a>
+
+      <!-- Trip 4: older than 90 days — content script should skip this -->
+      <a
+        data-testid="baseTripCard"
+        class="css-1gbirfv-cardLinkStyles"
+        href="/us/en/reservation/49001122"
+        aria-label="Trip Jan 5 – Jan 8, 2025"
+      >
+        <div class="css-tripcard-inner">
+          <div class="css-dates">
+            <time data-testid="tripStartDate" datetime="2025-01-05T09:00:00">
+              Jan 5, 2025
+            </time>
+            <span aria-hidden="true">–</span>
+            <time data-testid="tripEndDate" datetime="2025-01-08T18:00:00">
+              Jan 8, 2025
+            </time>
+          </div>
+          <div class="css-vehicle">
+            <span class="css-vehicle-name">2022 Toyota Camry</span>
+            <span data-testid="vehiclePlate">NY · LZA7293</span>
+          </div>
+          <div class="css-guest">
+            <span>Alice Brown</span>
+          </div>
+        </div>
+      </a>
+
+    </section>
+  </main>
+</body>
+</html>

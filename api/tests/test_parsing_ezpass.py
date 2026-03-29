@@ -50,24 +50,26 @@ class TestTransponderRows:
 
 class TestPlateRows:
     def test_state_prefix_plate_becomes_license_plate(self) -> None:
+        # "NY LZA7293" → state prefix stripped → "LZA7293"
         tolls = parse_ezpass_csv(_HDR + row(tag_plate="NY LZA7293"))
-        assert tolls[0].license_plate == "NYLZA7293"
+        assert tolls[0].license_plate == "LZA7293"
         assert tolls[0].transponder_id is None
 
     def test_plate_normalized_uppercase_no_spaces(self) -> None:
+        # "nj abc 1234" → state prefix "nj " stripped → "ABC1234"
         tolls = parse_ezpass_csv(_HDR + row(tag_plate="nj abc 1234"))
-        assert tolls[0].license_plate == "NJABC1234"
+        assert tolls[0].license_plate == "ABC1234"
 
     def test_plate_with_middle_dot_stripped(self) -> None:
-        # Turo shows plates as "NY · LZA7293"; EZPass may do similar
+        # "NY · LZA7293" → state prefix "NY " stripped → "· LZA7293" → dots removed → "LZA7293"
         tolls = parse_ezpass_csv(_HDR + row(tag_plate="NY · LZA7293"))
-        assert tolls[0].license_plate == "NYLZA7293"
+        assert tolls[0].license_plate == "LZA7293"
 
     def test_cbdtp_plate_row(self) -> None:
         tolls = parse_ezpass_csv(
             _HDR + row(tag_plate="NY LEH9892", agency="CBDTP", exit_="CRZ", amount="$-9.00")
         )
-        assert tolls[0].license_plate == "NYLEH9892"
+        assert tolls[0].license_plate == "LEH9892"
         assert tolls[0].amount == 9.00
         assert tolls[0].plaza == "CRZ"
 
@@ -153,7 +155,7 @@ class TestRealWorldSample:
     def test_plate_row_parsed_correctly(self) -> None:
         tolls = parse_ezpass_csv(self.SAMPLE)
         rbk = next(t for t in tolls if t.plaza == "RKB")
-        assert rbk.license_plate == "NYLZA7293"
+        assert rbk.license_plate == "LZA7293"
         assert rbk.transponder_id is None
         assert rbk.amount == 9.11
         assert rbk.timestamp == datetime(2025, 12, 31, 15, 10, 36)

@@ -105,8 +105,10 @@ def _classify_tag_plate(value: str) -> tuple[str | None, str | None]:
     digits_only = re.sub(r"\s", "", stripped)
     if digits_only.isdigit():
         return digits_only, None  # transponder
-    # License plate: uppercase, drop spaces, dots, hyphens, middle-dots (·)
-    plate = re.sub(r"[\s\-\.\·]", "", stripped).upper()
+    # Strip optional leading 2-letter state prefix (e.g. "NY LEH9892" → "LEH9892")
+    plate_raw = re.sub(r"^[A-Za-z]{2}\s+", "", stripped)
+    # Uppercase, drop spaces, dots, hyphens, middle-dots (·)
+    plate = re.sub(r"[\s\-\.\·]", "", plate_raw).upper()
     return None, plate or None
 
 

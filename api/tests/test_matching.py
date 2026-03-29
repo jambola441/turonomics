@@ -1,7 +1,7 @@
 from datetime import datetime
 
 from turonomics_api.matching import match_tolls_to_trips
-from turonomics_api.models import EZPassToll, OwnerAliases, TuroTrip
+from turonomics_api.models import EZPassToll, TuroTrip
 
 
 def make_trip(
@@ -35,14 +35,9 @@ def make_toll(
 
 
 ALIASES = {
-    "John Smith": OwnerAliases(
-        transponder_ids=["E-ZPass-123"],
-        license_plates=["ABC1234", "XYZ5678"],
-    ),
-    "Jane Doe": OwnerAliases(
-        transponder_ids=["E-ZPass-456"],
-        license_plates=["LMN9999"],
-    ),
+    "ABC1234": "E-ZPass-123",
+    "XYZ5678": "E-ZPass-123",
+    "LMN9999": "E-ZPass-456",
 }
 
 
@@ -102,12 +97,6 @@ class TestAliasResolution:
         ]
         result = match_tolls_to_trips(trips, tolls, ALIASES)
         assert all(len(t.tolls) == 1 for t in result.trips)
-
-    def test_owner_assigned_to_trip(self) -> None:
-        trips = [make_trip("T1", "2024-06-01T08:00:00", "2024-06-03T20:00:00", "ABC1234")]
-        tolls = [make_toll("2024-06-02T10:00:00", "E-ZPass-123", 19.0)]
-        result = match_tolls_to_trips(trips, tolls, ALIASES)
-        assert result.trips[0].owner == "John Smith"
 
     def test_different_owner_toll_not_matched(self) -> None:
         """Jane's transponder should not match a trip belonging to John's plate."""

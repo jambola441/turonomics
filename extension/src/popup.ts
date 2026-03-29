@@ -88,7 +88,7 @@ exportBtn.addEventListener("click", async () => {
       return;
     }
 
-    showStatus("Scraping trips from Turo dashboard...");
+    showStatus("Scraping trip list...");
     const trips = await scrapeTrips(tab.id);
 
     if (trips.length === 0) {
@@ -96,7 +96,9 @@ exportBtn.addEventListener("click", async () => {
       return;
     }
 
-    showStatus(`Found ${trips.length} trips. Downloading CSV...`);
+    // Note: the content script already fetched detail pages for exact times
+    // before returning, so trips arrive fully enriched.
+    showStatus(`Downloading CSV for ${trips.length} trips...`);
     chrome.runtime.sendMessage({ type: "DOWNLOAD_CSV", trips } satisfies MessageType);
 
     statusEl.classList.add("hidden");

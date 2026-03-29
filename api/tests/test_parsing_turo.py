@@ -78,6 +78,19 @@ def test_alternate_column_names() -> None:
     assert trips[0].license_plate == "ABC1234"
 
 
+def test_utc_z_timestamps_converted_to_eastern() -> None:
+    """Turo exports UTC timestamps with Z suffix; they must be converted to
+    Eastern so they compare correctly against EZPass local timestamps.
+    2025-12-29T18:00:00.000Z UTC = 2025-12-29T13:00:00 Eastern (UTC-5 in Dec)."""
+    csv_data = (
+        "trip_id,start_time,end_time,license_plate\n"
+        "T001,2025-12-29T18:00:00.000Z,2026-01-02T18:00:00.000Z,LEH9892\n"
+    )
+    trips = parse_turo_csv(csv_data)
+    assert trips[0].start == datetime(2025, 12, 29, 13, 0, 0)
+    assert trips[0].end == datetime(2026, 1, 2, 13, 0, 0)
+
+
 def test_missing_trip_id_gets_default() -> None:
     csv_data = (
         "start_time,end_time,license_plate\n"

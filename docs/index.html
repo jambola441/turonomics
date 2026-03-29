@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turonomics — Turo EZPass Toll Reconciliation</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #f8f9fa;
+      --surface: #ffffff;
+      --surface2: #f1f3f5;
+      --border: #dee2e6;
+      --primary: #1971c2;
+      --primary-hover: #1864ab;
+      --primary-light: #e7f5ff;
+      --success: #2f9e44;
+      --success-light: #ebfbee;
+      --warning: #e67700;
+      --warning-light: #fff9db;
+      --danger: #c92a2a;
+      --danger-light: #fff5f5;
+      --text: #212529;
+      --text-muted: #868e96;
+      --text-light: #495057;
+      --radius: 8px;
+      --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+      --shadow-md: 0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.06);
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      min-height: 100vh;
+    }
+
+    /* ── Layout ── */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 1rem 0;
+    }
+    .header-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .logo {
+      width: 40px;
+      height: 40px;
+      background: var(--primary);
+      border-radius: var(--radius);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #fff;
+      font-size: 1.25rem;
+      flex-shrink: 0;
+    }
+    .header-text h1 { font-size: 1.25rem; font-weight: 700; }
+    .header-text p { font-size: 0.8rem; color: var(--text-muted); margin-top: 1px; }
+
+    main {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 2rem 1.5rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    /* ── Cards ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+    }
+    .card-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+    .card-header h2 {
+      font-size: 0.9rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--text-light);
+    }
+    .card-body { padding: 1.25rem; }
+
+    /* ── Form elements ── */
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin-bottom: 0.4rem;
+    }
+    .hint { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+
+    input[type="url"],
+    input[type="text"],
+    textarea {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s;
+      outline: none;
+    }
+    input[type="url"]:focus,
+    input[type="text"]:focus,
+    textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(25,113,194,.15); }
+
+    textarea { resize: vertical; min-height: 100px; font-family: "Menlo", "Consolas", monospace; font-size: 0.8rem; }
+
+    /* ── Drop zones ── */
+    .uploads-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    @media (max-width: 600px) { .uploads-grid { grid-template-columns: 1fr; } }
+
+    .dropzone {
+      border: 2px dashed var(--border);
+      border-radius: var(--radius);
+      padding: 1.5rem 1rem;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .15s, background .15s;
+      position: relative;
+    }
+    .dropzone:hover, .dropzone.dragover {
+      border-color: var(--primary);
+      background: var(--primary-light);
+    }
+    .dropzone.has-file {
+      border-color: var(--success);
+      background: var(--success-light);
+    }
+    .dropzone input[type="file"] {
+      position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+    }
+    .dropzone-icon { font-size: 1.75rem; margin-bottom: 0.5rem; }
+    .dropzone-label { font-size: 0.85rem; font-weight: 600; color: var(--text-light); }
+    .dropzone-sub { font-size: 0.75rem; color: var(--text-muted); margin-top: 0.25rem; }
+    .dropzone-filename {
+      font-size: 0.8rem;
+      color: var(--success);
+      font-weight: 600;
+      margin-top: 0.5rem;
+      word-break: break-all;
+    }
+
+    /* ── Buttons ── */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.25rem;
+      border: none;
+      border-radius: 6px;
+      font-size: 0.875rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      font-family: inherit;
+    }
+    .btn:disabled { opacity: .5; cursor: not-allowed; }
+    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
+    .btn-sm { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
+    .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
+    .btn-ghost:hover:not(:disabled) { background: var(--surface2); }
+
+    .submit-row {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    /* ── Spinner ── */
+    .spinner {
+      width: 18px; height: 18px;
+      border: 2px solid rgba(255,255,255,.4);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+      display: none;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loading .spinner { display: block; }
+    .loading .btn-label { display: none; }
+
+    /* ── Error/status banner ── */
+    .banner {
+      padding: 0.75rem 1rem;
+      border-radius: var(--radius);
+      font-size: 0.875rem;
+      display: none;
+    }
+    .banner.visible { display: block; }
+    .banner-error { background: var(--danger-light); color: var(--danger); border: 1px solid #ffc9c9; }
+    .banner-info { background: var(--primary-light); color: var(--primary); border: 1px solid #a5d8ff; }
+
+    /* ── Results ── */
+    #results { display: none; }
+    #results.visible { display: flex; flex-direction: column; gap: 1.5rem; }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 500px) { .stats-grid { grid-template-columns: 1fr 1fr; } }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1rem;
+      box-shadow: var(--shadow);
+    }
+    .stat-label { font-size: 0.75rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 500; }
+    .stat-value { font-size: 1.75rem; font-weight: 700; margin-top: 0.25rem; }
+    .stat-value.green { color: var(--success); }
+    .stat-value.orange { color: var(--warning); }
+
+    /* ── Trip list ── */
+    .trip-item {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: var(--shadow);
+    }
+    .trip-header {
+      background: var(--surface);
+      padding: 0.875rem 1.125rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      cursor: pointer;
+      user-select: none;
+      transition: background .1s;
+    }
+    .trip-header:hover { background: var(--surface2); }
+    .trip-meta { flex: 1; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+    .trip-id { font-size: 0.75rem; color: var(--text-muted); font-family: monospace; }
+    .plate-badge {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 0.15rem 0.5rem;
+      font-size: 0.75rem;
+      font-weight: 600;
+      font-family: monospace;
+      letter-spacing: .05em;
+    }
+    .trip-dates { font-size: 0.8rem; color: var(--text-light); }
+    .trip-amount {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--success);
+      margin-left: auto;
+      flex-shrink: 0;
+    }
+    .trip-amount.zero { color: var(--text-muted); }
+    .chevron {
+      color: var(--text-muted);
+      font-size: 0.75rem;
+      transition: transform .2s;
+      flex-shrink: 0;
+    }
+    .trip-item.open .chevron { transform: rotate(90deg); }
+    .trip-item.open .trip-header { background: var(--primary-light); border-bottom: 1px solid var(--border); }
+
+    .trip-tolls { display: none; background: var(--surface); }
+    .trip-item.open .trip-tolls { display: block; }
+
+    .toll-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+    .toll-table th {
+      background: var(--surface2);
+      padding: 0.5rem 1rem;
+      text-align: left;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+      color: var(--text-muted);
+      font-weight: 600;
+      border-bottom: 1px solid var(--border);
+    }
+    .toll-table td {
+      padding: 0.6rem 1rem;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-light);
+    }
+    .toll-table tr:last-child td { border-bottom: none; }
+    .toll-table td:last-child { font-weight: 600; color: var(--text); }
+    .no-tolls {
+      padding: 1rem;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 0.82rem;
+    }
+
+    /* ── Unmatched tolls ── */
+    .unmatched-header {
+      background: var(--warning-light);
+      border-bottom: 1px solid #ffe8cc;
+      padding: 0.75rem 1.125rem;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--warning);
+    }
+
+    /* ── Aliases section collapse ── */
+    .collapsible-toggle {
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 0.8rem;
+      color: var(--primary);
+      text-decoration: underline;
+      padding: 0;
+    }
+    .collapsible-body { display: none; margin-top: 0.75rem; }
+    .collapsible-body.open { display: block; }
+
+    /* ── Timezone grid ── */
+    .tz-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1rem;
+    }
+    @media (max-width: 640px) { .tz-grid { grid-template-columns: 1fr; } }
+
+    select {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 0.5rem 0.75rem;
+      font-size: 0.875rem;
+      font-family: inherit;
+      background: var(--surface);
+      color: var(--text);
+      transition: border-color .15s;
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(25,113,194,.15); }
+
+    /* ── Misc ── */
+    .field-group { margin-bottom: 1rem; }
+    .field-group:last-child { margin-bottom: 0; }
+    .divider { height: 1px; background: var(--border); margin: 1rem 0; }
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: .05em;
+      color: var(--text-muted);
+      margin-bottom: 0.75rem;
+    }
+    .mono { font-family: monospace; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div class="header-inner">
+    <div class="logo">🚗</div>
+    <div class="header-text">
+      <h1>Turonomics</h1>
+      <p>Match NY EZPass toll transactions to Turo rental trips</p>
+    </div>
+  </div>
+</header>
+
+<main>
+
+  <!-- API Config -->
+  <div class="card">
+    <div class="card-header">
+      <h2>⚙️ API Configuration</h2>
+    </div>
+    <div class="card-body">
+      <div class="field-group">
+        <label for="api-url">API Base URL</label>
+        <input type="url" id="api-url" placeholder="http://https://ubiquitous-bassoon-qg59j4pjvx4h4pwv-8000.app.github.dev" value="http://https://ubiquitous-bassoon-qg59j4pjvx4h4pwv-8000.app.github.dev" />
+        <p class="hint">The URL where your Turonomics FastAPI server is running.</p>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="field-group">
+        <p class="section-label">Timezone Settings</p>
+        <div class="tz-grid">
+          <div>
+            <label for="tz-turo">Turo CSV Timezone</label>
+            <select id="tz-turo"></select>
+            <p class="hint">Timezone trip times are displayed in. The API normalizes Turo's UTC exports to Eastern time.</p>
+          </div>
+          <div>
+            <label for="tz-ezpass">EZPass CSV Timezone</label>
+            <select id="tz-ezpass"></select>
+            <p class="hint">Timezone of toll timestamps in the EZPass export. NY EZPass uses Eastern Time.</p>
+          </div>
+          <div>
+            <label for="tz-display">Display Timezone</label>
+            <select id="tz-display"></select>
+            <p class="hint">Timezone to display all dates in the results.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload -->
+  <div class="card">
+    <div class="card-header">
+      <h2>📁 Upload Files</h2>
+    </div>
+    <div class="card-body">
+      <div class="uploads-grid">
+        <div>
+          <p class="section-label">Turo Trips CSV</p>
+          <div class="dropzone" id="drop-turo">
+            <input type="file" id="file-turo" accept=".csv" />
+            <div class="dropzone-icon">🗓️</div>
+            <div class="dropzone-label">Turo Trips CSV</div>
+            <div class="dropzone-sub">Export from the Turonomics extension</div>
+            <div class="dropzone-filename" id="turo-filename" style="display:none"></div>
+          </div>
+        </div>
+        <div>
+          <p class="section-label">NY EZPass CSV</p>
+          <div class="dropzone" id="drop-ezpass">
+            <input type="file" id="file-ezpass" accept=".csv" />
+            <div class="dropzone-icon">🛣️</div>
+            <div class="dropzone-label">EZPass Transactions CSV</div>
+            <div class="dropzone-sub">Download from myezpass.com</div>
+            <div class="dropzone-filename" id="ezpass-filename" style="display:none"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- Aliases (optional, collapsible) -->
+      <div>
+        <button class="collapsible-toggle" id="aliases-toggle">
+          ▶ Plate → transponder aliases (optional)
+        </button>
+        <div class="collapsible-body" id="aliases-body">
+          <div class="field-group" style="margin-top:.5rem">
+            <label for="aliases-input">Aliases JSON</label>
+            <textarea id="aliases-input" placeholder='{
+  "ABC1234": "123456789",
+  "XYZ5678": "987654321"
+}'></textarea>
+            <p class="hint">Maps each license plate to its EZPass transponder ID. Needed when toll records show a transponder ID instead of a plate. Leave blank if not needed.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="submit-row">
+        <button class="btn btn-primary" id="submit-btn">
+          <span class="btn-label">Match Tolls</span>
+          <span class="spinner"></span>
+        </button>
+        <button class="btn btn-ghost btn-sm" id="clear-btn">Clear</button>
+        <div id="error-banner" class="banner banner-error"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Results -->
+  <div id="results">
+    <!-- Stats -->
+    <div class="stats-grid" id="stats-grid"></div>
+
+    <!-- Trips -->
+    <div class="card" id="trips-card">
+      <div class="card-header">
+        <h2>🗺️ Trips</h2>
+      </div>
+      <div id="trips-list" style="padding: 1rem; display: flex; flex-direction: column; gap: .75rem;"></div>
+    </div>
+
+    <!-- Unmatched -->
+    <div class="card" id="unmatched-card" style="display:none">
+      <div class="unmatched-header" id="unmatched-header"></div>
+      <div class="toll-table-wrap">
+        <table class="toll-table" id="unmatched-table">
+          <thead>
+            <tr>
+              <th>Timestamp</th>
+              <th>Plaza</th>
+              <th>Transponder / Plate</th>
+              <th>Amount</th>
+            </tr>
+          </thead>
+          <tbody id="unmatched-body"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+  // ── Timezone selectors ──
+  const TZ_OPTIONS = [
+    { value: 'UTC',                  label: 'UTC' },
+    { value: 'America/New_York',     label: 'Eastern (ET)' },
+    { value: 'America/Chicago',      label: 'Central (CT)' },
+    { value: 'America/Denver',       label: 'Mountain (MT)' },
+    { value: 'America/Los_Angeles',  label: 'Pacific (PT)' },
+    { value: 'America/Anchorage',    label: 'Alaska (AKT)' },
+    { value: 'Pacific/Honolulu',     label: 'Hawaii (HT)' },
+  ];
+
+  const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  function buildTzSelect(selectId, defaultValue) {
+    const sel = document.getElementById(selectId);
+    // Include browser local tz if not already in the list
+    const options = TZ_OPTIONS.some(o => o.value === browserTz)
+      ? TZ_OPTIONS
+      : [{ value: browserTz, label: `Local (${browserTz})` }, ...TZ_OPTIONS];
+
+    options.forEach(({ value, label }) => {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      if (value === defaultValue) opt.selected = true;
+      sel.appendChild(opt);
+    });
+  }
+
+  buildTzSelect('tz-turo',    'America/New_York');
+  buildTzSelect('tz-ezpass',  'America/New_York');
+  buildTzSelect('tz-display', browserTz);
+
+  function getTzConfig() {
+    return {
+      turo:    document.getElementById('tz-turo').value    || 'UTC',
+      ezpass:  document.getElementById('tz-ezpass').value  || 'America/New_York',
+      display: document.getElementById('tz-display').value || browserTz,
+    };
+  }
+
+  /**
+   * Interpret a naive ISO string (no tz suffix) as wall-clock time in `sourceTz`,
+   * returning a Date at the correct UTC instant.
+   */
+  function naiveToDate(naiveIso, sourceTz) {
+    const [datePart, timePart = '00:00:00'] = naiveIso.split('T');
+    const [Y, M, D] = datePart.split('-').map(Number);
+    const [h, m, rawS = '0'] = timePart.replace('Z', '').split(':');
+
+    // Start by treating the naive string as UTC
+    const d = new Date(Date.UTC(Y, M - 1, D, Number(h), Number(m), Math.floor(Number(rawS))));
+
+    // Find the wall-clock time this UTC instant maps to in sourceTz
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: sourceTz,
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', second: '2-digit',
+      hour12: false,
+    }).formatToParts(d);
+    const get = type => Number(parts.find(p => p.type === type)?.value ?? 0);
+    const [tzY, tzM, tzD, tzH, tzMin, tzS] = [
+      get('year'), get('month'), get('day'),
+      get('hour'), get('minute'), get('second'),
+    ];
+
+    // The difference between desired wall-clock and actual is the tz offset correction
+    const desired = Date.UTC(Y, M - 1, D, Number(h), Number(m), Math.floor(Number(rawS)));
+    const actual  = Date.UTC(tzY, tzM - 1, tzD, tzH % 24, tzMin, tzS);
+
+    return new Date(d.getTime() + (desired - actual));
+  }
+
+  function fmtDate(iso, sourceTz, displayTz) {
+    if (!iso) return '—';
+    try {
+      const d = naiveToDate(iso, sourceTz);
+      return d.toLocaleString('en-US', {
+        timeZone: displayTz,
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: 'numeric', minute: '2-digit', hour12: true,
+      });
+    } catch { return iso; }
+  }
+
+  // ── Dropzone setup ──
+  function setupDropzone(dropId, inputId, filenameId) {
+    const drop = document.getElementById(dropId);
+    const input = document.getElementById(inputId);
+    const label = document.getElementById(filenameId);
+
+    function setFile(file) {
+      if (!file) return;
+      label.textContent = file.name;
+      label.style.display = 'block';
+      drop.classList.add('has-file');
+    }
+
+    input.addEventListener('change', () => setFile(input.files[0]));
+
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('dragover'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('dragover'));
+    drop.addEventListener('drop', e => {
+      e.preventDefault();
+      drop.classList.remove('dragover');
+      const file = e.dataTransfer.files[0];
+      if (file) {
+        const dt = new DataTransfer();
+        dt.items.add(file);
+        input.files = dt.files;
+        setFile(file);
+      }
+    });
+  }
+
+  setupDropzone('drop-turo', 'file-turo', 'turo-filename');
+  setupDropzone('drop-ezpass', 'file-ezpass', 'ezpass-filename');
+
+  // ── Aliases toggle ──
+  document.getElementById('aliases-toggle').addEventListener('click', function() {
+    const body = document.getElementById('aliases-body');
+    const open = body.classList.toggle('open');
+    this.textContent = (open ? '▼' : '▶') + ' Plate → transponder aliases (optional)';
+  });
+
+  // ── Clear ──
+  document.getElementById('clear-btn').addEventListener('click', () => {
+    ['file-turo', 'file-ezpass'].forEach(id => {
+      document.getElementById(id).value = '';
+    });
+    ['turo-filename', 'ezpass-filename'].forEach(id => {
+      const el = document.getElementById(id);
+      el.textContent = '';
+      el.style.display = 'none';
+    });
+    ['drop-turo', 'drop-ezpass'].forEach(id => {
+      document.getElementById(id).classList.remove('has-file');
+    });
+    document.getElementById('aliases-input').value = '';
+    document.getElementById('error-banner').classList.remove('visible');
+    document.getElementById('results').classList.remove('visible');
+  });
+
+  // ── Submit ──
+  document.getElementById('submit-btn').addEventListener('click', async () => {
+    const apiUrl = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+    const turoFile = document.getElementById('file-turo').files[0];
+    const ezpassFile = document.getElementById('file-ezpass').files[0];
+    const aliasesRaw = document.getElementById('aliases-input').value.trim();
+    const errorBanner = document.getElementById('error-banner');
+    const btn = document.getElementById('submit-btn');
+
+    errorBanner.classList.remove('visible');
+
+    if (!turoFile) { showError('Please upload a Turo trips CSV.'); return; }
+    if (!ezpassFile) { showError('Please upload an EZPass transactions CSV.'); return; }
+
+    if (aliasesRaw) {
+      try { JSON.parse(aliasesRaw); }
+      catch { showError('Aliases JSON is invalid. Please check the format.'); return; }
+    }
+
+    btn.classList.add('loading');
+    btn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append('turo_file', turoFile);
+      fd.append('ezpass_file', ezpassFile);
+      if (aliasesRaw) fd.append('aliases', aliasesRaw);
+
+      const res = await fetch(`${apiUrl}/match`, { method: 'POST', body: fd });
+
+      if (!res.ok) {
+        let msg = `Server returned ${res.status}`;
+        try { const j = await res.json(); msg = j.detail || j.message || msg; } catch {}
+        throw new Error(msg);
+      }
+
+      const data = await res.json();
+      renderResults(data);
+    } catch (err) {
+      showError(err.message || 'Request failed. Is the API running?');
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  });
+
+  function showError(msg) {
+    const b = document.getElementById('error-banner');
+    b.textContent = '⚠️ ' + msg;
+    b.classList.add('visible');
+  }
+
+  // ── Render results ──
+  function renderResults(data) {
+    const { trips, unmatched_tolls } = data;
+    const tz = getTzConfig();
+
+    // Stats
+    const totalTrips = trips.length;
+    const totalAmount = trips.reduce((s, t) => s + t.total_toll_amount, 0);
+    const unmatchedAmount = unmatched_tolls.reduce((s, t) => s + t.amount, 0);
+
+    document.getElementById('stats-grid').innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">Trips</div>
+        <div class="stat-value">${totalTrips}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Matched Tolls</div>
+        <div class="stat-value green">$${totalAmount.toFixed(2)}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">Unmatched Tolls</div>
+        <div class="stat-value ${unmatchedAmount > 0 ? 'orange' : ''}">$${unmatchedAmount.toFixed(2)}</div>
+      </div>
+    `;
+
+    // Trip list
+    const list = document.getElementById('trips-list');
+    if (trips.length === 0) {
+      list.innerHTML = '<p style="color:var(--text-muted);font-size:.85rem;text-align:center;">No trips found.</p>';
+    } else {
+      list.innerHTML = trips.map((trip, i) => buildTripCard(trip, i, tz)).join('');
+
+      list.querySelectorAll('.trip-header').forEach(header => {
+        header.addEventListener('click', () => {
+          header.closest('.trip-item').classList.toggle('open');
+        });
+      });
+    }
+
+    // Unmatched
+    const unmatchedCard = document.getElementById('unmatched-card');
+    if (unmatched_tolls.length > 0) {
+      document.getElementById('unmatched-header').textContent =
+        `⚠️ ${unmatched_tolls.length} unmatched toll${unmatched_tolls.length !== 1 ? 's' : ''} — $${unmatchedAmount.toFixed(2)} could not be assigned to a trip`;
+      document.getElementById('unmatched-body').innerHTML = unmatched_tolls.map(t => `
+        <tr>
+          <td class="mono">${fmtDate(t.timestamp, tz.ezpass, tz.display)}</td>
+          <td>${escHtml(t.plaza || '—')}</td>
+          <td class="mono">${escHtml(t.transponder_id || t.license_plate || '—')}</td>
+          <td>$${Number(t.amount).toFixed(2)}</td>
+        </tr>
+      `).join('');
+      unmatchedCard.style.display = 'block';
+    } else {
+      unmatchedCard.style.display = 'none';
+    }
+
+    document.getElementById('results').classList.add('visible');
+    document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function buildTripCard(trip, i, tz) {
+    const start = fmtDate(trip.start, tz.turo, tz.display);
+    const end   = fmtDate(trip.end,   tz.turo, tz.display);
+    const hasAmount = trip.total_toll_amount > 0;
+
+    const tollRows = trip.tolls.length === 0
+      ? `<div class="no-tolls">No tolls matched to this trip.</div>`
+      : `<table class="toll-table">
+          <thead><tr><th>Timestamp</th><th>Plaza</th><th>Transponder / Plate</th><th>Amount</th></tr></thead>
+          <tbody>
+            ${trip.tolls.map(t => `
+              <tr>
+                <td class="mono">${fmtDate(t.timestamp, tz.ezpass, tz.display)}</td>
+                <td>${escHtml(t.plaza || '—')}</td>
+                <td class="mono">${escHtml(t.transponder_id || t.license_plate || '—')}</td>
+                <td>$${Number(t.amount).toFixed(2)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+
+    return `
+      <div class="trip-item">
+        <div class="trip-header">
+          <div class="trip-meta">
+            <span class="trip-id">#${escHtml(trip.trip_id)}</span>
+            <span class="plate-badge">${escHtml(trip.license_plate)}</span>
+            <span class="trip-dates">${start} → ${end}</span>
+          </div>
+          <span class="trip-amount ${hasAmount ? '' : 'zero'}">
+            ${hasAmount ? '$' + trip.total_toll_amount.toFixed(2) : 'No tolls'}
+          </span>
+          <span class="chevron">▶</span>
+        </div>
+        <div class="trip-tolls">${tollRows}</div>
+      </div>`;
+  }
+
+  function escHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+</script>
+</body>
+</html>

@@ -30,25 +30,114 @@ function tripsToCSV(trips: TuroTrip[]): string {
   return [CSV_HEADER, ...rows].join("\n");
 }
 
+const LOG = (...args: unknown[]) => console.log("[turonomics:bg]", ...args);
+
 // ---------------------------------------------------------------------------
 // Download helper
 // ---------------------------------------------------------------------------
 function downloadCSV(csv: string): void {
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
+  // NOTE: URL.createObjectURL is not available in MV3 service workers.
+  // Use a data URL instead — chrome.downloads accepts it fine.
+  const dataUrl = "data:text/csv;charset=utf-8," + encodeURIComponent(csv);
   const filename = `turo-trips-${new Date().toISOString().slice(0, 10)}.csv`;
 
-  chrome.downloads.download({ url, filename, saveAs: false }, (_downloadId) => {
-    URL.revokeObjectURL(url);
+  LOG("CSV content that will be downloaded:\n" + csv);
+
+  chrome.downloads.download({ url: dataUrl, filename, saveAs: false }, (downloadId) => {
+    if (chrome.runtime.lastError) {
+      LOG("download error:", chrome.runtime.lastError.message);
+    } else {
+      LOG("download started, id:", downloadId, "filename:", filename);
+    }
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Detail scraper — opens a hidden tab, waits for SPA render, scrapes times
+// ---------------------------------------------------------------------------
+function fetchDetailInTab(
+  tripId: string
+): Promise<{ scheduleDates: string[]; scheduleTimes: string[] }> {
+  return new Promise((resolve) => {
+    const url = `https://turo.com/us/en/reservation/${tripId}`;
+    LOG(`fetchDetailInTab[${tripId}] — creating tab for ${url}`);
+
+    chrome.tabs.create({ url, active: false }, (tab) => {
+      const tabId = tab.id!;
+
+      const onUpdated = (
+        updatedId: number,
+        info: chrome.tabs.TabChangeInfo
+      ) => {
+        if (updatedId !== tabId || info.status !== "complete") return;
+        chrome.tabs.onUpdated.removeListener(onUpdated);
+
+        // Poll for schedule elements — the SPA needs time to render after load
+        chrome.scripting.executeScript(
+          {
+            target: { tabId },
+            func: () =>
+              new Promise<{ dates: string[]; times: string[] }>((res) => {
+                let attempts = 0;
+                const poll = () => {
+                  const dates = Array.from(
+                    document.querySelectorAll("[data-testid='schedule-date']")
+                  ).map((el) => el.textContent?.trim() ?? "");
+                  const times = Array.from(
+                    document.querySelectorAll("[data-testid='schedule-time']")
+                  ).map((el) => el.textContent?.trim() ?? "");
+                  if (dates.length >= 2 && times.length >= 2) {
+                    res({ dates, times });
+                  } else if (attempts++ < 20) {
+                    setTimeout(poll, 500);
+                  } else {
+                    res({ dates: [], times: [] });
+                  }
+                };
+                poll();
+              }),
+          },
+          (results) => {
+            chrome.tabs.remove(tabId);
+            if (chrome.runtime.lastError || !results?.[0]?.result) {
+              LOG(`fetchDetailInTab[${tripId}] — script error:`, chrome.runtime.lastError?.message);
+              resolve({ scheduleDates: [], scheduleTimes: [] });
+            } else {
+              const { dates, times } = results[0].result as { dates: string[]; times: string[] };
+              LOG(`fetchDetailInTab[${tripId}] — dates:`, dates, "times:", times);
+              resolve({ scheduleDates: dates, scheduleTimes: times });
+            }
+          }
+        );
+      };
+
+      chrome.tabs.onUpdated.addListener(onUpdated);
+    });
   });
 }
 
 // ---------------------------------------------------------------------------
 // Message listener
 // ---------------------------------------------------------------------------
-chrome.runtime.onMessage.addListener((message: MessageType) => {
+chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendResponse) => {
+  LOG("received message:", message.type);
+
   if (message.type === "DOWNLOAD_CSV") {
+    LOG(`DOWNLOAD_CSV — ${message.trips.length} trip(s)`);
     const csv = tripsToCSV(message.trips);
     downloadCSV(csv);
+    return;
+  }
+
+  if (message.type === "FETCH_DETAIL") {
+    fetchDetailInTab(message.tripId).then((result) => {
+      sendResponse({
+        type: "DETAIL_RESULT",
+        tripId: message.tripId,
+        scheduleDates: result.scheduleDates,
+        scheduleTimes: result.scheduleTimes,
+      } satisfies MessageType);
+    });
+    return true; // async response
   }
 });

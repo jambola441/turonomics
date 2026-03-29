@@ -3,19 +3,15 @@
   "name": "Turonomics",
   "version": "1.0.0",
   "description": "Export Turo host trip history (last 90 days) as CSV",
-  "permissions": ["downloads", "scripting", "storage"],
+  "permissions": ["downloads", "scripting", "storage", "tabs"],
   "host_permissions": ["https://turo.com/*"],
   "background": {
-    "service_worker": "dist/background.js"
+    "service_worker": "dist/background.js",
+    "type": "module"
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Turonomics",
-    "default_icon": {
-      "16": "icons/icon16.png",
-      "48": "icons/icon48.png",
-      "128": "icons/icon128.png"
-    }
+    "default_title": "Turonomics"
   },
   "content_scripts": [
     {
@@ -23,10 +19,5 @@
       "js": ["dist/content.js"],
       "run_at": "document_idle"
     }
-  ],
-  "icons": {
-    "16": "icons/icon16.png",
-    "48": "icons/icon48.png",
-    "128": "icons/icon128.png"
-  }
+  ]
 }

@@ -7,9 +7,12 @@ Expected columns (case-insensitive):
 
 import csv
 import io
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from turonomics_api.models import TuroTrip
+
+_EASTERN = ZoneInfo("America/New_York")
 
 
 # Accepted column name aliases (lowercase)
@@ -40,11 +43,26 @@ def _resolve_headers(raw_headers: list[str]) -> dict[str, str]:
 
 
 def _parse_datetime(value: str) -> datetime:
-    """Parse ISO 8601 or common date formats produced by the extension."""
+    """Parse ISO 8601 or common date formats produced by the extension.
+
+    Timestamps with a trailing Z are UTC and are converted to Eastern time so
+    they compare correctly against EZPass timestamps (which are already local).
+    """
     value = value.strip()
-    # Try ISO 8601 variants
+    # UTC formats: convert to Eastern local time
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
+        try:
+            return (
+                datetime.strptime(value, fmt)
+                .replace(tzinfo=timezone.utc)
+                .astimezone(_EASTERN)
+                .replace(tzinfo=None)
+            )
+        except ValueError:
+            continue
+    # Non-UTC formats: treat as local (Eastern) time already
     for fmt in (
-        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S.%f",
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%dT%H:%M",
         "%Y-%m-%d %H:%M:%S",

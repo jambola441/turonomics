@@ -46,7 +46,7 @@ class TestMatchHappyPath:
         assert len(body["trips"]) == 3  # 3 trips in TURO_CSV_VALID
 
     def test_toll_matched_to_trip(self, client: TestClient) -> None:
-        """LNT toll (06/01) should match T001 (06/01–06/03, plate NYABC1234)."""
+        """LNT toll (06/01) should match T001 (06/01–06/03, plate ABC1234)."""
         body = _post_match(client).json()
         t001 = next(t for t in body["trips"] if t["trip_id"] == "T001")
         assert t001["total_toll_amount"] > 0

@@ -1,5 +1,5 @@
 from datetime import datetime
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, field_validator  # field_validator used by EZPassToll / TuroTrip
 
 
 class TuroTrip(BaseModel):
@@ -37,28 +37,12 @@ class EZPassToll(BaseModel):
         return v.strip() or None
 
 
-class OwnerAliases(BaseModel):
-    """Transponder IDs and license plates that belong to one owner identity."""
-
-    transponder_ids: list[str] = []
-    license_plates: list[str] = []
-
-    @field_validator("license_plates")
-    @classmethod
-    def normalize_plates(cls, v: list[str]) -> list[str]:
-        return [p.upper().replace(" ", "").replace("-", "") for p in v]
-
-    @field_validator("transponder_ids")
-    @classmethod
-    def normalize_transponders(cls, v: list[str]) -> list[str]:
-        return [t.strip() for t in v]
-
-
 class TollEntry(BaseModel):
     timestamp: datetime
     plaza: str
     amount: float
     transponder_id: str | None = None
+    license_plate: str | None = None
 
 
 class TripTollResult(BaseModel):
@@ -66,7 +50,6 @@ class TripTollResult(BaseModel):
     start: datetime
     end: datetime
     license_plate: str
-    owner: str | None
     tolls: list[TollEntry]
     total_toll_amount: float
 

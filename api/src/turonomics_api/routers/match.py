@@ -1,14 +1,17 @@
 import json
 
 from fastapi import APIRouter, Form, HTTPException, UploadFile
-from pydantic import ValidationError
 
-from turonomics_api.matching import match_tolls_to_trips
-from turonomics_api.models import MatchResponse, OwnerAliases
+from turonomics_api.matching import AliasMap, match_tolls_to_trips
+from turonomics_api.models import MatchResponse
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
 from turonomics_api.parsing.turo import parse_turo_csv
 
 router = APIRouter()
+
+
+def _normalize_plate(p: str) -> str:
+    return p.upper().replace(" ", "").replace("-", "")
 
 
 @router.post("/match", response_model=MatchResponse)
@@ -21,17 +24,19 @@ async def match(
 
     - **turo_file**: CSV exported by the Turonomics Chrome extension.
     - **ezpass_file**: NY EZPass account activity CSV download.
-    - **aliases**: JSON object mapping owner names to their transponder IDs and
-      license plates. Optional — omit or pass `{}` to match by plate only.
+    - **aliases**: JSON object mapping license plates to transponder IDs.
+      Example: `{"ABC1234": "00414500433"}`. Optional — omit or pass `{}`.
     """
     # Parse alias map
     try:
-        raw_aliases: dict[str, object] = json.loads(aliases)
-        alias_map = {
-            owner: OwnerAliases.model_validate(identity)
-            for owner, identity in raw_aliases.items()
+        raw: dict[str, object] = json.loads(aliases)
+        if not isinstance(raw, dict):
+            raise ValueError("aliases must be a JSON object")
+        alias_map: AliasMap = {
+            _normalize_plate(str(plate)): str(tid).strip()
+            for plate, tid in raw.items()
         }
-    except (json.JSONDecodeError, ValidationError) as exc:
+    except (json.JSONDecodeError, ValueError) as exc:
         raise HTTPException(status_code=422, detail=f"Invalid aliases JSON: {exc}") from exc
 
     # Read uploaded files

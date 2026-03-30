@@ -382,6 +382,66 @@
       margin-bottom: 0.75rem;
     }
     .mono { font-family: monospace; }
+
+    /* ── Footer ── */
+    footer {
+      border-top: 1px solid var(--border);
+      background: var(--surface);
+      margin-top: 2rem;
+      padding: 1.5rem 0;
+    }
+    .footer-inner {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 0 1.5rem;
+    }
+    .footer-nav {
+      display: flex;
+      gap: 1rem;
+      margin-bottom: 1.5rem;
+    }
+    .footer-nav a {
+      font-size: 0.8rem;
+      color: var(--primary);
+      text-decoration: none;
+    }
+    .footer-nav a:hover { text-decoration: underline; }
+
+    /* ── Privacy policy ── */
+    #privacy-policy {
+      display: none;
+      margin-top: 1rem;
+    }
+    #privacy-policy.open { display: block; }
+    .privacy-content {
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 1.25rem 1.5rem;
+      font-size: 0.82rem;
+      color: var(--text-light);
+      line-height: 1.7;
+    }
+    .privacy-content h3 {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 0.75rem;
+    }
+    .privacy-content h4 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text);
+      margin: 1rem 0 0.3rem;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .privacy-content p { margin-bottom: 0.5rem; }
+    .privacy-content ul {
+      padding-left: 1.25rem;
+      margin-bottom: 0.5rem;
+    }
+    .privacy-content ul li { margin-bottom: 0.2rem; }
   </style>
 </head>
 <body>
@@ -529,6 +589,45 @@
   </div>
 
 </main>
+
+<footer>
+  <div class="footer-inner">
+    <nav class="footer-nav">
+      <a href="#" id="privacy-toggle">Privacy Policy</a>
+    </nav>
+    <div id="privacy-policy">
+      <div class="privacy-content">
+        <h3>Privacy Policy</h3>
+        <p>Turonomics is a self-hosted tool. This policy describes what data the browser extension and this web app handle and where it goes.</p>
+
+        <h4>Data collected by the browser extension</h4>
+        <p>The Turonomics Chrome extension reads trip data directly from your Turo account while you are logged in at turo.com. This includes:</p>
+        <ul>
+          <li>Trip IDs, rental dates and times, and license plate numbers</li>
+          <li>Reservation detail pages fetched in hidden background tabs</li>
+        </ul>
+        <p>This data is assembled into a CSV file and downloaded to your device. It is never sent to any server by the extension, and nothing is stored in browser storage.</p>
+
+        <h4>Data processed by this web app</h4>
+        <p>When you click <em>Match Tolls</em>, two CSV files are uploaded from your device to the API server URL you configure in the API Base URL field:</p>
+        <ul>
+          <li>Your Turo trips CSV (trip IDs, license plates, dates/times)</li>
+          <li>Your NY EZPass transactions CSV (timestamps, plaza names, transponder IDs, toll amounts)</li>
+        </ul>
+        <p>All processing happens on that server. This page itself runs entirely in your browser — no data is sent to any third party by this page.</p>
+
+        <h4>Data retention</h4>
+        <p>The default Turonomics API server does not persist uploaded files or results to disk. Data exists only in memory for the duration of a single request. If you are running your own server, retention is governed by your own configuration.</p>
+
+        <h4>Third-party services</h4>
+        <p>This page does not load any analytics, advertising, or tracking scripts. No cookies are set.</p>
+
+        <h4>Contact</h4>
+        <p>Turonomics is open-source software. Questions or concerns can be raised via the project repository.</p>
+      </div>
+    </div>
+  </div>
+</footer>
 
 <script>
   // ── Timezone selectors ──
@@ -824,6 +923,13 @@
         <div class="trip-tolls">${tollRows}</div>
       </div>`;
   }
+
+  // ── Privacy policy toggle ──
+  document.getElementById('privacy-toggle').addEventListener('click', e => {
+    e.preventDefault();
+    const panel = document.getElementById('privacy-policy');
+    panel.classList.toggle('open');
+  });
 
   function escHtml(s) {
     return String(s)

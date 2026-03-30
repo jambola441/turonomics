@@ -3,7 +3,7 @@
   "name": "Turonomics",
   "version": "1.0.0",
   "description": "Export Turo host trip history (last 90 days) as CSV",
-  "permissions": ["downloads", "scripting", "storage", "tabs"],
+  "permissions": ["downloads", "scripting", "tabs"],
   "host_permissions": ["https://turo.com/*"],
   "background": {
     "service_worker": "dist/background.js",

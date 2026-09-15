@@ -105,7 +105,7 @@
       "x": 1920,
       "y": 300,
       "w": 300,
-      "text": "Open questions I'd want your call on:\n\n\u2022 Messaging \u2014 is Draft enough for v1, or is hands-off the point?\n\u2022 ASP alerts \u2014 push, or SMS too? A missed push is $65.\n\u2022 Trip source \u2014 scrape, email parsing, or manual to start?\n\u2022 Does the Transit need its own parking rules (commercial plates, length)?\n\u2022 12-month fleet target? 8 cars is this app; 25 with a helper is a different one."
+      "text": "Settled 15 Sep \u2014 full record in docs/design/01-decisions.md\n\n\u2022 Messaging: Draft only. Auto-send would ride the extension, so it only fires when the laptop is open.\n\u2022 Alerts: push only, with a \"last alert delivered\" heartbeat so silence is detectable. SMS behind a flag.\n\u2022 Turo data: extension when Chrome is up, plus Gmail ingestion 24/7. Extensions don't run on phones.\n\u2022 ASP: parse the citywide sign dataset, with capture-once as the fallback that ships first.\n\u2022 Render + Google sign-in. 15\u201325 cars in 12 months, so Task carries an owner from day one.\n\nStill open: does the Transit need its own parking rules?"
     },
     {
       "id": "note-3",

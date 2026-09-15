@@ -1,6 +1,9 @@
 # Turonomics Web App — Design Exploration
 
 **Status:** exploration / pre-implementation. Nothing here is built yet.
+**Decisions taken since:** see [`01-decisions.md`](01-decisions.md) — it
+supersedes §7 below, and settles the messaging, ASP, hosting and sequencing
+questions this document leaves open.
 **First user:** single operator, 4-vehicle Turo fleet, Brooklyn NY.
 **Fleet:** 1× Toyota 4Runner, 2× Toyota Corolla, 1× Ford Transit van (new).
 **Tracking:** Bouncie OBD-II devices. **Parking:** on-street, subject to NYC alternate side parking (ASP).
@@ -295,7 +298,9 @@ Extends what already exists rather than starting over.
 | Web | **React + Vite, mobile-first PWA** | See below |
 | Maps | MapLibre + NYC basemap | No per-load billing |
 | Push | Web Push (VAPID); Twilio SMS for ASP | ASP alerts must survive a silenced phone |
-| Turo | Existing Chrome extension, extended | Only viable path (§2.1) |
+| Turo | Existing Chrome extension, extended, **plus Gmail ingestion** | Extension alone can't run on a phone (D2) |
+| Hosting | **Render** — web service, Postgres, cron | Decided (D8) |
+| Auth | **Google sign-in** | Scales to staff, shares the Gmail identity (D8) |
 
 **Mobile-first, explicitly.** The request said "web app," but the actual usage
 is standing on a Brooklyn sidewalk at 8am in the cold with one hand free. Every
@@ -329,23 +334,33 @@ Ruthlessly scoped to one operator, four cars, highest pain first.
 - Route optimization — with 4 cars in one neighborhood, sort-by-proximity beats a solver
 - Native apps, dynamic pricing, maintenance scheduling
 
-**Suggested build order:** 1 → 2 → 3 (ship and live on it for two weeks) →
-4 → 7 → 5. Module 3 alone justifies the project; validate it in the real world
-before building on top of it.
+**Build order (settled — D9):** registry → Bouncie → ASP with capture-once →
+run sheet → trip sync and turnaround → Draft messaging. The citywide sign
+parser (D3) lands behind all of it and silently stops asking for captures.
+Module 3 alone justifies the project; validate it in the real world before
+building on top of it.
 
 ---
 
-## 7. Open questions
+## 7. Open questions — resolved
 
-1. **Messaging autonomy** — is Draft acceptable for v1, or is hands-off
-   auto-send the point? Changes the risk profile and the extension's scope.
-2. **ASP notification channel** — is push enough, or is SMS required? A missed
-   push is a $65 ticket.
-3. **Turo trip source** — extension scrape, email parsing, or manual for MVP?
-   Email parsing is lower-risk and possibly faster to ship.
-4. **Van-specific handling** — does the Transit have different parking
-   constraints (commercial plates, length, no overnight on some blocks) that
-   need first-class modeling rather than being a 5th vehicle row?
-5. **Growth horizon** — 4 cars now; what is the 12-month target? 8 cars is the
-   same app. 25 cars with a helper is a different app (staff assignment,
-   shift handoff), and it's much cheaper to know that now than to retrofit.
+All five were settled on 2026-09-15; see [`01-decisions.md`](01-decisions.md).
+In short:
+
+| Question | Answer |
+|---|---|
+| Messaging autonomy | Draft only for v1 (D5) |
+| ASP notification channel | Push only, iPhone — with a delivery heartbeat and SMS behind a flag (D6) |
+| Turo trip source | Extension **and** server-side Gmail ingestion (D2) |
+| Van-specific handling | Still open — needs a look at the Transit's actual blocks |
+| Growth horizon | 15–25 cars with help; helper 6–12 months out (D7) |
+
+One correction to §2.1 above, learned since: the extension cannot be the sole
+ingress under any configuration, because Chrome extensions do not run on Chrome
+for Android and an MV3 service worker only lives while a desktop browser is
+open. That is what forced the email path in D2.
+
+One correction to §3, module 2: Bouncie reports fuel level **only where the
+vehicle sends it over OBD**, and odometer has three tiers of fidelity. The
+registry needs a per-vehicle capability flag, and check-out must degrade to
+manual entry per car.

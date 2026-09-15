@@ -1,0 +1,195 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; background: #0d0f12; }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+    .tile { cursor: pointer; transition: border-color .12s ease, background .12s ease; }
+    .tile:hover { border-color: #4a525b !important; }
+    .btn { cursor: pointer; transition: filter .12s ease; }
+    .btn:hover { filter: brightness(1.12); }
+    .scroll::-webkit-scrollbar { width: 0; }
+  </style>
+</helmet>
+
+<div style="height: 844px; display: flex; flex-direction: column; background: #0d0f12; color: #f0f2f4; overflow: hidden;">
+
+  <!-- Header -->
+  <div style="padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 13px; border-bottom: 1px solid #2a2f36;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Check-out</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #6a737d;">7:08 AM · Sep 15</div>
+    </div>
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;">
+      <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0;">
+        <div style="font-size: 25px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1;">Corolla · Silver</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #6a737d;">JGL4460 → Dana W.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
+        <div style="{{progress.countStyle}}">{{progress.label}}</div>
+        <div style="font-size: 11px; color: #6a737d;">required shots</div>
+      </div>
+    </div>
+    <div style="height: 5px; border-radius: 3px; background: #22262b; overflow: hidden; display: flex;">
+      <div style="{{progress.barStyle}}"></div>
+    </div>
+  </div>
+
+  <div class="scroll" style="flex: 1; overflow-y: auto; padding: 16px 20px 20px; display: flex; flex-direction: column; gap: 18px;">
+
+    <!-- Auto-captured from tracker -->
+    <div style="display: flex; flex-direction: column; gap: 10px; padding: 14px; background: #131a17; border: 1px solid #1e3a2c; border-radius: 12px;">
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: #3ddc97;">Filled from tracker</div>
+      </div>
+      <div style="display: flex; gap: 8px;">
+        <sc-for list="{{auto}}" as="a" hint-placeholder-count="3">
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0;">
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #6a737d;">{{a.label}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: #f0f2f4;">{{a.value}}</div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size: 11.5px; color: #5c7a6b; line-height: 1.4;">Odometer and fuel come off the OBD device — photograph them, don&#39;t retype them.</div>
+    </div>
+
+    <!-- Photo grid -->
+    <div style="display: flex; flex-direction: column; gap: 11px;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">Condition record</div>
+        <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #4f575f; white-space: nowrap;">{{shotCount}}</div>
+      </div>
+
+      <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px;">
+        <sc-for list="{{tiles}}" as="t" hint-placeholder-count="12">
+          <div class="tile" onClick="{{t.toggle}}" style="{{t.style}}">
+            <sc-if value="{{t.shot}}" hint-placeholder-val="{{false}}">
+              <div style="position: absolute; top: 6px; right: 6px; width: 20px; height: 20px; border-radius: 50%; background: #3ddc97; display: flex; align-items: center; justify-content: center;">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#0d0f12" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              </div>
+            </sc-if>
+            <sc-if value="{{t.pending}}" hint-placeholder-val="{{true}}">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5c656f" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="3.6"></circle></svg>
+            </sc-if>
+            <div style="{{t.labelStyle}}">{{t.label}}</div>
+            <sc-if value="{{t.required}}" hint-placeholder-val="{{true}}">
+              <div style="{{t.dotStyle}}"></div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+
+    <!-- Damage note -->
+    <div style="display: flex; flex-direction: column; gap: 9px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d;">Pre-existing damage</div>
+      <div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 13px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px;">
+        <div style="width: 6px; height: 6px; border-radius: 50%; background: #f5a524; flex-shrink: 0; margin-top: 6px;"></div>
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+          <div style="font-size: 14px; font-weight: 600;">Scuff — rear bumper, driver side</div>
+          <div style="font-size: 12px; color: #6a737d; line-height: 1.4;">Logged 12 Aug · carried forward to every trip until repaired</div>
+        </div>
+      </div>
+      <div class="btn" style="min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px; background: #16191d; border: 1px dashed #3a4048; color: #98a1ab; font-size: 14px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#98a1ab" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+        <span>Add damage</span>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 9px; align-items: flex-start;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+      <div style="font-size: 11.5px; color: #4f575f; line-height: 1.5;">Each photo carries a server timestamp and GPS fix. This bundle is what you attach to a Turo damage claim — export as one dated PDF.</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="border-top: 1px solid #2a2f36; background: #16191d; padding: 14px 20px 18px;">
+    <div class="btn" onClick="{{cta.action}}" style="{{cta.style}}">{{cta.label}}</div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { shots: { p1: true, p2: true, p11: true } };
+  }
+
+  tileData() {
+    return [
+      { id: 'p1', label: 'Front', required: true },
+      { id: 'p2', label: 'Front R', required: true },
+      { id: 'p3', label: 'Rear R', required: true },
+      { id: 'p4', label: 'Rear', required: true },
+      { id: 'p5', label: 'Rear L', required: true },
+      { id: 'p6', label: 'Front L', required: true },
+      { id: 'p7', label: 'Roof', required: false },
+      { id: 'p8', label: 'Front seats', required: true },
+      { id: 'p9', label: 'Rear seats', required: true },
+      { id: 'p10', label: 'Trunk', required: false },
+      { id: 'p11', label: 'Odometer', required: true },
+      { id: 'p12', label: 'Fuel gauge', required: false },
+    ];
+  }
+
+  renderVals() {
+    const shots = this.state.shots;
+    const all = this.tileData();
+    const required = all.filter((t) => t.required);
+    const requiredDone = required.filter((t) => shots[t.id]).length;
+    const totalDone = all.filter((t) => shots[t.id]).length;
+    const ready = requiredDone === required.length;
+    const pct = Math.round((requiredDone / required.length) * 100);
+
+    return {
+      progress: {
+        label: requiredDone + '/' + required.length,
+        countStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 25px; font-weight: 600; line-height: 1; color: " +
+          (ready ? '#3ddc97' : '#f0f2f4') + ';',
+        barStyle: 'width: ' + pct + '%; background: ' + (ready ? '#3ddc97' : '#5aa2f5') + '; border-radius: 3px; transition: width .2s ease;',
+      },
+      shotCount: totalDone + ' of 12 captured',
+      auto: [
+        { label: 'Odometer', value: '41,208' },
+        { label: 'Fuel', value: '7/8' },
+        { label: 'Battery', value: '12.6 V' },
+      ],
+      tiles: all.map((t) => {
+        const shot = !!shots[t.id];
+        return {
+          label: t.label, shot: shot, pending: !shot, required: t.required && !shot,
+          toggle: () => {
+            const next = Object.assign({}, this.state.shots);
+            if (next[t.id]) delete next[t.id]; else next[t.id] = true;
+            this.setState({ shots: next });
+          },
+          style: 'position: relative; aspect-ratio: 1 / 1; border-radius: 10px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px; background: ' +
+            (shot ? '#1b2a23' : '#16191d') + '; border: 1px solid ' + (shot ? '#2c5843' : '#2a2f36') + ';',
+          labelStyle: 'font-size: 11.5px; font-weight: 500; text-align: center; padding: 0 4px; color: ' + (shot ? '#3ddc97' : '#98a1ab') + ';',
+          dotStyle: 'position: absolute; top: 7px; left: 7px; width: 5px; height: 5px; border-radius: 50%; background: #ff6259;',
+        };
+      }),
+      cta: {
+        label: ready ? 'Start trip — hand over keys' : (required.length - requiredDone) + ' required shots left',
+        action: () => this.setState({ shots: ready ? { p1: true, p2: true, p11: true } : {} }),
+        style: 'min-height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 11px; font-size: 15.5px; font-weight: 600; background: ' +
+          (ready ? '#3ddc97' : '#22262b') + '; color: ' + (ready ? '#0d0f12' : '#98a1ab') +
+          '; border: 1px solid ' + (ready ? '#3ddc97' : '#3a4048') + ';',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

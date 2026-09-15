@@ -1,0 +1,187 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; background: #0d0f12; }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+    .row { cursor: pointer; transition: background .12s ease; }
+    .row:hover { background: #21262c !important; }
+    .btn { cursor: pointer; transition: filter .12s ease; }
+    .btn:hover { filter: brightness(1.12); }
+    .scroll::-webkit-scrollbar { width: 0; }
+  </style>
+</helmet>
+
+<div style="height: 844px; display: flex; flex-direction: column; background: #0d0f12; color: #f0f2f4; overflow: hidden;">
+
+  <!-- Header -->
+  <div style="padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #2a2f36;">
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6a737d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Turnaround</div>
+    </div>
+
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;">
+      <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0;">
+        <div style="font-size: 25px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1;">Corolla · White</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #6a737d;">JFT9217 · Ana R. → Priya K.</div>
+      </div>
+      <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 25px; font-weight: 600; line-height: 1; color: #f0f2f4;">{{progress.label}}</div>
+        <div style="font-size: 11px; color: #6a737d;">steps done</div>
+      </div>
+    </div>
+
+    <div style="height: 5px; border-radius: 3px; background: #22262b; overflow: hidden; display: flex;">
+      <div style="{{progress.barStyle}}"></div>
+    </div>
+
+    <!-- Window / conflict strip -->
+    <div style="{{window.style}}">
+      <div style="display: flex; align-items: center; gap: 9px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{window.color}}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 15.5 14"></polyline></svg>
+        <div style="font-size: 13px; font-weight: 600; color: {{window.color}};">{{window.headline}}</div>
+      </div>
+      <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.45;">{{window.detail}}</div>
+    </div>
+  </div>
+
+  <!-- Checklist -->
+  <div class="scroll" style="flex: 1; overflow-y: auto; padding: 8px 20px 16px;">
+    <sc-for list="{{sections}}" as="sec" hint-placeholder-count="2">
+      <div style="padding: 16px 0 8px; display: flex; align-items: center; gap: 10px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">{{sec.label}}</div>
+        <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #4f575f;">{{sec.mins}}</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <sc-for list="{{sec.steps}}" as="s" hint-placeholder-count="3">
+          <div class="row" onClick="{{s.toggle}}" style="{{s.rowStyle}}">
+            <div style="{{s.boxStyle}}">
+              <sc-if value="{{s.done}}" hint-placeholder-val="{{false}}">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#0d0f12" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              </sc-if>
+            </div>
+            <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+              <div style="{{s.titleStyle}}">{{s.title}}</div>
+              <div style="font-size: 12px; color: #6a737d; line-height: 1.35;">{{s.hint}}</div>
+            </div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #4f575f; flex-shrink: 0; align-self: center;">{{s.mins}}</div>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+
+    <div style="display: flex; gap: 9px; align-items: flex-start; padding: 18px 2px 4px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+      <div style="font-size: 11.5px; color: #4f575f; line-height: 1.5;">The list is sized to the window. A 90-minute turnaround drops the wash and the tyre check; a 3-day gap adds an oil-change prompt.</div>
+    </div>
+  </div>
+
+  <!-- Footer action -->
+  <div style="border-top: 1px solid #2a2f36; background: #16191d; padding: 14px 20px 18px;">
+    <div class="btn" onClick="{{cta.action}}" style="{{cta.style}}">{{cta.label}}</div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { done: {} };
+  }
+
+  stepData() {
+    return [
+      { section: 'Clean', id: 's1', title: 'Trash out, wipe surfaces', hint: 'Cupholders, door pockets, dash', mins: 5 },
+      { section: 'Clean', id: 's2', title: 'Vacuum interior', hint: 'Mats out, seats, trunk', mins: 12 },
+      { section: 'Clean', id: 's3', title: 'Exterior wash', hint: 'Sunoco on Atlantic — $14', mins: 20 },
+      { section: 'Ready', id: 's4', title: 'Refuel to 7/8', hint: 'Reads 3/8 now — about 9 gal', mins: 10 },
+      { section: 'Ready', id: 's5', title: 'Tyre pressure', hint: 'Rear left ran 3 psi low last trip', mins: 5 },
+      { section: 'Ready', id: 's6', title: 'Staging photos', hint: '6 shots — the before-trip record', mins: 4 },
+      { section: 'Park', id: 's7', title: 'Park on a clean-side block', hint: 'Bergen St south side is clear until Thu', mins: 10 },
+    ];
+  }
+
+  renderVals() {
+    const done = this.state.done;
+    const all = this.stepData();
+    const doneCount = all.filter((s) => done[s.id]).length;
+    const pct = Math.round((doneCount / all.length) * 100);
+    const remaining = all.filter((s) => !done[s.id]).reduce((a, s) => a + s.mins, 0);
+
+    const order = [];
+    const map = {};
+    all.forEach((s) => {
+      if (!map[s.section]) { map[s.section] = []; order.push(s.section); }
+      map[s.section].push(s);
+    });
+
+    const sections = order.map((name) => {
+      const steps = map[name];
+      const mins = steps.filter((s) => !done[s.id]).reduce((a, s) => a + s.mins, 0);
+      return {
+        label: name,
+        mins: mins === 0 ? 'done' : mins + ' min left',
+        steps: steps.map((s) => {
+          const isDone = !!done[s.id];
+          return {
+            title: s.title, hint: s.hint, mins: s.mins + 'm', done: isDone,
+            toggle: () => {
+              const next = Object.assign({}, this.state.done);
+              if (next[s.id]) delete next[s.id]; else next[s.id] = true;
+              this.setState({ done: next });
+            },
+            rowStyle: 'display: flex; gap: 12px; align-items: flex-start; padding: 13px 14px; border-radius: 11px; background: ' +
+              (isDone ? '#131619' : '#16191d') + '; border: 1px solid #2a2f36; opacity: ' + (isDone ? '0.55' : '1') + ';',
+            boxStyle: 'width: 24px; height: 24px; flex-shrink: 0; border-radius: 7px; display: flex; align-items: center; justify-content: center; background: ' +
+              (isDone ? '#3ddc97' : 'transparent') + '; border: 1.8px solid ' + (isDone ? '#3ddc97' : '#3a4048') + '; margin-top: 1px;',
+            titleStyle: 'font-size: 15px; font-weight: 600; letter-spacing: -.005em; line-height: 1.25; color: ' +
+              (isDone ? '#98a1ab' : '#f0f2f4') + '; text-decoration: ' + (isDone ? 'line-through' : 'none') + ';',
+          };
+        }),
+      };
+    });
+
+    const complete = doneCount === all.length;
+    const windowMins = 435;
+    const tight = remaining > windowMins;
+
+    return {
+      sections: sections,
+      progress: {
+        label: doneCount + '/' + all.length,
+        barStyle: 'width: ' + pct + '%; background: ' + (complete ? '#3ddc97' : '#5aa2f5') + '; border-radius: 3px; transition: width .2s ease;',
+      },
+      window: {
+        style: 'display: flex; flex-direction: column; gap: 6px; padding: 12px 13px; border-radius: 10px; background: ' +
+          (tight ? '#1a1512' : '#131619') + '; border: 1px solid ' + (tight ? '#4a3a1e' : '#22262b') + ';',
+        color: tight ? '#f5a524' : '#3ddc97',
+        headline: complete ? 'Ready for Priya K.' : (tight ? 'Tight window' : 'Comfortable window'),
+        detail: complete
+          ? 'All steps done. Next trip picks up 4:30p at Hanson Pl.'
+          : 'Back 9:15a, out 4:30p — 7h 15m of window against ' + remaining + ' min of work. Also due: Transit refuel by 12:15p.',
+      },
+      cta: {
+        label: complete ? 'Mark turnaround complete' : remaining + ' min of work left',
+        action: () => this.setState({ done: {} }),
+        style: 'min-height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 11px; font-size: 15.5px; font-weight: 600; background: ' +
+          (complete ? '#3ddc97' : '#22262b') + '; color: ' + (complete ? '#0d0f12' : '#98a1ab') +
+          '; border: 1px solid ' + (complete ? '#3ddc97' : '#3a4048') + ';',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

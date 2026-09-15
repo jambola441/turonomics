@@ -28,3 +28,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.swp
+
+# Design canvas — generated bundle (re-seed from docs/design/canvas/*.dc.html)
+docs/design/canvas/turo-fleet-ops.html

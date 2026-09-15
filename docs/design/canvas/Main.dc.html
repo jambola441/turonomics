@@ -1,0 +1,255 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body {
+      margin: 0;
+      font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif;
+      -webkit-font-smoothing: antialiased;
+      background: #0d0f12;
+    }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+    .tapcard { cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+    .tapcard:hover { background: #21262c !important; }
+    .tapcard:active { background: #262c33 !important; }
+    .seg { cursor: pointer; transition: background .12s ease, color .12s ease; }
+    .scroll::-webkit-scrollbar { width: 0; }
+  </style>
+</helmet>
+
+<div style="height: 844px; display: flex; flex-direction: column; background: #0d0f12; color: #f0f2f4; overflow: hidden;">
+
+  <!-- Header -->
+  <div style="padding: 20px 20px 14px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid #2a2f36; background: #0d0f12;">
+    <div style="display: flex; align-items: baseline; justify-content: space-between;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: .14em; color: #6a737d; text-transform: uppercase;">Tue · Sep 15</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; letter-spacing: .06em; color: #6a737d;">7:42 AM</div>
+    </div>
+    <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;">
+      <div style="font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1;">Run sheet</div>
+      <div style="display: flex; align-items: center; gap: 6px; padding-bottom: 3px;">
+        <div style="width: 7px; height: 7px; border-radius: 50%; background: #ff6259;"></div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; color: #ff6259; font-weight: 500;">{{summary.urgent}}</div>
+      </div>
+    </div>
+    <div style="font-size: 13px; color: #98a1ab; line-height: 1.4;">{{summary.line}}</div>
+
+    <!-- Segmented filter -->
+    <div style="display: flex; gap: 4px; background: #16191d; border: 1px solid #2a2f36; border-radius: 10px; padding: 4px;">
+      <sc-for list="{{tabs}}" as="tab" hint-placeholder-count="3">
+        <div class="seg" onClick="{{tab.select}}" style="{{tab.style}}">
+          <span>{{tab.label}}</span>
+          <span style="{{tab.countStyle}}">{{tab.count}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- Task list -->
+  <div class="scroll" style="flex: 1; overflow-y: auto; padding: 4px 20px 20px;">
+
+    <sc-for list="{{groups}}" as="g" hint-placeholder-count="2">
+      <div style="padding: 18px 0 8px; display: flex; align-items: center; gap: 10px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">{{g.label}}</div>
+        <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #4f575f; white-space: nowrap;">{{g.meta}}</div>
+      </div>
+
+      <div style="display: flex; flex-direction: column; gap: 8px;">
+        <sc-for list="{{g.tasks}}" as="t" hint-placeholder-count="2">
+          <div class="tapcard" onClick="{{t.toggle}}" style="{{t.cardStyle}}">
+            <div style="{{t.barStyle}}"></div>
+            <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 5px; min-width: 0;">
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="{{t.dueStyle}}">{{t.due}}</div>
+                <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: .1em; color: #6a737d; text-transform: uppercase;">{{t.kind}}</div>
+              </div>
+              <div style="{{t.titleStyle}}">{{t.title}}</div>
+              <div style="font-size: 13px; color: #98a1ab; line-height: 1.35;">{{t.where}}</div>
+              <div style="display: flex; align-items: center; gap: 8px; padding-top: 2px;">
+                <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #98a1ab; background: #22262b; border: 1px solid #2a2f36; border-radius: 4px; padding: 3px 6px;">{{t.plate}}</div>
+                <div style="font-size: 12px; color: #6a737d; line-height: 1.3;">{{t.detail}}</div>
+              </div>
+            </div>
+            <sc-if value="{{t.isDone}}" hint-placeholder-val="{{false}}">
+              <div style="width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; background: #3ddc97; display: flex; align-items: center; justify-content: center; align-self: center;">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#0d0f12" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              </div>
+            </sc-if>
+          </div>
+        </sc-for>
+      </div>
+    </sc-for>
+
+    <sc-if value="{{isEmpty}}" hint-placeholder-val="{{false}}">
+      <div style="padding: 64px 12px; text-align: center; display: flex; flex-direction: column; gap: 10px; align-items: center;">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><polyline points="16 9.5 11 14.5 8 11.5"></polyline></svg>
+        <div style="font-size: 17px; font-weight: 600; color: #f0f2f4;">Nothing due right now</div>
+        <div style="font-size: 13px; color: #6a737d; max-width: 240px; line-height: 1.45;">Next obligation is the Sterling Pl move at 11:30a.</div>
+      </div>
+    </sc-if>
+  </div>
+
+  <!-- Bottom nav -->
+  <div style="display: flex; border-top: 1px solid #2a2f36; background: #16191d; padding: 8px 8px 14px;">
+    <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; min-height: 48px;">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#3ddc97" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"></path><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"></path></svg>
+      <div style="font-size: 10.5px; font-weight: 600; color: #3ddc97; letter-spacing: .02em;">Today</div>
+    </div>
+    <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; min-height: 48px;">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#6a737d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 8 3 16 6 23 3 23 18 16 21 8 18 1 21 1 6"></polygon><line x1="8" y1="3" x2="8" y2="18"></line><line x1="16" y1="6" x2="16" y2="21"></line></svg>
+      <div style="font-size: 10.5px; font-weight: 500; color: #6a737d; letter-spacing: .02em;">Map</div>
+    </div>
+    <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; min-height: 48px;">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#6a737d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="15" height="12" rx="2"></rect><path d="M16 10h4l3 3v3a2 2 0 0 1-2 2h-5"></path><circle cx="6" cy="18" r="2"></circle><circle cx="18" cy="18" r="2"></circle></svg>
+      <div style="font-size: 10.5px; font-weight: 500; color: #6a737d; letter-spacing: .02em;">Fleet</div>
+    </div>
+    <div style="flex-grow: 1; display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 0; min-height: 48px;">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="#6a737d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+      <div style="font-size: 10.5px; font-weight: 500; color: #6a737d; letter-spacing: .02em;">Inbox</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"groupByRoute":{"editor":"boolean","default":true,"section":"Layout"},"density":{"editor":"enum","options":["comfortable","compact"],"default":"comfortable","section":"Layout"},"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { filter: 'now', done: { d1: true, d2: true } };
+  }
+
+  allTasks() {
+    return [
+      { id: 't1', leg: 'Vanderbilt Ave', legMeta: '2 stops · 12 min', kind: 'ASP move', urgency: 'red', now: true,
+        due: '18 min', title: 'Move 4Runner', plate: 'KDR8814',
+        where: 'Dean St @ Vanderbilt — north side',
+        detail: 'Cleaning 8:00–9:30a' },
+      { id: 't2', leg: 'Vanderbilt Ave', legMeta: '2 stops · 12 min', kind: 'Fuel', urgency: 'amber', now: true,
+        due: 'by 12:15p', title: 'Refuel Transit', plate: 'HZV3305',
+        where: 'BP — Vanderbilt & Atlantic',
+        detail: 'Tank 1/8 · next trip 1:00p' },
+      { id: 't3', leg: 'Atlantic Terminal', legMeta: '1 stop · 9 min', kind: 'Check-in', urgency: 'amber', now: true,
+        due: '9:15a', title: 'Check in Ana R.', plate: 'JFT9217',
+        where: 'Hanson Pl @ Fort Greene Pl',
+        detail: 'Photos + fuel + odometer' },
+      { id: 't4', leg: 'Sterling Pl', legMeta: '1 stop · 6 min', kind: 'ASP move', urgency: 'green', now: false,
+        due: '3h 48m', title: 'Move Corolla · Silver', plate: 'JGL4460',
+        where: 'Sterling Pl @ Underhill — south side',
+        detail: 'Cleaning 11:30a–1:00p' },
+      { id: 't5', leg: 'Anywhere', legMeta: 'no travel', kind: 'Message', urgency: 'blue', now: false,
+        due: 'by 1:00p', title: 'Send pickup details — Marcus T.', plate: 'KDR8814',
+        where: 'Draft ready: spot, cross street, fuel level',
+        detail: 'Trip starts 2:00p' },
+      { id: 't6', leg: 'Anywhere', legMeta: 'no travel', kind: 'Turnaround', urgency: 'green', now: false,
+        due: 'by 4:30p', title: 'Turnaround — Corolla · White', plate: 'JFT9217',
+        where: 'Wash, vacuum, fuel, staging photos',
+        detail: '7h window · 6 steps' },
+      { id: 'd1', leg: 'Anywhere', legMeta: 'no travel', kind: 'ASP move', urgency: 'green', now: false,
+        due: '6:05a', title: 'Moved Transit off Bergen St', plate: 'HZV3305',
+        where: 'Now on Pacific St @ Underhill — north side',
+        detail: 'Next clean Thu 8:00a' },
+      { id: 'd2', leg: 'Anywhere', legMeta: 'no travel', kind: 'Check-out', urgency: 'green', now: false,
+        due: '7:10a', title: 'Checked out Dana W.', plate: 'JGL4460',
+        where: '12 photos · 41,208 mi · 7/8 tank',
+        detail: 'Returns Thu 10:00a' },
+    ];
+  }
+
+  colorFor(u) {
+    if (u === 'red') return '#ff6259';
+    if (u === 'amber') return '#f5a524';
+    if (u === 'blue') return '#5aa2f5';
+    return '#3ddc97';
+  }
+
+  renderVals() {
+    const compact = (this.props.density ?? 'comfortable') === 'compact';
+    const byRoute = this.props.groupByRoute ?? true;
+    const done = this.state.done;
+    const filter = this.state.filter;
+    const all = this.allTasks();
+
+    const open = all.filter((t) => !done[t.id]);
+    const nowCount = open.filter((t) => t.now).length;
+    const doneCount = all.filter((t) => done[t.id]).length;
+
+    let visible;
+    if (filter === 'done') visible = all.filter((t) => done[t.id]);
+    else if (filter === 'now') visible = open.filter((t) => t.now);
+    else visible = open;
+
+    const pad = compact ? '10px 12px' : '14px 14px';
+    const gap = compact ? '10px' : '12px';
+
+    const tasks = visible.map((t) => {
+      const isDone = !!done[t.id];
+      const c = this.colorFor(t.urgency);
+      return Object.assign({}, t, {
+        isDone: isDone,
+        toggle: () => {
+          const next = Object.assign({}, this.state.done);
+          if (next[t.id]) delete next[t.id]; else next[t.id] = true;
+          this.setState({ done: next });
+        },
+        cardStyle: 'display: flex; gap: ' + gap + '; align-items: stretch; padding: ' + pad +
+          '; background: ' + (isDone ? '#131619' : '#16191d') +
+          '; border: 1px solid ' + (t.urgency === 'red' && !isDone ? '#4a2a29' : '#2a2f36') +
+          '; border-radius: 12px; opacity: ' + (isDone ? '0.55' : '1') + ';',
+        barStyle: 'width: 3px; flex-shrink: 0; border-radius: 2px; background: ' + (isDone ? '#3a4048' : c) + ';',
+        dueStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12.5px; font-weight: 600; letter-spacing: .01em; color: " +
+          (isDone ? '#6a737d' : c) + ';',
+        titleStyle: 'font-size: ' + (compact ? '15px' : '16.5px') + '; font-weight: 600; letter-spacing: -.01em; line-height: 1.25; color: ' +
+          (isDone ? '#98a1ab' : '#f0f2f4') + '; text-decoration: ' + (isDone ? 'line-through' : 'none') + ';',
+      });
+    });
+
+    let groups;
+    if (byRoute && filter !== 'done') {
+      const order = [];
+      const map = {};
+      tasks.forEach((t) => {
+        if (!map[t.leg]) { map[t.leg] = { label: t.leg, meta: t.legMeta, tasks: [] }; order.push(t.leg); }
+        map[t.leg].tasks.push(t);
+      });
+      groups = order.map((k) => map[k]);
+    } else {
+      groups = [{ label: filter === 'done' ? 'Completed' : 'By deadline', meta: tasks.length + ' items', tasks: tasks }];
+    }
+
+    const mkTab = (key, label, count) => {
+      const active = filter === key;
+      return {
+        label: label,
+        count: count,
+        select: () => this.setState({ filter: key }),
+        style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; gap: 6px; min-height: 40px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
+          (active ? '600' : '500') + '; color: ' + (active ? '#0d0f12' : '#98a1ab') +
+          '; background: ' + (active ? '#f0f2f4' : 'transparent') + ';',
+        countStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; font-weight: 600; padding: 1px 5px; border-radius: 4px; background: " +
+          (active ? 'rgba(13,15,18,.12)' : '#22262b') + '; color: ' + (active ? '#0d0f12' : '#6a737d') + ';',
+      };
+    };
+
+    return {
+      groups: groups,
+      isEmpty: tasks.length === 0,
+      tabs: [mkTab('now', 'Now', nowCount), mkTab('today', 'Today', open.length), mkTab('done', 'Done', doneCount)],
+      summary: {
+        urgent: nowCount + ' now',
+        line: '4 vehicles · 2 out on trip · ' + open.length + ' open tasks · 1 ticket risk in 18 min',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

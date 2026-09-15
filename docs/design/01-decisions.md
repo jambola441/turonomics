@@ -140,6 +140,20 @@ somewhere to go.
 
 ---
 
+## D11 — The Transit is not a special case
+
+It runs **passenger plates**, so none of the commercial-vehicle rules apply: no
+commercial overnight restrictions, no loading-zone or commercial-metered
+regulations. Standard ASP, same rules engine, a fifth row in the same table.
+
+One residual, which is a *spot* concern rather than a *rules* concern: a Transit
+does not physically fit everywhere a Corolla does, and NYC has no length-based
+cleaning rule. So the confirmed-spot cache carries a **`fits_van`** flag, and
+any suggestion that recommends somewhere to park — the turnaround "park on a
+clean-side block" step, and the ASP-safe return instruction merged into guest
+messages — filters by vehicle. Otherwise the app will confidently send the van
+to a spot it can't use.
+
 ## Still mine to decide (flagging, not asking)
 
 - **Reading guest message threads.** Draft-only messaging (D5) only needs
@@ -167,3 +181,14 @@ walk through getting it.
 | S3-compatible bucket + keys (R2 or similar) | Check-out / check-in photos | Step 5 |
 
 NYC Open Data needs no credential (an app token only raises rate limits).
+
+**Names are fixed in [`.env.example`](../../.env.example)** at the repo root,
+annotated with who supplies each one. Paste values into Render's environment
+settings; `.env` is gitignored.
+
+Two notes on that file worth reading before you fill it in:
+
+- `ALLOWED_SIGNIN_EMAILS` is not optional. Google sign-in without an allowlist
+  means any Google account can reach your fleet.
+- `FLEET_TIMEZONE` is explicit rather than inherited from the process timezone,
+  because street cleaning is local wall-clock time and DST shifts it.

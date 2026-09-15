@@ -43,7 +43,7 @@
       </div>
       <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
         <div style="font-size: 16px; font-weight: 600; letter-spacing: -.01em;">Toyota 4Runner</div>
-        <div style="font-size: 12.5px; color: #6a737d;">Parked 9h 12m · idle since 10:30p</div>
+        <div style="font-size: 12.5px; color: #8a939d;">Parked 9h 12m · idle since 10:30p</div>
       </div>
       <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #98a1ab; background: #22262b; border: 1px solid #2a2f36; border-radius: 5px; padding: 5px 8px;">KDR8814</div>
     </div>
@@ -52,9 +52,9 @@
     <div style="background: #16191d; border: 1px solid #2a2f36; border-radius: 12px; padding: 14px; display: flex; flex-direction: column; gap: 10px;">
       <div style="display: flex; align-items: center; justify-content: space-between;">
         <div style="font-size: 15px; font-weight: 600;">{{spot.street}}</div>
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #6a737d;">±7 m GPS</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d;">±7 m GPS</div>
       </div>
-      <div style="font-size: 12.5px; color: #6a737d;">{{spot.between}}</div>
+      <div style="font-size: 12.5px; color: #8a939d;">{{spot.between}}</div>
 
       <svg viewBox="0 0 330 150" width="100%" style="display: block; border-radius: 8px; background: #101317;">
         <rect x="0" y="0" width="330" height="34" fill="#181c21"></rect>
@@ -75,8 +75,8 @@
 
         <text x="8" y="22" font-family="IBM Plex Mono, monospace" font-size="11" fill="{{diagram.northLabel}}">N SIDE</text>
         <text x="8" y="141" font-family="IBM Plex Mono, monospace" font-size="11" fill="{{diagram.southLabel}}">S SIDE</text>
-        <text x="322" y="22" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10" fill="#4f575f">{{diagram.northRule}}</text>
-        <text x="322" y="141" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10" fill="#4f575f">{{diagram.southRule}}</text>
+        <text x="322" y="22" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10" fill="#8a939d">{{diagram.northRule}}</text>
+        <text x="322" y="141" text-anchor="end" font-family="IBM Plex Mono, monospace" font-size="10" fill="#8a939d">{{diagram.southRule}}</text>
       </svg>
     </div>
 
@@ -84,9 +84,15 @@
     <sc-if value="{{ui.showConfirm}}" hint-placeholder-val="{{true}}">
       <div style="background: #16191d; border: 1px solid #2a2f36; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px;">
         <div style="display: flex; flex-direction: column; gap: 7px;">
-          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Confirm the spot</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #8a939d;">Confirm the spot</div>
           <div style="font-size: 18px; font-weight: 600; line-height: 1.3; letter-spacing: -.01em;">Parked on the <span style="{{confirm.sideStyle}}">{{confirm.sideWord}} side</span>?</div>
           <div style="font-size: 13.5px; color: #98a1ab; line-height: 1.45;">{{confirm.ruleLine}}</div>
+          <sc-if value="{{confirm.corrected}}" hint-placeholder-val="{{false}}">
+            <div style="display: flex; align-items: center; gap: 8px; padding: 9px 11px; margin-top: 2px; border-radius: 8px; background: #101820; border: 1px solid #1e3040;">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#5aa2f5" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0;"><polyline points="20 6 9 17 4 12"></polyline></svg>
+              <div style="font-size: 12px; color: #9fc7fa; line-height: 1.4;">Correction saved — this spot will resolve to your side next time.</div>
+            </div>
+          </sc-if>
         </div>
 
         <div style="display: flex; flex-direction: column; gap: 8px;">
@@ -101,8 +107,8 @@
         </div>
 
         <div style="display: flex; gap: 8px; align-items: flex-start; padding-top: 2px;">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-          <div style="font-size: 11.5px; color: #4f575f; line-height: 1.45;">GPS can&#39;t tell which side of a 11 m street you&#39;re on. One tap now; we remember this spot next time.</div>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <div style="font-size: 11.5px; color: #8a939d; line-height: 1.45;">GPS can&#39;t tell which side of an 11 m street you&#39;re on. One tap now; we remember this spot next time.</div>
         </div>
       </div>
     </sc-if>
@@ -110,13 +116,13 @@
     <!-- STEP: pick a different block -->
     <sc-if value="{{ui.showBlocks}}" hint-placeholder-val="{{false}}">
       <div style="background: #16191d; border: 1px solid #2a2f36; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 12px;">
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Nearby blocks</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #8a939d;">Nearby blocks</div>
         <div style="display: flex; flex-direction: column; gap: 8px;">
           <sc-for list="{{blocks}}" as="b" hint-placeholder-count="3">
             <div class="btn" onClick="{{b.pick}}" style="display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 10px 13px; border-radius: 10px; background: #1d2126; border: 1px solid #2a2f36;">
               <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
                 <div style="font-size: 14.5px; font-weight: 600;">{{b.name}}</div>
-                <div style="font-size: 12px; color: #6a737d;">{{b.rule}}</div>
+                <div style="font-size: 12px; color: #8a939d;">{{b.rule}}</div>
               </div>
               <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #98a1ab;">{{b.dist}}</div>
             </div>
@@ -138,12 +144,12 @@
           <div style="font-size: 13.5px; color: #98a1ab; line-height: 1.45;">{{confirmed.sub}}</div>
         </div>
         <div style="display: flex; flex-direction: column; gap: 8px;">
-          <div class="btn" style="min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 9px; border-radius: 10px; background: #f0f2f4; color: #0d0f12; font-size: 15.5px; font-weight: 600;">
+          <div class="btn" onClick="{{confirmed.moved}}" style="min-height: 50px; display: flex; align-items: center; justify-content: center; gap: 9px; border-radius: 10px; background: #f0f2f4; color: #0d0f12; font-size: 15.5px; font-weight: 600;">
             <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#0d0f12" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polygon points="3 11 22 2 13 21 11 13 3 11"></polygon></svg>
             <span>Walk to car</span>
           </div>
           <div class="btn" onClick="{{confirmed.moved}}" style="min-height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: #22262b; border: 1px solid #3a4048; color: #f0f2f4; font-size: 14.5px; font-weight: 500;">I&#39;ve moved it</div>
-          <div class="btn" onClick="{{confirmed.back}}" style="min-height: 40px; display: flex; align-items: center; justify-content: center; color: #6a737d; font-size: 13.5px;">Wrong spot — start over</div>
+          <div class="btn" onClick="{{confirmed.back}}" style="min-height: 44px; display: flex; align-items: center; justify-content: center; color: #8a939d; font-size: 13.5px;">Wrong spot — start over</div>
         </div>
       </div>
     </sc-if>
@@ -158,13 +164,7 @@
           <div style="font-size: 19px; font-weight: 600; letter-spacing: -.01em;">Moved — ticket avoided</div>
           <div style="font-size: 13.5px; color: #98a1ab; line-height: 1.5; max-width: 270px;">We&#39;ll ask where it landed as soon as the engine goes off, then start the next clock.</div>
         </div>
-        <div style="width: 100%; display: flex; flex-direction: column; gap: 6px; padding: 12px 0 0; border-top: 1px solid #2a2f36;">
-          <div style="display: flex; justify-content: space-between; align-items: baseline;">
-            <div style="font-size: 13px; color: #6a737d;">Tickets avoided this month</div>
-            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px; font-weight: 600; color: #3ddc97;">4 · $260</div>
-          </div>
-        </div>
-        <div class="btn" onClick="{{confirmed.back}}" style="min-height: 40px; display: flex; align-items: center; justify-content: center; color: #6a737d; font-size: 13.5px;">Replay this flow</div>
+        <div class="btn" onClick="{{confirmed.back}}" style="min-height: 44px; display: flex; align-items: center; justify-content: center; color: #8a939d; font-size: 13.5px;">Replay this flow</div>
       </div>
     </sc-if>
 
@@ -240,8 +240,8 @@ class Component extends DCLogic {
       diagram: {
         northCurb: side === 'north' ? c : '#2a2f36',
         southCurb: side === 'south' ? c : '#2a2f36',
-        northLabel: side === 'north' ? c : '#4f575f',
-        southLabel: side === 'south' ? c : '#4f575f',
+        northLabel: side === 'north' ? c : '#8a939d',
+        southLabel: side === 'south' ? c : '#8a939d',
         northRule: data.north.rule,
         southRule: data.south.rule,
         carX: 140,
@@ -251,6 +251,7 @@ class Component extends DCLogic {
 
       confirm: {
         sideWord: sideWord,
+        corrected: this.state.corrected,
         sideStyle: 'color: ' + c + '; font-weight: 700;',
         ruleLine: 'That side is cleaned ' + rule.rule + '. Next move: ' + rule.due + '. The other side is ' + other.rule + '.',
         accept: () => this.setState({ step: 'confirmed' }),

@@ -25,17 +25,17 @@
   <!-- Header -->
   <div style="padding: 18px 20px 16px; display: flex; flex-direction: column; gap: 13px; border-bottom: 1px solid #2a2f36;">
     <div style="display: flex; align-items: center; justify-content: space-between;">
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Check-out</div>
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #6a737d;">7:08 AM · Sep 15</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #8a939d;">Check-out</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d;">7:08 AM · Sep 15</div>
     </div>
     <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;">
       <div style="display: flex; flex-direction: column; gap: 4px; min-width: 0;">
         <div style="font-size: 25px; font-weight: 700; letter-spacing: -.02em; line-height: 1.1;">Corolla · Silver</div>
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #6a737d;">JGL4460 → Dana W.</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d;">JGL4460 → Dana W.</div>
       </div>
       <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 2px;">
         <div style="{{progress.countStyle}}">{{progress.label}}</div>
-        <div style="font-size: 11px; color: #6a737d;">required shots</div>
+        <div style="font-size: 11px; color: #8a939d;">required shots</div>
       </div>
     </div>
     <div style="height: 5px; border-radius: 3px; background: #22262b; overflow: hidden; display: flex;">
@@ -54,20 +54,20 @@
       <div style="display: flex; gap: 8px;">
         <sc-for list="{{auto}}" as="a" hint-placeholder-count="3">
           <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0;">
-            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #6a737d;">{{a.label}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #8a939d;">{{a.label}}</div>
             <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: #f0f2f4;">{{a.value}}</div>
           </div>
         </sc-for>
       </div>
-      <div style="font-size: 11.5px; color: #5c7a6b; line-height: 1.4;">Odometer and fuel come off the OBD device — photograph them, don&#39;t retype them.</div>
+      <div style="font-size: 11.5px; color: #7fae96; line-height: 1.4;">Odometer and fuel come off the OBD device — photograph them, don&#39;t retype them.</div>
     </div>
 
     <!-- Photo grid -->
     <div style="display: flex; flex-direction: column; gap: 11px;">
       <div style="display: flex; align-items: center; gap: 10px;">
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">Condition record</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d; white-space: nowrap;">Condition record</div>
         <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #4f575f; white-space: nowrap;">{{shotCount}}</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d; white-space: nowrap;">{{shotCount}}</div>
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px;">
@@ -79,7 +79,7 @@
               </div>
             </sc-if>
             <sc-if value="{{t.pending}}" hint-placeholder-val="{{true}}">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#5c656f" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="3.6"></circle></svg>
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#7b848e" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="3.6"></circle></svg>
             </sc-if>
             <div style="{{t.labelStyle}}">{{t.label}}</div>
             <sc-if value="{{t.required}}" hint-placeholder-val="{{true}}">
@@ -92,23 +92,32 @@
 
     <!-- Damage note -->
     <div style="display: flex; flex-direction: column; gap: 9px;">
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d;">Pre-existing damage</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d;">Pre-existing damage</div>
       <div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 13px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px;">
         <div style="width: 6px; height: 6px; border-radius: 50%; background: #f5a524; flex-shrink: 0; margin-top: 6px;"></div>
         <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
           <div style="font-size: 14px; font-weight: 600;">Scuff — rear bumper, driver side</div>
-          <div style="font-size: 12px; color: #6a737d; line-height: 1.4;">Logged 12 Aug · carried forward to every trip until repaired</div>
+          <div style="font-size: 12px; color: #8a939d; line-height: 1.4;">Logged Aug 12 · carried forward to every trip until repaired</div>
         </div>
       </div>
-      <div class="btn" style="min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px; background: #16191d; border: 1px dashed #3a4048; color: #98a1ab; font-size: 14px;">
+      <sc-if value="{{extraDamage}}" hint-placeholder-val="{{false}}">
+        <div style="display: flex; gap: 10px; align-items: flex-start; padding: 12px 13px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px;">
+          <div style="width: 6px; height: 6px; border-radius: 50%; background: #ff6259; flex-shrink: 0; margin-top: 6px;"></div>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+            <div style="font-size: 14px; font-weight: 600;">New — noted at check-out</div>
+            <div style="font-size: 12px; color: #8a939d; line-height: 1.4;">Tap the photo tile for the affected panel, then describe it</div>
+          </div>
+        </div>
+      </sc-if>
+      <div class="btn" onClick="{{addDamage}}" style="min-height: 44px; display: flex; align-items: center; justify-content: center; gap: 8px; border-radius: 10px; background: #16191d; border: 1px dashed #3a4048; color: #98a1ab; font-size: 14px;">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#98a1ab" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
         <span>Add damage</span>
       </div>
     </div>
 
     <div style="display: flex; gap: 9px; align-items: flex-start;">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
-      <div style="font-size: 11.5px; color: #4f575f; line-height: 1.5;">Each photo carries a server timestamp and GPS fix. This bundle is what you attach to a Turo damage claim — export as one dated PDF.</div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>
+      <div style="font-size: 11.5px; color: #8a939d; line-height: 1.5;">Each photo carries a server timestamp and GPS fix. This bundle is what you attach to a Turo damage claim — export as one dated PDF.</div>
     </div>
   </div>
 
@@ -123,7 +132,7 @@
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { shots: { p1: true, p2: true, p11: true } };
+    this.state = { shots: { p1: true, p2: true, p11: true }, extraDamage: false };
   }
 
   tileData() {
@@ -153,6 +162,8 @@ class Component extends DCLogic {
     const pct = Math.round((requiredDone / required.length) * 100);
 
     return {
+      extraDamage: this.state.extraDamage,
+      addDamage: () => this.setState({ extraDamage: !this.state.extraDamage }),
       progress: {
         label: requiredDone + '/' + required.length,
         countStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 25px; font-weight: 600; line-height: 1; color: " +
@@ -182,7 +193,7 @@ class Component extends DCLogic {
       }),
       cta: {
         label: ready ? 'Start trip — hand over keys' : (required.length - requiredDone) + ' required shots left',
-        action: () => this.setState({ shots: ready ? { p1: true, p2: true, p11: true } : {} }),
+        action: () => { if (ready) this.setState({ shots: { p1: true, p2: true, p11: true } }); },
         style: 'min-height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 11px; font-size: 15.5px; font-weight: 600; background: ' +
           (ready ? '#3ddc97' : '#22262b') + '; color: ' + (ready ? '#0d0f12' : '#98a1ab') +
           '; border: 1px solid ' + (ready ? '#3ddc97' : '#3a4048') + ';',

@@ -24,14 +24,14 @@
   <!-- Header -->
   <div style="padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 14px; border-bottom: 1px solid #2a2f36;">
     <div style="display: flex; align-items: center; gap: 8px;">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#6a737d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #6a737d;">Fleet</div>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"></polyline></svg>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .13em; text-transform: uppercase; color: #8a939d;">Fleet</div>
     </div>
 
     <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 12px;">
       <div style="display: flex; flex-direction: column; gap: 5px; min-width: 0;">
         <div style="font-size: 27px; font-weight: 700; letter-spacing: -.02em; line-height: 1.05;">4Runner</div>
-        <div style="font-size: 12.5px; color: #6a737d;">Toyota 4Runner SR5 · 2019 · Turo listing 4412903</div>
+        <div style="font-size: 12.5px; color: #8a939d;">Toyota 4Runner SR5 · 2019 · Turo listing 4412903</div>
       </div>
       <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 12px; color: #98a1ab; background: #22262b; border: 1px solid #2a2f36; border-radius: 5px; padding: 6px 9px; flex-shrink: 0;">KDR8814</div>
     </div>
@@ -54,21 +54,21 @@
         </div>
         <div style="font-size: 14px; font-weight: 600; line-height: 1.35;">Dean St @ Vanderbilt — north side</div>
         <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.4;">Cleaning 8:00–9:30a Tue &amp; Fri · spot confirmed by you 10:31p</div>
-        <div class="btn" style="margin-top: 4px; min-height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 10px; background: #ff6259; color: #0d0f12; font-size: 14.5px; font-weight: 600;">Move now</div>
+        <div class="btn" onClick="{{moveCta.action}}" style="{{moveCta.style}}">{{moveCta.label}}</div>
       </div>
 
       <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px;">
         <sc-for list="{{stats}}" as="s" hint-placeholder-count="4">
           <div style="display: flex; flex-direction: column; gap: 6px; padding: 13px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px; min-width: 0;">
-            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .11em; text-transform: uppercase; color: #6a737d;">{{s.label}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .11em; text-transform: uppercase; color: #8a939d;">{{s.label}}</div>
             <div style="{{s.valueStyle}}">{{s.value}}</div>
-            <div style="font-size: 11.5px; color: #6a737d; line-height: 1.3;">{{s.sub}}</div>
+            <div style="font-size: 11.5px; color: #8a939d; line-height: 1.3;">{{s.sub}}</div>
           </div>
         </sc-for>
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 9px;">
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d;">Next up</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d;">Next up</div>
         <div style="display: flex; gap: 12px; align-items: center; padding: 13px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px;">
           <div style="width: 3px; align-self: stretch; border-radius: 2px; background: #5aa2f5;"></div>
           <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
@@ -84,7 +84,7 @@
       <div style="display: flex; gap: 8px;">
         <sc-for list="{{tripStats}}" as="s" hint-placeholder-count="3">
           <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 5px; padding: 13px 12px; background: #16191d; border: 1px solid #2a2f36; border-radius: 11px; min-width: 0;">
-            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #6a737d;">{{s.label}}</div>
+            <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #8a939d;">{{s.label}}</div>
             <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 18px; font-weight: 600; letter-spacing: -.01em;">{{s.value}}</div>
           </div>
         </sc-for>
@@ -100,7 +100,7 @@
                 <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 13.5px; font-weight: 600; color: #3ddc97;">{{t.amount}}</div>
               </div>
               <div style="font-size: 12.5px; color: #98a1ab;">{{t.dates}}</div>
-              <div style="font-size: 11.5px; color: #6a737d;">{{t.meta}}</div>
+              <div style="font-size: 11.5px; color: #8a939d;">{{t.meta}}</div>
             </div>
           </div>
         </sc-for>
@@ -110,9 +110,9 @@
     <!-- COSTS -->
     <sc-if value="{{ui.costs}}" hint-placeholder-val="{{false}}">
       <div style="display: flex; flex-direction: column; gap: 6px; padding: 16px; background: #16191d; border: 1px solid #2a2f36; border-radius: 12px;">
-        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d;">Net · September to date</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d;">Net · September to date</div>
         <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 38px; font-weight: 600; letter-spacing: -.02em; line-height: 1.1; color: #3ddc97;">$1,040</div>
-        <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.4;">71% utilisation · $34.7 net per booked day · best of the four</div>
+        <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.4;">73% utilization · $95 net per booked day · best of the four</div>
       </div>
 
       <div style="display: flex; flex-direction: column; gap: 2px;">
@@ -121,7 +121,7 @@
             <div style="flex-grow: 1; display: flex; align-items: center; gap: 9px; min-width: 0;">
               <div style="{{l.dotStyle}}"></div>
               <div style="font-size: 14px; font-weight: 500; color: #dfe3e7;">{{l.label}}</div>
-              <div style="font-size: 11.5px; color: #4f575f;">{{l.note}}</div>
+              <div style="font-size: 11.5px; color: #8a939d;">{{l.note}}</div>
             </div>
             <div style="{{l.amountStyle}}">{{l.amount}}</div>
           </div>
@@ -129,8 +129,8 @@
       </div>
 
       <div style="display: flex; gap: 9px; align-items: flex-start; padding: 6px 2px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-        <div style="font-size: 11.5px; color: #4f575f; line-height: 1.5;">Tolls come from the EZPass matcher already in this repo — per-trip, per-plate, already reconciled. This is the number that tells you whether car five pays for itself.</div>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        <div style="font-size: 11.5px; color: #8a939d; line-height: 1.5;">Tolls arrive already matched per trip and per plate. This is the number that tells you whether car five pays for itself.</div>
       </div>
     </sc-if>
   </div>
@@ -141,7 +141,7 @@
 class Component extends DCLogic {
   constructor(props) {
     super(props);
-    this.state = { tab: 'status' };
+    this.state = { tab: 'status', onWay: false };
   }
 
   renderVals() {
@@ -151,7 +151,7 @@ class Component extends DCLogic {
       return {
         label: label,
         select: () => this.setState({ tab: key }),
-        style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; min-height: 40px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
+        style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
           (on ? '600' : '500') + '; color: ' + (on ? '#0d0f12' : '#98a1ab') + '; background: ' + (on ? '#f0f2f4' : 'transparent') + ';',
       };
     };
@@ -159,15 +159,24 @@ class Component extends DCLogic {
     const money = (v, color) =>
       "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 14px; font-weight: 600; letter-spacing: -.01em; flex-shrink: 0; color: " + color + ';';
 
+    const onWay = this.state.onWay;
+
     return {
       tabs: [mk('status', 'Status'), mk('trips', 'Trips'), mk('costs', 'Costs')],
+      moveCta: {
+        label: onWay ? 'On my way — clock paused' : 'Move now',
+        action: () => this.setState({ onWay: !onWay }),
+        style: 'margin-top: 4px; min-height: 46px; display: flex; align-items: center; justify-content: center; border-radius: 10px; font-size: 14.5px; font-weight: 600; background: ' +
+          (onWay ? '#22262b' : '#ff6259') + '; color: ' + (onWay ? '#ff6259' : '#0d0f12') +
+          '; border: 1px solid ' + (onWay ? '#4a2a29' : 'transparent') + ';',
+      },
       ui: { status: tab === 'status', trips: tab === 'trips', costs: tab === 'costs' },
 
       stats: [
         { label: 'Fuel', value: '5/8', sub: 'about 11 gal · fine for pickup', tone: 'plain' },
         { label: 'Odometer', value: '78,412', sub: 'oil change due in 1,588 mi', tone: 'plain' },
         { label: 'Battery', value: '12.4 V', sub: 'healthy · last start 10:28p', tone: 'plain' },
-        { label: 'Engine', value: 'No faults', sub: 'no codes since 4 Jun', tone: 'green' },
+        { label: 'Engine', value: 'No faults', sub: 'no codes since Jun 4', tone: 'green' },
       ].map((s) => ({
         label: s.label, value: s.value, sub: s.sub,
         valueStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 21px; font-weight: 600; letter-spacing: -.015em; color: " +
@@ -175,16 +184,16 @@ class Component extends DCLogic {
       })),
 
       tripStats: [
-        { label: 'Sep trips', value: '5' },
-        { label: 'Booked days', value: '21' },
-        { label: 'Utilisation', value: '71%' },
+        { label: 'Sep trips', value: '3' },
+        { label: 'Booked days', value: '11' },
+        { label: 'Utilization', value: '73%' },
       ],
 
       trips: [
         { guest: 'Marcus T.', dates: 'Today 2:00p → Thu 11:00a', amount: '$268', meta: 'Upcoming · check-out not started', tone: 'blue' },
-        { guest: 'Jordan P.', dates: 'Sep 8 → Sep 11', amount: '$402', meta: '3 days · 214 mi · $12.50 tolls · no damage', tone: 'green' },
-        { guest: 'Lena M.', dates: 'Sep 2 → Sep 4', amount: '$246', meta: '2 days · 96 mi · no tolls · no damage', tone: 'green' },
-        { guest: 'Chris O.', dates: 'Aug 28 → Sep 1', amount: '$508', meta: '4 days · 388 mi · $31.25 tolls · bumper scuff logged', tone: 'amber' },
+        { guest: 'Jordan P.', dates: 'Sep 8 → Sep 14', amount: '$820', meta: '6 days · 214 mi · $12.50 tolls · no damage', tone: 'green' },
+        { guest: 'Lena M.', dates: 'Sep 3 → Sep 6', amount: '$396', meta: '3 days · 96 mi · no tolls · no damage', tone: 'green' },
+        { guest: 'Chris O.', dates: 'Aug 28 → Sep 2', amount: '$624', meta: '5 days · 388 mi · $55.50 tolls · bumper scuff logged', tone: 'amber' },
       ].map((t) => ({
         guest: t.guest, dates: t.dates, amount: t.amount, meta: t.meta,
         barStyle: 'width: 3px; flex-shrink: 0; border-radius: 2px; background: ' +
@@ -192,10 +201,10 @@ class Component extends DCLogic {
       })),
 
       ledger: [
-        { label: 'Trip earnings', note: '5 trips', amount: '+$1,840', tone: 'green' },
-        { label: 'Fuel', note: '6 fills', amount: '−$212', tone: 'dim' },
-        { label: 'Tolls', note: 'rebilled to guests', amount: '−$68', tone: 'dim' },
-        { label: 'Cleaning', note: '5 turnarounds', amount: '−$90', tone: 'dim' },
+        { label: 'Trip earnings', note: '3 trips', amount: '+$1,840', tone: 'green' },
+        { label: 'Fuel', note: '5 fills', amount: '−$212', tone: 'dim' },
+        { label: 'Tolls', note: 'not yet rebilled', amount: '−$68', tone: 'dim' },
+        { label: 'Cleaning', note: '3 turnarounds', amount: '−$90', tone: 'dim' },
         { label: 'Parking tickets', note: 'none this month', amount: '$0', tone: 'green' },
         { label: 'Insurance + payment', note: 'fixed', amount: '−$430', tone: 'dim' },
       ].map((l) => ({

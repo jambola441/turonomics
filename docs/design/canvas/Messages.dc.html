@@ -27,7 +27,7 @@
   <div style="padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 13px; border-bottom: 1px solid #2a2f36;">
     <div style="display: flex; align-items: center; justify-content: space-between;">
       <div style="font-size: 26px; font-weight: 700; letter-spacing: -.02em;">Messages</div>
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #6a737d;">4 queued</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d;">4 queued</div>
     </div>
 
     <!-- Autonomy dial -->
@@ -45,7 +45,7 @@
 
     <!-- Queue -->
     <div style="padding: 16px 0 9px; display: flex; align-items: center; gap: 10px;">
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">Queue</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d; white-space: nowrap;">Queue</div>
       <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
     </div>
 
@@ -59,16 +59,16 @@
             </div>
             <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.35;">{{q.sub}}</div>
           </div>
-          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #6a737d; flex-shrink: 0; align-self: center;">{{q.when}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d; flex-shrink: 0; align-self: center;">{{q.when}}</div>
         </div>
       </sc-for>
     </div>
 
     <!-- Preview -->
     <div style="padding: 22px 0 9px; display: flex; align-items: center; gap: 10px;">
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #6a737d; white-space: nowrap;">Preview</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d; white-space: nowrap;">Preview</div>
       <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
-      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #4f575f; white-space: nowrap;">{{sel.template}}</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d; white-space: nowrap;">{{sel.template}}</div>
     </div>
 
     <div style="background: #16191d; border: 1px solid #2a2f36; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px;">
@@ -76,25 +76,25 @@
         <div style="width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; background: #2a3442; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #8ab4f0;">{{sel.initials}}</div>
         <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0;">
           <div style="font-size: 14.5px; font-weight: 600;">{{sel.guest}}</div>
-          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #6a737d;">{{sel.vehicle}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d;">{{sel.vehicle}}</div>
         </div>
       </div>
 
       <div style="font-size: 14.5px; line-height: 1.6; color: #dfe3e7;">
-        <sc-for list="{{sel.body}}" as="seg" hint-placeholder-count="6">
+        <sc-for list="{{sel.body}}" as="seg" hint-placeholder-count="17">
           <span style="{{seg.style}}">{{seg.text}}</span>
         </sc-for>
       </div>
 
       <div style="display: flex; align-items: center; gap: 7px; padding-top: 2px;">
         <div style="width: 11px; height: 3px; border-radius: 2px; background: #5aa2f5;"></div>
-        <div style="font-size: 11.5px; color: #6a737d;">{{sel.mergeNote}}</div>
+        <div style="font-size: 11.5px; color: #8a939d;">{{sel.mergeNote}}</div>
       </div>
     </div>
 
     <div style="display: flex; gap: 9px; align-items: flex-start; padding: 18px 2px 4px;">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#4f575f" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
-      <div style="font-size: 11.5px; color: #4f575f; line-height: 1.5;">Turo has had no public API since 2023, so nothing here posts on its own unless you switch this on. The value is the merge — live spot, fuel, lockbox code, and a return instruction that keeps the car off tomorrow&#39;s cleaning side.</div>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+      <div style="font-size: 11.5px; color: #8a939d; line-height: 1.5;">Nothing sends on its own unless you switch it on. The value is the merge — the live spot, the fuel level, the lockbox code, and a return instruction that keeps the car off tomorrow&#39;s cleaning side.</div>
     </div>
   </div>
 
@@ -134,8 +134,8 @@ class Component extends DCLogic {
           M('Dean St between Vanderbilt and Carlton, north side'), P(', outside no. '), M('482'),
           P('. Plate '), M('KDR8814'), P('. Tank is at '), M('5/8'),
           P(' — please bring it back at 5/8 or better. Keys are in the lockbox on the driver-side rear wheel, code '),
-          M('4417'), P('. When you return it, park on the '), M('south side of Dean'),
-          P(' if you can — that side isn’t cleaned until '), M('Monday'),
+          M('4417'), P('. When you bring it back Thursday, park on the '), M('north side of Dean'),
+          P(' if you can — that side isn’t cleaned again until '), M('Friday 8:00a'),
           P('. Anything at all, message me here.'),
         ],
       },
@@ -154,7 +154,7 @@ class Component extends DCLogic {
         title: 'Review request', template: 'review_request · T+2h',
         guest: 'Ana R.', initials: 'AR', vehicle: 'Corolla · White · JFT9217',
         sub: 'Corolla · White · after 9:15a check-in', when: '11:15a', urgency: 'green',
-        mergeNote: '3 fields merged live at send time',
+        mergeNote: '1 field merged live at send time',
         body: [
           P('Thanks for taking good care of the '), M('Corolla'), P(', Ana — smooth trip on both ends. '),
           P('If you have a minute, a review really helps a small local fleet like mine. '),
@@ -199,7 +199,7 @@ class Component extends DCLogic {
 
     const ctaLabel = mode === 'draft'
       ? (copied ? 'Copied — paste into Turo' : 'Copy message')
-      : mode === 'assisted' ? 'Open thread and fill' : 'Scheduled — sends at 1:00p';
+      : mode === 'assisted' ? 'Open thread and fill' : 'Scheduled — sends ' + sel.when;
 
     return {
       modes: modeDefs.map((m) => {
@@ -207,7 +207,7 @@ class Component extends DCLogic {
         return {
           label: m.label,
           select: () => this.setState({ mode: m.key, copied: false }),
-          style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; min-height: 40px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
+          style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
             (on ? '600' : '500') + '; color: ' + (on ? '#0d0f12' : '#98a1ab') +
             '; background: ' + (on ? this.colorFor(m.tone) : 'transparent') + ';',
         };

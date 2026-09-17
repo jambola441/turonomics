@@ -125,6 +125,40 @@ class User(Base):
 
 
 # ---------------------------------------------------------------------------
+# Provider credentials
+# ---------------------------------------------------------------------------
+
+
+class OAuthToken(Base):
+    """Stored provider tokens.
+
+    Bouncie rotates refresh tokens: each refresh returns a new one and
+    invalidates the old, and an unused refresh token eventually expires. So the
+    new pair is persisted before the access token is used, and a broken chain
+    recovers by re-exchanging the authorization code — which, unusually, never
+    expires.
+
+    Tokens are stored as plaintext. Acceptable for a single-operator deployment
+    on managed Postgres; worth revisiting before anyone else has database
+    access.
+    """
+
+    __tablename__ = "oauth_token"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    provider: Mapped[str] = mapped_column(String(40), unique=True)
+
+    access_token: Mapped[str] = mapped_column(Text)
+    refresh_token: Mapped[str | None] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    obtained_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    refresh_count: Mapped[int] = mapped_column(Integer, default=0)
+
+
+# ---------------------------------------------------------------------------
 # Fleet
 # ---------------------------------------------------------------------------
 

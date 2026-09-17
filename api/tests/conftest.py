@@ -84,6 +84,16 @@ def engine():
 
 @pytest.fixture
 def session(engine) -> Session:
+    """A clean database per test.
+
+    Code under test commits (token storage must survive a crash, so it cannot
+    be wrapped in a rollback-only transaction). So isolation comes from
+    truncating rather than from an outer transaction.
+    """
+    tables = ", ".join(f'"{t.name}"' for t in reversed(Base.metadata.sorted_tables))
+    with engine.begin() as conn:
+        conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
+
     maker = sessionmaker(bind=engine, expire_on_commit=False, future=True)
     s = maker()
     try:

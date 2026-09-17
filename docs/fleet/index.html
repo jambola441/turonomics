@@ -4,9 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0d0f12">
+<!-- The API is a separate service on a separate origin. Override for local
+     work with ?api=http://127.0.0.1:8000 -->
+<meta name="turonomics-api" content="https://turonomics.onrender.com">
 <title>Turonomics — Fleet</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<link rel="stylesheet" href="/vendor/leaflet.css">
+<link rel="stylesheet" href="vendor/leaflet.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   :root{
@@ -95,12 +98,22 @@
     <div id="sheet-body" class="empty">Loading fleet…</div>
   </div>
 
-<script src="/vendor/leaflet.js"></script>
+<script src="vendor/leaflet.js"></script>
 <script>
 (function () {
   "use strict";
 
   var COLORS = { red: "#ff6259", amber: "#f5a524", green: "#3ddc97", blue: "#5aa2f5", dim: "#8a939d" };
+
+  // The UI is a static site and the API is a separate service, so the base URL
+  // is configuration rather than an assumption. A ?api= override keeps local
+  // development from needing a rebuild or a proxy.
+  var API = (function () {
+    var override = new URLSearchParams(location.search).get("api");
+    if (override) return override.replace(/\/$/, "");
+    var meta = document.querySelector('meta[name="turonomics-api"]');
+    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
+  })();
   var map, markers = {}, fleet = null, selectedId = null;
 
   function initials(name) {
@@ -274,7 +287,7 @@
   }
 
   function load() {
-    fetch("/api/fleet", { headers: { Accept: "application/json" } })
+    fetch(API + "/api/fleet", { headers: { Accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -287,7 +300,7 @@
       .catch(function (e) {
         var el = document.getElementById("err");
         el.hidden = false;
-        el.textContent = "Could not load the fleet: " + e.message;
+        el.textContent = "Could not reach the API at " + (API || location.origin) + " — " + e.message;
       });
   }
 

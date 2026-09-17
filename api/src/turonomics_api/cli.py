@@ -18,6 +18,7 @@ from collections.abc import Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.bootstrap import run_bootstrap
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.base import session_scope
@@ -67,6 +68,11 @@ def cmd_vehicles(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_bootstrap(_args: argparse.Namespace) -> int:
+    run_bootstrap()
+    return cmd_vehicles(_args)
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     with session_scope() as session:
         result = sync_vehicles(session, BouncieClient(session), create_missing=args.create_missing)
@@ -105,6 +111,11 @@ def build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True)
 
     sub.add_parser("vehicles", help="list the fleet").set_defaults(func=cmd_vehicles)
+
+    sub.add_parser(
+        "bootstrap",
+        help="run the boot-time fleet setup by hand (honours BOOTSTRAP_FLEET)",
+    ).set_defaults(func=cmd_bootstrap)
 
     p_sync = sub.add_parser("sync", help="pull vehicle state from Bouncie")
     p_sync.add_argument("--create-missing", action="store_true",

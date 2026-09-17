@@ -6,7 +6,6 @@ import pytest
 
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
 
-
 # Minimal valid header row for convenience
 _HDR = "Lane Txn ID,Tag/Plate #,Agency,Entry Plaza,Exit Plaza,Class,Date,Exit Time,Amount\n"
 

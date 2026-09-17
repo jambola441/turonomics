@@ -154,6 +154,62 @@ clean-side block" step, and the ASP-safe return instruction merged into guest
 messages — filters by vehicle. Otherwise the app will confidently send the van
 to a spot it can't use.
 
+## D12 — Verified against the live Bouncie API (2026-09-17)
+
+Their OpenAPI spec is at `https://docs.bouncie.dev/openapi.json`. Facts that
+contradict what a reasonable guess would have produced:
+
+| | |
+|---|---|
+| Auth header | `Authorization: <access_token>` — **raw, not `Bearer`** |
+| Token exchange | `POST https://auth.bouncie.com/oauth/token`, JSON body |
+| Authorize | `https://auth.bouncie.com/dialog/authorize`, PKCE supported |
+| Auth code expiry | **None.** Only invalidated by re-authorizing |
+| Access token | 1 hour, with a refresh token |
+| API base | `https://api.bouncie.dev`, `GET /v1/vehicles`, `GET /v1/trips` |
+| Ignition events | **Do not exist.** Parked state derives from `tripEnd` |
+| Battery | `{"status": "normal"}` — a status string, not a voltage |
+| `stats.localTimeZone` | a UTC offset (`"-0400"`), not an IANA zone |
+
+Webhook events available: `deviceConnect`, `deviceDisconnect`, `battery`,
+`mil`, `vinChange`, `tripStart`, `tripData`, `tripMetrics`, `tripEnd`,
+`applicationGeozone`, `userGeozone`.
+
+The offset-not-zone detail matters: an offset cannot describe a DST
+transition, so street-cleaning deadlines are computed in `FLEET_TIMEZONE` and
+never from that field.
+
+### Vehicle capability discovery — the answer
+
+Both vehicles currently on the account report **true OBD fuel level and
+odometer**, so check-out auto-fills rather than asking for typing:
+
+| Vehicle | Fuel level | Odometer | Battery | MIL |
+|---|---|---|---|---|
+| Jolene — 2025 Toyota Corolla | yes | yes | normal | clear |
+| Jimmy — 2023 Toyota 4-Runner | yes | yes | normal | clear |
+
+**Only two of the four vehicles are on the Bouncie account.** The second
+Corolla and the Transit are absent — no device, not activated, or a separate
+account. Until that is resolved, half the fleet has no telemetry and therefore
+no automatic parking clock. This is the single biggest open item.
+
+### The side-of-street claim, measured
+
+The confirm-the-spot design (D4) rests on GPS being unable to resolve which
+side of a street a car is on. Measured against Jimmy's real reported fix at
+590 Bergen St, with curb lines 11 m apart:
+
+```
+distance to north curb   3.9 m
+distance to south curb   7.2 m
+gap                      3.3 m   ← smaller than the device's own error
+```
+
+A "nearest side wins" heuristic would be a coin flip. This is asserted in
+`api/tests/test_schema.py::test_side_of_street_is_genuinely_ambiguous`, so if
+the assumption ever stops holding, a test says so rather than a memo.
+
 ## Still mine to decide (flagging, not asking)
 
 - **Reading guest message threads.** Draft-only messaging (D5) only needs

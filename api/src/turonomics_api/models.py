@@ -1,4 +1,5 @@
 from datetime import datetime
+
 from pydantic import BaseModel, field_validator  # field_validator used by EZPassToll / TuroTrip
 
 

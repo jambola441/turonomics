@@ -7,7 +7,7 @@ Expected columns (case-insensitive):
 
 import csv
 import io
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from zoneinfo import ZoneInfo
 
 from turonomics_api.models import TuroTrip
@@ -54,7 +54,7 @@ def _parse_datetime(value: str) -> datetime:
         try:
             return (
                 datetime.strptime(value, fmt)
-                .replace(tzinfo=timezone.utc)
+                .replace(tzinfo=UTC)
                 .astimezone(_EASTERN)
                 .replace(tzinfo=None)
             )

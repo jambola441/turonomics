@@ -72,11 +72,11 @@ def match_tolls_to_trips(
             if not (trip.start <= toll.timestamp <= trip.end):
                 continue
 
-            # Direct plate match (toll carries a plate field)
-            if toll.license_plate and toll.license_plate == trip.license_plate:
-                candidates.append(trip)
-            # Transponder → plate alias match
-            elif trip.license_plate in aliased_plates:
+            # A toll matches this trip either because it carries the plate
+            # directly, or because its transponder is aliased to that plate.
+            direct_plate = bool(toll.license_plate) and toll.license_plate == trip.license_plate
+            via_alias = trip.license_plate in aliased_plates
+            if direct_plate or via_alias:
                 candidates.append(trip)
 
         if not candidates:

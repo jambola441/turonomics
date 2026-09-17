@@ -1,5 +1,11 @@
 from datetime import datetime
+
 from pydantic import BaseModel, field_validator  # field_validator used by EZPassToll / TuroTrip
+
+# Aliased: the validators below share these names, and the shared rule is the
+# one the registry also applies, so a hand-typed plate matches a parsed one.
+from turonomics_api.plates import normalize_optional_plate as _normalize_optional
+from turonomics_api.plates import normalize_plate as _normalize
 
 
 class TuroTrip(BaseModel):
@@ -11,7 +17,7 @@ class TuroTrip(BaseModel):
     @field_validator("license_plate")
     @classmethod
     def normalize_plate(cls, v: str) -> str:
-        return v.upper().replace(" ", "").replace("-", "")
+        return _normalize(v)
 
 
 class EZPassToll(BaseModel):
@@ -24,10 +30,7 @@ class EZPassToll(BaseModel):
     @field_validator("license_plate")
     @classmethod
     def normalize_plate(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        normalized = v.upper().replace(" ", "").replace("-", "")
-        return normalized or None
+        return _normalize_optional(v)
 
     @field_validator("transponder_id")
     @classmethod

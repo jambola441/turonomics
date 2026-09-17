@@ -105,3 +105,26 @@ class TestMatchErrorCases:
     ) -> None:
         resp = getattr(client, method)("/match")
         assert resp.status_code == 405
+
+
+def test_requirements_txt_matches_pyproject_dependencies() -> None:
+    """The Dockerfile installs from requirements.txt and then runs
+    `pip install --no-deps -e .`, so a dependency added to pyproject.toml but
+    not to requirements.txt is simply absent in production. Every test passes
+    locally and the container dies on import — so the drift is a test failure,
+    not a deploy failure.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    declared = set(tomllib.loads((root / "pyproject.toml").read_text())["project"]["dependencies"])
+    pinned = {
+        line.strip()
+        for line in (root / "requirements.txt").read_text().splitlines()
+        if line.strip() and not line.startswith("#")
+    }
+    assert declared == pinned, (
+        f"only in pyproject: {sorted(declared - pinned)}; "
+        f"only in requirements.txt: {sorted(pinned - declared)}"
+    )

@@ -1,0 +1,235 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; background: #0d0f12; }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+    .pin { cursor: pointer; }
+    .pin:hover { opacity: .85; }
+    .btn { cursor: pointer; transition: filter .12s ease; }
+    .btn:hover { filter: brightness(1.14); }
+    .chip { cursor: pointer; }
+  </style>
+</helmet>
+
+<div style="height: 844px; display: flex; flex-direction: column; background: #0d0f12; color: #f0f2f4; overflow: hidden; position: relative;">
+
+  <!-- Header -->
+  <div style="padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 12px; border-bottom: 1px solid #2a2f36;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 26px; font-weight: 700; letter-spacing: -.02em;">Fleet</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d;">Prospect Heights</div>
+    </div>
+    <div style="display: flex; gap: 14px;">
+      <sc-for list="{{legend}}" as="l" hint-placeholder-count="4">
+        <div style="display: flex; align-items: center; gap: 6px;">
+          <div style="{{l.dotStyle}}"></div>
+          <div style="font-size: 11.5px; color: #98a1ab;">{{l.label}}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div style="flex-grow: 1; position: relative; background: #101317; overflow: hidden;">
+    <svg viewBox="0 0 390 430" width="100%" height="100%" preserveAspectRatio="xMidYMid slice" style="display: block;">
+      <rect x="0" y="0" width="390" height="430" fill="#101317"></rect>
+
+      <!-- blocks -->
+      <g fill="#15191e">
+        <rect x="24" y="40" width="76" height="52" rx="2"></rect><rect x="118" y="40" width="76" height="52" rx="2"></rect>
+        <rect x="212" y="40" width="76" height="52" rx="2"></rect><rect x="306" y="40" width="76" height="52" rx="2"></rect>
+        <rect x="24" y="110" width="76" height="52" rx="2"></rect><rect x="118" y="110" width="76" height="52" rx="2"></rect>
+        <rect x="212" y="110" width="76" height="52" rx="2"></rect><rect x="306" y="110" width="76" height="52" rx="2"></rect>
+        <rect x="24" y="180" width="76" height="52" rx="2"></rect><rect x="118" y="180" width="76" height="52" rx="2"></rect>
+        <rect x="212" y="180" width="76" height="52" rx="2"></rect><rect x="306" y="180" width="76" height="52" rx="2"></rect>
+        <rect x="24" y="250" width="76" height="52" rx="2"></rect><rect x="118" y="250" width="76" height="52" rx="2"></rect>
+        <rect x="212" y="250" width="76" height="52" rx="2"></rect><rect x="306" y="250" width="76" height="52" rx="2"></rect>
+        <rect x="24" y="320" width="76" height="52" rx="2"></rect><rect x="118" y="320" width="76" height="52" rx="2"></rect>
+        <rect x="212" y="320" width="76" height="52" rx="2"></rect><rect x="306" y="320" width="76" height="52" rx="2"></rect>
+      </g>
+
+      <!-- arterial -->
+      <rect x="0" y="16" width="390" height="18" fill="#191d23"></rect>
+      <text x="10" y="29" font-family="IBM Plex Mono, monospace" font-size="9.5" fill="#7b848e" letter-spacing="1.2">ATLANTIC AVE</text>
+
+      <!-- street labels -->
+      <g font-family="IBM Plex Mono, monospace" font-size="9" fill="#7b848e" letter-spacing="0.9">
+        <text x="10" y="104">PACIFIC ST</text>
+        <text x="10" y="174">DEAN ST</text>
+        <text x="10" y="244">BERGEN ST</text>
+        <text x="10" y="314">ST MARKS AVE</text>
+        <text x="10" y="384">STERLING PL</text>
+      </g>
+      <g font-family="IBM Plex Mono, monospace" font-size="8.5" fill="#7b848e" letter-spacing="0.8" transform="rotate(-90)">
+        <text x="-424" y="115">VANDERBILT</text>
+        <text x="-424" y="209">CARLTON</text>
+        <text x="-424" y="303">UNDERHILL</text>
+      </g>
+
+      <!-- vehicle pins -->
+      <sc-for list="{{pins}}" as="p" hint-placeholder-count="4">
+        <g class="pin" onClick="{{p.select}}">
+          <circle cx="{{p.cx}}" cy="{{p.cy}}" r="24" fill="transparent"></circle>
+          <circle cx="{{p.cx}}" cy="{{p.cy}}" r="{{p.halo}}" fill="{{p.color}}" opacity="0.13"></circle>
+          <circle cx="{{p.cx}}" cy="{{p.cy}}" r="13" fill="#0d0f12" stroke="{{p.color}}" stroke-width="{{p.ring}}"></circle>
+          <text x="{{p.cx}}" y="{{p.ty}}" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="10.5" font-weight="600" fill="{{p.color}}">{{p.tag}}</text>
+        </g>
+      </sc-for>
+    </svg>
+  </div>
+
+  <!-- Bottom sheet -->
+  <div style="border-top: 1px solid #2a2f36; background: #16191d; padding: 14px 20px 18px; display: flex; flex-direction: column; gap: 13px;">
+    <div style="width: 34px; height: 3px; border-radius: 2px; background: #3a4048; align-self: center;"></div>
+
+    <div style="display: flex; gap: 7px;">
+      <sc-for list="{{chips}}" as="c" hint-placeholder-count="4">
+        <div class="chip" onClick="{{c.select}}" style="{{c.style}}">{{c.tag}}</div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; align-items: flex-start; gap: 12px;">
+      <div style="{{sel.badgeStyle}}">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{sel.color}}" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M5 17H3v-5l2.2-5.2A2 2 0 0 1 7 5.5h10a2 2 0 0 1 1.8 1.3L21 12v5h-2"></path><circle cx="7.5" cy="17" r="2"></circle><circle cx="16.5" cy="17" r="2"></circle></svg>
+      </div>
+      <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px; min-width: 0;">
+        <div style="display: flex; align-items: baseline; gap: 8px;">
+          <div style="font-size: 18px; font-weight: 600; letter-spacing: -.01em;">{{sel.name}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d;">{{sel.plate}}</div>
+        </div>
+        <div style="font-size: 13px; color: #98a1ab; line-height: 1.4;">{{sel.where}}</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 8px;">
+      <sc-for list="{{sel.stats}}" as="s" hint-placeholder-count="3">
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 4px; padding: 10px 11px; background: #1d2126; border: 1px solid #2a2f36; border-radius: 9px; min-width: 0;">
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .1em; text-transform: uppercase; color: #8a939d;">{{s.label}}</div>
+          <div style="{{s.valueStyle}}">{{s.value}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="{{sel.noteStyle}}">{{sel.note}}</div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { selected: 0 };
+  }
+
+  vehicles() {
+    return [
+      { tag: '4R', name: '4Runner', plate: 'KDR8814', urgency: 'red', cx: 150, cy: 168, moving: false,
+        where: 'Dean St @ Vanderbilt — north side · parked 9h 12m',
+        stats: [
+          { label: 'Must move', value: '18 min', tone: 'red' },
+          { label: 'Fuel', value: '5/8', tone: 'plain' },
+          { label: 'Next trip', value: '2:00p', tone: 'plain' },
+        ],
+        note: 'Street cleaning 8:00–9:30a. Ticket risk $65.', tone: 'red' },
+      { tag: 'CW', name: 'Corolla · White', plate: 'JFT9217', urgency: 'blue', cx: 300, cy: 62, moving: true,
+        where: 'On trip with Ana R. — Atlantic Ave at Washington, moving',
+        stats: [
+          { label: 'Returns', value: '9:15a', tone: 'plain' },
+          { label: 'Fuel', value: '3/8', tone: 'amber' },
+          { label: 'Trip mi', value: '212', tone: 'plain' },
+        ],
+        note: 'On trip — parking clock suppressed until return.', tone: 'blue' },
+      { tag: 'CS', name: 'Corolla · Silver', plate: 'JGL4460', urgency: 'blue', cx: 105, cy: 378, moving: true,
+        where: 'On trip with Dana W. — Sterling Pl at Underhill, just left',
+        stats: [
+          { label: 'Returns', value: 'Thu 10:00a', tone: 'plain' },
+          { label: 'Fuel', value: '7/8', tone: 'plain' },
+          { label: 'Trip mi', value: '3', tone: 'plain' },
+        ],
+        note: 'On trip since 7:10a — parking clock suppressed until return.', tone: 'blue' },
+      { tag: 'TR', name: 'Transit', plate: 'HZV3305', urgency: 'amber', cx: 252, cy: 100, moving: false,
+        where: 'Pacific St @ Underhill — north side · parked 1h 37m',
+        stats: [
+          { label: 'Must move', value: 'Thu 8a', tone: 'green' },
+          { label: 'Fuel', value: '1/8', tone: 'amber' },
+          { label: 'Next trip', value: '1:00p', tone: 'plain' },
+        ],
+        note: 'Refuel before 12:15p — 1/8 tank and a 1:00p pickup.', tone: 'amber' },
+    ];
+  }
+
+  colorFor(u) {
+    if (u === 'red') return '#ff6259';
+    if (u === 'amber') return '#f5a524';
+    if (u === 'blue') return '#5aa2f5';
+    return '#3ddc97';
+  }
+
+  renderVals() {
+    const vs = this.vehicles();
+    const i = this.state.selected;
+    const sel = vs[i];
+    const selColor = this.colorFor(sel.urgency);
+
+    const toneColor = (t) => {
+      if (t === 'plain') return '#f0f2f4';
+      return this.colorFor(t);
+    };
+
+    return {
+      legend: [
+        { label: 'Move soon', c: 'red' }, { label: 'Needs prep', c: 'amber' },
+        { label: 'On trip', c: 'blue' }, { label: 'Clear', c: 'green' },
+      ].map((l) => ({
+        label: l.label,
+        dotStyle: 'width: 7px; height: 7px; border-radius: 50%; background: ' + this.colorFor(l.c) + ';',
+      })),
+
+      pins: vs.map((v, idx) => ({
+        cx: v.cx, cy: v.cy, ty: v.cy + 4, tag: v.tag,
+        color: this.colorFor(v.urgency),
+        halo: idx === i ? 26 : 20,
+        ring: idx === i ? 3 : 1.8,
+        select: () => this.setState({ selected: idx }),
+      })),
+
+      chips: vs.map((v, idx) => {
+        const active = idx === i;
+        const c = this.colorFor(v.urgency);
+        return {
+          tag: v.tag,
+          select: () => this.setState({ selected: idx }),
+          style: 'flex-grow: 1; min-height: 44px; display: flex; align-items: center; justify-content: center; border-radius: 9px; font-family: ' +
+            "'IBM Plex Mono', ui-monospace, monospace; font-size: 13px; font-weight: 600; letter-spacing: .04em; color: " +
+            (active ? '#0d0f12' : c) + '; background: ' + (active ? c : '#1d2126') +
+            '; border: 1px solid ' + (active ? c : '#2a2f36') + ';',
+        };
+      }),
+
+      sel: {
+        name: sel.name, plate: sel.plate, where: sel.where, note: sel.note, color: selColor,
+        badgeStyle: 'width: 40px; height: 40px; flex-shrink: 0; border-radius: 10px; background: #1d2126; border: 1px solid ' +
+          selColor + '33; display: flex; align-items: center; justify-content: center;',
+        stats: sel.stats.map((s) => ({
+          label: s.label, value: s.value,
+          valueStyle: "font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 15px; font-weight: 600; letter-spacing: -.01em; color: " + toneColor(s.tone) + ';',
+        })),
+        noteStyle: 'font-size: 12.5px; line-height: 1.45; padding: 10px 12px; border-radius: 9px; color: ' + selColor +
+          '; background: ' + selColor + '14; border: 1px solid ' + selColor + '2e;',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

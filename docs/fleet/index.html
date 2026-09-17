@@ -1,0 +1,339 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0f12">
+<!-- The API is a separate service on a separate origin. Override for local
+     work with ?api=http://127.0.0.1:8000 -->
+<meta name="turonomics-api" content="https://turonomics.onrender.com">
+<title>Turonomics — Fleet</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="vendor/leaflet.css">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  :root{
+    --bg:#0d0f12; --surface:#16191d; --surface2:#1d2126; --border:#2a2f36; --border2:#3a4048;
+    --text:#f0f2f4; --muted:#98a1ab; --dim:#8a939d;
+    --red:#ff6259; --amber:#f5a524; --green:#3ddc97; --blue:#5aa2f5;
+    --mono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  html,body{height:100%}
+  body{
+    font-family:"Archivo","Helvetica Neue",Helvetica,sans-serif;
+    background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
+    display:flex; flex-direction:column; overflow:hidden;
+    padding-top:env(safe-area-inset-top,0px);
+  }
+  header{padding:14px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
+  .legend div{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  #map{flex:1;min-height:0;background:#101317}
+  .leaflet-container{background:#101317;font-family:inherit}
+  /* Leaflet's controls ship light and glare against a dark map. */
+  .leaflet-control-attribution{
+    background:rgba(13,15,18,.82)!important;color:var(--dim)!important;
+    font-size:10px;padding:2px 6px;backdrop-filter:blur(4px)}
+  .leaflet-control-attribution a{color:var(--muted)!important}
+  .leaflet-control-attribution svg{display:none}
+  .leaflet-bar a,.leaflet-touch .leaflet-bar a{
+    background:var(--surface)!important;color:var(--text)!important;
+    border-bottom-color:var(--border)!important;
+    width:36px!important;height:36px!important;line-height:36px!important}
+  .leaflet-bar a:hover,.leaflet-touch .leaflet-bar a:hover{background:var(--surface2)!important}
+  .leaflet-bar{border:1px solid var(--border)!important;box-shadow:none!important}
+  .pin{display:flex;align-items:center;justify-content:center;border-radius:50%;
+       background:var(--bg);font-family:var(--mono);font-size:12px;font-weight:600;
+       width:38px;height:38px;cursor:pointer;transition:transform .12s ease}
+  .pin:hover{transform:scale(1.08)}
+  .sheet{border-top:1px solid var(--border);background:var(--surface);
+         padding:12px 20px calc(16px + env(safe-area-inset-bottom,0px));
+         display:flex;flex-direction:column;gap:12px;flex-shrink:0;max-height:52vh;overflow-y:auto}
+  .grab{width:34px;height:3px;border-radius:2px;background:var(--border2);align-self:center;flex-shrink:0}
+  .chips{display:flex;gap:7px;flex-wrap:wrap}
+  .chip{flex:1 1 0;min-width:64px;min-height:44px;display:flex;align-items:center;justify-content:center;
+        border-radius:9px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.04em;
+        border:1px solid var(--border);background:var(--surface2);cursor:pointer}
+  .name{font-size:19px;font-weight:600;letter-spacing:-.01em}
+  .plate{font-family:var(--mono);font-size:11px;color:var(--dim);
+         background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 7px}
+  .where{font-size:13px;color:var(--muted);line-height:1.4}
+  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .stat{display:flex;flex-direction:column;gap:4px;padding:10px 11px;background:var(--surface2);
+        border:1px solid var(--border);border-radius:9px;min-width:0}
+  .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .stat .v{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em}
+  .note{font-size:12.5px;line-height:1.45;padding:10px 12px;border-radius:9px}
+  .muted{color:var(--muted)}
+  .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
+  .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
+       border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  @media(min-width:900px){.sheet{max-height:40vh}}
+</style>
+</head>
+<body>
+  <header>
+    <div class="row">
+      <h1>Fleet</h1>
+      <div class="stamp" id="stamp">loading…</div>
+    </div>
+    <div class="legend">
+      <div><span class="dot" style="background:var(--red)"></span>Move soon</div>
+      <div><span class="dot" style="background:var(--amber)"></span>Needs prep</div>
+      <div><span class="dot" style="background:var(--blue)"></span>On trip</div>
+      <div><span class="dot" style="background:var(--green)"></span>Clear</div>
+      <div><span class="dot" style="background:var(--dim)"></span>No tracker</div>
+    </div>
+  </header>
+
+  <div id="err" class="err" hidden></div>
+  <div id="map"></div>
+
+  <div class="sheet" id="sheet">
+    <div class="grab"></div>
+    <div id="sheet-body" class="empty">Loading fleet…</div>
+  </div>
+
+<script src="vendor/leaflet.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var COLORS = { red: "#ff6259", amber: "#f5a524", green: "#3ddc97", blue: "#5aa2f5", dim: "#8a939d" };
+
+  // The UI is a static site and the API is a separate service, so the base URL
+  // is configuration rather than an assumption. A ?api= override keeps local
+  // development from needing a rebuild or a proxy.
+  var API = (function () {
+    var override = new URLSearchParams(location.search).get("api");
+    if (override) return override.replace(/\/$/, "");
+    var meta = document.querySelector('meta[name="turonomics-api"]');
+    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
+  })();
+  var map, markers = {}, fleet = null, selectedId = null;
+
+  function initials(name) {
+    var parts = String(name || "?").trim().split(/[\s·—-]+/).filter(Boolean);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[1][0]).toUpperCase();
+  }
+
+  // Colour is driven by the soonest thing that could go wrong, so the map reads
+  // as a priority ordering rather than a set of statuses.
+  function tone(v) {
+    if (!v.has_tracker) return "dim";
+    if (v.on_trip_with) return "blue";
+    var due = v.parking && v.parking.must_move_by;
+    if (due) {
+      var hours = (new Date(due) - new Date()) / 3.6e6;
+      if (hours < 2) return "red";
+      if (hours < 12) return "amber";
+    }
+    if (v.fuel_percent != null && v.fuel_percent < 20) return "amber";
+    return "green";
+  }
+
+  function relative(iso) {
+    if (!iso) return "—";
+    var mins = Math.round((new Date() - new Date(iso)) / 6e4);
+    if (mins < 2) return "just now";
+    if (mins < 60) return mins + " min ago";
+    var hrs = Math.round(mins / 60);
+    if (hrs < 24) return hrs + "h ago";
+    return Math.round(hrs / 24) + "d ago";
+  }
+
+  function until(iso) {
+    if (!iso) return null;
+    var mins = Math.round((new Date(iso) - new Date()) / 6e4);
+    if (mins < 0) return "overdue";
+    if (mins < 60) return "in " + mins + " min";
+    var hrs = Math.floor(mins / 60);
+    if (hrs < 24) return "in " + hrs + "h " + (mins % 60) + "m";
+    return "in " + Math.round(hrs / 24) + "d";
+  }
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
+
+  function pinIcon(v) {
+    var c = COLORS[tone(v)];
+    var ring = v.id === selectedId ? 3 : 2;
+    return L.divIcon({
+      className: "",
+      html: '<div class="pin" style="border:' + ring + 'px solid ' + c + ';color:' + c + '">' +
+            esc(initials(v.nickname)) + "</div>",
+      iconSize: [38, 38], iconAnchor: [19, 19],
+    });
+  }
+
+  function render() {
+    if (!fleet) return;
+    document.getElementById("stamp").textContent =
+      fleet.vehicles.length + " vehicles" +
+      (fleet.untracked_count ? " · " + fleet.untracked_count + " untracked" : "");
+
+    var located = fleet.vehicles.filter(function (v) { return v.position; });
+
+    if (!map) { renderSheet(); return; }
+
+    Object.keys(markers).forEach(function (id) { map.removeLayer(markers[id]); });
+    markers = {};
+
+    located.forEach(function (v) {
+      var m = L.marker([v.position.lat, v.position.lon], { icon: pinIcon(v) }).addTo(map);
+      m.on("click", function () { selectedId = v.id; render(); });
+      markers[v.id] = m;
+    });
+
+    if (located.length && !map._fitted) {
+      map.fitBounds(located.map(function (v) { return [v.position.lat, v.position.lon]; }),
+                    { padding: [60, 60], maxZoom: 16 });
+      map._fitted = true;
+    }
+
+    renderSheet();
+  }
+
+  function renderSheet() {
+    var body = document.getElementById("sheet-body");
+    if (!fleet.vehicles.length) {
+      body.className = "empty";
+      body.innerHTML = "No vehicles yet.<br>Run <code>python -m turonomics_api.cli sync --create-missing</code>.";
+      return;
+    }
+    if (!selectedId) selectedId = fleet.vehicles[0].id;
+    var v = fleet.vehicles.filter(function (x) { return x.id === selectedId; })[0] || fleet.vehicles[0];
+    var c = COLORS[tone(v)];
+
+    var chips = fleet.vehicles.map(function (x) {
+      var xc = COLORS[tone(x)], on = x.id === v.id;
+      return '<div class="chip" data-id="' + x.id + '" style="color:' + (on ? "#0d0f12" : xc) +
+             ";background:" + (on ? xc : "var(--surface2)") + ";border-color:" + (on ? xc : "var(--border)") + '">' +
+             esc(initials(x.nickname)) + "</div>";
+    }).join("");
+
+    var where;
+    if (v.on_trip_with) {
+      where = "On trip with " + esc(v.on_trip_with) +
+              (v.trip_ends_at ? " · back " + new Date(v.trip_ends_at).toLocaleDateString(undefined,
+                { weekday: "short", hour: "numeric", minute: "2-digit" }) : "");
+    } else if (v.parking && v.parking.confirmed) {
+      where = esc(v.parking.street_name) + " — " + esc(v.parking.confirmed_side) + " side · parked " +
+              relative(v.parking.since);
+    } else if (v.parking) {
+      where = "Parked " + relative(v.parking.since) + " · side not confirmed";
+    } else if (v.position) {
+      where = "Last seen " + relative(v.position.reported_at);
+    } else {
+      where = v.has_tracker ? "No position reported yet" : "No tracker — location must be set by hand";
+    }
+
+    var moveBy = v.parking && v.parking.must_move_by;
+    var stats =
+      stat("Must move", moveBy ? until(moveBy) : (v.parking && !v.parking.confirmed ? "unknown" : "—"),
+           moveBy ? c : "var(--dim)") +
+      stat("Fuel", v.fuel_percent != null ? Math.round(v.fuel_percent) + "%" : "—",
+           v.fuel_percent != null && v.fuel_percent < 20 ? COLORS.amber : "var(--text)") +
+      stat("Odometer", v.odometer_miles != null ? Math.round(v.odometer_miles).toLocaleString() : "—",
+           "var(--text)");
+
+    var note = "";
+    if (v.on_trip_with) {
+      note = noteHtml(COLORS.blue, "On trip — parking clock suppressed until return.");
+    } else if (v.parking && !v.parking.confirmed) {
+      note = noteHtml(COLORS.amber,
+        "Which side of the street? GPS can't tell, and the two sides have different rules — " +
+        "so there's no deadline until you say." +
+        (v.parking.guess_confidence != null
+          ? " Best guess confidence " + Math.round(v.parking.guess_confidence * 100) + "%."
+          : ""));
+    } else if (!v.has_tracker) {
+      note = noteHtml(COLORS.dim, "No tracker on this vehicle yet, so nothing here updates on its own.");
+    }
+
+    body.className = "";
+    body.innerHTML =
+      '<div class="chips">' + chips + "</div>" +
+      '<div class="row" style="align-items:flex-start">' +
+        '<div style="display:flex;flex-direction:column;gap:4px;min-width:0">' +
+          '<div class="name">' + esc(v.nickname) + "</div>" +
+          '<div class="where">' + where + "</div>" +
+        "</div>" +
+        (v.plate ? '<div class="plate">' + esc(v.plate) + "</div>" : "") +
+      "</div>" +
+      '<div class="stats">' + stats + "</div>" + note;
+
+    Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
+      el.addEventListener("click", function () { selectedId = el.dataset.id; render(); });
+    });
+  }
+
+  function stat(k, val, colour) {
+    return '<div class="stat"><div class="k">' + esc(k) + '</div>' +
+           '<div class="v" style="color:' + colour + '">' + esc(val) + "</div></div>";
+  }
+
+  function noteHtml(colour, text) {
+    return '<div class="note" style="color:' + colour + ";background:" + colour +
+           "14;border:1px solid " + colour + '2e">' + esc(text) + "</div>";
+  }
+
+  function load() {
+    fetch(API + "/api/fleet", { headers: { Accept: "application/json" } })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (data) {
+        document.getElementById("err").hidden = true;
+        fleet = data;
+        render();
+      })
+      .catch(function (e) {
+        var el = document.getElementById("err");
+        el.hidden = false;
+        el.textContent = "Could not reach the API at " + (API || location.origin) + " — " + e.message;
+      });
+  }
+
+  // Data first. The fleet list must render whether or not the map library
+  // loaded, so a blocked script or a dead tile server costs you the map, not
+  // the answer to "where are my cars".
+  load();
+
+  try {
+    if (typeof L === "undefined") throw new Error("map library unavailable");
+    map = L.map("map", { zoomControl: false, attributionControl: true })
+           .setView([40.6795, -73.9705], 15);
+    L.control.zoom({ position: "bottomright" }).addTo(map);
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+      attribution: "&copy; OpenStreetMap &copy; CARTO",
+      subdomains: "abcd", maxZoom: 20,
+    }).addTo(map);
+  } catch (e) {
+    map = null;
+    var el = document.getElementById("map");
+    el.style.display = "flex";
+    el.style.alignItems = "center";
+    el.style.justifyContent = "center";
+    el.style.padding = "24px";
+    el.style.textAlign = "center";
+    el.style.color = "var(--dim)";
+    el.style.fontSize = "13px";
+    el.textContent = "Map unavailable offline — positions are listed below.";
+    if (fleet) render();
+  }
+  // Telemetry only changes when a car moves, so this is a gentle refresh, not a poll.
+  setInterval(load, 60000);
+})();
+</script>
+</body>
+</html>

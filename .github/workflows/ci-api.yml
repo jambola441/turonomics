@@ -16,6 +16,25 @@ jobs:
       run:
         working-directory: api
 
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: turonomics_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      # Without this the database-backed tests skip, which would quietly turn
+      # them into dead weight rather than a gate.
+      TEST_DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/turonomics_test
+
     steps:
       - uses: actions/checkout@v4
 
@@ -33,6 +52,14 @@ jobs:
 
       - name: Type check (mypy)
         run: mypy src/
+
+      - name: Migrations apply, and round-trip
+        env:
+          DATABASE_URL: postgresql+psycopg://postgres:postgres@127.0.0.1:5432/turonomics_test
+        run: |
+          alembic upgrade head
+          alembic downgrade base
+          alembic upgrade head
 
       - name: Tests
         run: pytest tests/ -v

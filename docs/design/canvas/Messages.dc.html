@@ -1,0 +1,259 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; background: #0d0f12; }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+    .row { cursor: pointer; transition: background .12s ease; }
+    .row:hover { background: #21262c !important; }
+    .btn { cursor: pointer; transition: filter .12s ease; }
+    .btn:hover { filter: brightness(1.13); }
+    .seg { cursor: pointer; }
+    .scroll::-webkit-scrollbar { width: 0; }
+  </style>
+</helmet>
+
+<div style="height: 844px; display: flex; flex-direction: column; background: #0d0f12; color: #f0f2f4; overflow: hidden;">
+
+  <!-- Header -->
+  <div style="padding: 18px 20px 14px; display: flex; flex-direction: column; gap: 13px; border-bottom: 1px solid #2a2f36;">
+    <div style="display: flex; align-items: center; justify-content: space-between;">
+      <div style="font-size: 26px; font-weight: 700; letter-spacing: -.02em;">Messages</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d;">4 queued</div>
+    </div>
+
+    <!-- Autonomy dial -->
+    <div style="display: flex; flex-direction: column; gap: 7px;">
+      <div style="display: flex; gap: 4px; background: #16191d; border: 1px solid #2a2f36; border-radius: 10px; padding: 4px;">
+        <sc-for list="{{modes}}" as="m" hint-placeholder-count="3">
+          <div class="seg" onClick="{{m.select}}" style="{{m.style}}">{{m.label}}</div>
+        </sc-for>
+      </div>
+      <div style="{{modeNote.style}}">{{modeNote.text}}</div>
+    </div>
+  </div>
+
+  <div class="scroll" style="flex: 1; overflow-y: auto; padding: 4px 20px 20px;">
+
+    <!-- Queue -->
+    <div style="padding: 16px 0 9px; display: flex; align-items: center; gap: 10px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d; white-space: nowrap;">Queue</div>
+      <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <sc-for list="{{queue}}" as="q" hint-placeholder-count="4">
+        <div class="row" onClick="{{q.select}}" style="{{q.style}}">
+          <div style="{{q.barStyle}}"></div>
+          <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+            <div style="display: flex; align-items: baseline; gap: 8px;">
+              <div style="{{q.titleStyle}}">{{q.title}}</div>
+            </div>
+            <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.35;">{{q.sub}}</div>
+          </div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; color: #8a939d; flex-shrink: 0; align-self: center;">{{q.when}}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <!-- Preview -->
+    <div style="padding: 22px 0 9px; display: flex; align-items: center; gap: 10px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d; white-space: nowrap;">Preview</div>
+      <div style="flex-grow: 1; height: 1px; background: #1d2126;"></div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d; white-space: nowrap;">{{sel.template}}</div>
+    </div>
+
+    <div style="background: #16191d; border: 1px solid #2a2f36; border-radius: 12px; padding: 16px; display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; align-items: center; gap: 10px; padding-bottom: 12px; border-bottom: 1px solid #22262b;">
+        <div style="width: 32px; height: 32px; flex-shrink: 0; border-radius: 50%; background: #2a3442; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 600; color: #8ab4f0;">{{sel.initials}}</div>
+        <div style="flex-grow: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0;">
+          <div style="font-size: 14.5px; font-weight: 600;">{{sel.guest}}</div>
+          <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11px; color: #8a939d;">{{sel.vehicle}}</div>
+        </div>
+      </div>
+
+      <div style="font-size: 14.5px; line-height: 1.6; color: #dfe3e7;">
+        <sc-for list="{{sel.body}}" as="seg" hint-placeholder-count="17">
+          <span style="{{seg.style}}">{{seg.text}}</span>
+        </sc-for>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 7px; padding-top: 2px;">
+        <div style="width: 11px; height: 3px; border-radius: 2px; background: #5aa2f5;"></div>
+        <div style="font-size: 11.5px; color: #8a939d;">{{sel.mergeNote}}</div>
+      </div>
+    </div>
+
+    <div style="display: flex; gap: 9px; align-items: flex-start; padding: 18px 2px 4px;">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+      <div style="font-size: 11.5px; color: #8a939d; line-height: 1.5;">Nothing sends on its own unless you switch it on. The value is the merge — the live spot, the fuel level, the lockbox code, and a return instruction that keeps the car off tomorrow&#39;s cleaning side.</div>
+    </div>
+  </div>
+
+  <!-- Footer -->
+  <div style="border-top: 1px solid #2a2f36; background: #16191d; padding: 14px 20px 18px; display: flex; gap: 9px;">
+    <div class="btn" onClick="{{cta.action}}" style="{{cta.style}}">
+      <sc-if value="{{cta.showIcon}}" hint-placeholder-val="{{true}}">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{cta.iconColor}}" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+      </sc-if>
+      <span>{{cta.label}}</span>
+    </div>
+    <div class="btn" style="width: 52px; min-height: 52px; display: flex; align-items: center; justify-content: center; border-radius: 11px; background: #22262b; border: 1px solid #3a4048; flex-shrink: 0;">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#98a1ab" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"></path></svg>
+    </div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":390,"height":844}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'draft', selected: 0, copied: false };
+  }
+
+  messages() {
+    const M = (text) => ({ text: text, merged: true });
+    const P = (text) => ({ text: text, merged: false });
+    return [
+      {
+        title: 'Pickup details', template: 'pickup_details · T-1h',
+        guest: 'Marcus T.', initials: 'MT', vehicle: '4Runner · KDR8814 · starts 2:00p',
+        sub: '4Runner · trip starts 2:00p', when: 'by 1:00p', urgency: 'blue',
+        mergeNote: '8 fields merged live at send time',
+        body: [
+          P('Hi Marcus — your '), M('4Runner'), P(' is parked on '),
+          M('Dean St between Vanderbilt and Carlton, north side'), P(', outside no. '), M('482'),
+          P('. Plate '), M('KDR8814'), P('. Tank is at '), M('5/8'),
+          P(' — please bring it back at 5/8 or better. Keys are in the lockbox on the driver-side rear wheel, code '),
+          M('4417'), P('. When you bring it back Thursday, park on the '), M('north side of Dean'),
+          P(' if you can — that side isn’t cleaned again until '), M('Friday 8:00a'),
+          P('. Anything at all, message me here.'),
+        ],
+      },
+      {
+        title: 'Return reminder', template: 'return_reminder · T-2h',
+        guest: 'Dana W.', initials: 'DW', vehicle: 'Corolla · Silver · JGL4460',
+        sub: 'Corolla · Silver · returns Thu 10:00a', when: 'Thu 8:00a', urgency: 'green',
+        mergeNote: '5 fields merged live at send time',
+        body: [
+          P('Morning Dana — reminder that the '), M('Corolla'), P(' is due back at '), M('10:00a today'),
+          P(' at '), M('Sterling Pl @ Underhill'), P('. Please park on the '), M('south side'),
+          P(' and leave the tank at '), M('7/8'), P(' or above. Keys back in the lockbox. Thanks!'),
+        ],
+      },
+      {
+        title: 'Review request', template: 'review_request · T+2h',
+        guest: 'Ana R.', initials: 'AR', vehicle: 'Corolla · White · JFT9217',
+        sub: 'Corolla · White · after 9:15a check-in', when: '11:15a', urgency: 'green',
+        mergeNote: '1 field merged live at send time',
+        body: [
+          P('Thanks for taking good care of the '), M('Corolla'), P(', Ana — smooth trip on both ends. '),
+          P('If you have a minute, a review really helps a small local fleet like mine. '),
+          P('You’re welcome back any time — just message me directly and I’ll hold a car for you.'),
+        ],
+      },
+      {
+        title: 'Mid-trip check', template: 'midtrip_check · day 2',
+        guest: 'Dana W.', initials: 'DW', vehicle: 'Corolla · Silver · JGL4460',
+        sub: 'Corolla · Silver · day 2 of 3', when: 'Wed 10:00a', urgency: 'green',
+        mergeNote: '2 fields merged live at send time',
+        body: [
+          P('Hi Dana — halfway through your trip with the '), M('Corolla'),
+          P('. Everything running well? If you want to extend past '), M('Thursday 10:00a'),
+          P(', let me know today and I’ll check the calendar before it books up.'),
+        ],
+      },
+    ];
+  }
+
+  colorFor(u) {
+    if (u === 'red') return '#ff6259';
+    if (u === 'amber') return '#f5a524';
+    if (u === 'blue') return '#5aa2f5';
+    return '#3ddc97';
+  }
+
+  renderVals() {
+    const mode = this.state.mode;
+    const msgs = this.messages();
+    const i = this.state.selected;
+    const sel = msgs[i];
+    const copied = this.state.copied;
+
+    const modeDefs = [
+      { key: 'draft', label: 'Draft', note: 'You copy and paste into Turo. Nothing touches your account.', tone: 'green' },
+      { key: 'assisted', label: 'Assisted', note: 'Extension opens the right thread and fills the box. You hit send.', tone: 'amber' },
+      { key: 'auto', label: 'Auto', note: 'Sends on schedule through your Turo session. Real account risk — opt in per template.', tone: 'red' },
+    ];
+    const active = modeDefs.filter((m) => m.key === mode)[0];
+    const noteColor = this.colorFor(active.tone);
+
+    const ctaLabel = mode === 'draft'
+      ? (copied ? 'Copied — paste into Turo' : 'Copy message')
+      : mode === 'assisted' ? 'Open thread and fill' : 'Scheduled — sends ' + sel.when;
+
+    return {
+      modes: modeDefs.map((m) => {
+        const on = m.key === mode;
+        return {
+          label: m.label,
+          select: () => this.setState({ mode: m.key, copied: false }),
+          style: 'flex-grow: 1; display: flex; align-items: center; justify-content: center; min-height: 44px; border-radius: 7px; font-size: 13.5px; font-weight: ' +
+            (on ? '600' : '500') + '; color: ' + (on ? '#0d0f12' : '#98a1ab') +
+            '; background: ' + (on ? this.colorFor(m.tone) : 'transparent') + ';',
+        };
+      }),
+      modeNote: {
+        text: active.note,
+        style: 'font-size: 12px; line-height: 1.45; color: ' + noteColor + '; padding-left: 2px;',
+      },
+
+      queue: msgs.map((m, idx) => {
+        const on = idx === i;
+        const c = this.colorFor(m.urgency);
+        return {
+          title: m.title, sub: m.sub, when: m.when,
+          select: () => this.setState({ selected: idx, copied: false }),
+          style: 'display: flex; gap: 12px; align-items: stretch; padding: 12px 13px; border-radius: 11px; background: ' +
+            (on ? '#1d2126' : '#16191d') + '; border: 1px solid ' + (on ? '#3a4048' : '#2a2f36') + ';',
+          barStyle: 'width: 3px; flex-shrink: 0; border-radius: 2px; background: ' + (on ? c : '#2a2f36') + ';',
+          titleStyle: 'font-size: 15px; font-weight: 600; letter-spacing: -.005em; color: ' + (on ? '#f0f2f4' : '#c8cdd3') + ';',
+        };
+      }),
+
+      sel: {
+        guest: sel.guest, initials: sel.initials, vehicle: sel.vehicle,
+        template: sel.template, mergeNote: sel.mergeNote,
+        body: sel.body.map((s) => ({
+          text: s.text,
+          style: s.merged
+            ? 'color: #9fc7fa; background: #16233a; border-bottom: 2px solid #5aa2f5; border-radius: 3px; padding: 1px 2px;'
+            : 'color: #dfe3e7;',
+        })),
+      },
+
+      cta: {
+        label: ctaLabel,
+        showIcon: mode === 'draft' && !copied,
+        iconColor: '#0d0f12',
+        action: () => { if (mode === 'draft') this.setState({ copied: !copied }); },
+        style: 'flex-grow: 1; min-height: 52px; display: flex; align-items: center; justify-content: center; gap: 9px; border-radius: 11px; font-size: 15.5px; font-weight: 600; background: ' +
+          (mode === 'auto' ? '#22262b' : (copied ? '#3ddc97' : '#f0f2f4')) +
+          '; color: ' + (mode === 'auto' ? '#98a1ab' : '#0d0f12') +
+          '; border: 1px solid ' + (mode === 'auto' ? '#3a4048' : 'transparent') + ';',
+      },
+    };
+  }
+}
+</script>
+</body>
+</html>

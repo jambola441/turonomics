@@ -1,0 +1,123 @@
+{
+  "pages": [
+    {
+      "id": "page-1",
+      "name": "Screens"
+    },
+    {
+      "id": "page-2",
+      "name": "System"
+    }
+  ],
+  "artboards": [
+    {
+      "file": "Main.dc.html",
+      "page": "page-1",
+      "x": 0,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "1 \u00b7 Today \u2014 run sheet",
+      "is_interactive": true
+    },
+    {
+      "file": "AspAlert.dc.html",
+      "page": "page-1",
+      "x": 480,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "2 \u00b7 Move alert \u2014 confirm the spot",
+      "is_interactive": true
+    },
+    {
+      "file": "FleetMap.dc.html",
+      "page": "page-1",
+      "x": 960,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "3 \u00b7 Fleet map",
+      "is_interactive": true
+    },
+    {
+      "file": "Vehicle.dc.html",
+      "page": "page-1",
+      "x": 1440,
+      "y": 0,
+      "w": 390,
+      "h": 844,
+      "title": "4 \u00b7 Vehicle detail",
+      "is_interactive": true
+    },
+    {
+      "file": "Turnaround.dc.html",
+      "page": "page-1",
+      "x": 0,
+      "y": 1000,
+      "w": 390,
+      "h": 844,
+      "title": "5 \u00b7 Turnaround checklist",
+      "is_interactive": true
+    },
+    {
+      "file": "Checkout.dc.html",
+      "page": "page-1",
+      "x": 480,
+      "y": 1000,
+      "w": 390,
+      "h": 844,
+      "title": "6 \u00b7 Check-out inspection",
+      "is_interactive": true
+    },
+    {
+      "file": "Messages.dc.html",
+      "page": "page-1",
+      "x": 960,
+      "y": 1000,
+      "w": 390,
+      "h": 844,
+      "title": "7 \u00b7 Guest messaging",
+      "is_interactive": true
+    },
+    {
+      "file": "Modules.dc.html",
+      "page": "page-2",
+      "x": 0,
+      "y": 0,
+      "w": 1180,
+      "h": 1240,
+      "title": "Module architecture"
+    }
+  ],
+  "annotations": [
+    {
+      "id": "note-1",
+      "page": "page-1",
+      "x": 1920,
+      "y": 0,
+      "w": 300,
+      "text": "The core flows are live, not pictures \u2014 filters, checklists, photo tiles, the side-of-street toggle and the messaging dial all work.\n\nStart at 1. The argument for the whole product is screen 2: flip to the other side of the street and watch an 18-minute emergency become a 2-day non-event. That gap is why the app asks instead of guessing."
+    },
+    {
+      "id": "note-2",
+      "page": "page-1",
+      "x": 1920,
+      "y": 300,
+      "w": 300,
+      "text": "Settled 15 Sep \u2014 full record in docs/design/01-decisions.md\n\n\u2022 Messaging: Draft only. Auto-send would ride the extension, so it only fires when the laptop is open.\n\u2022 Alerts: push only, with a \"last alert delivered\" heartbeat so silence is detectable. SMS behind a flag.\n\u2022 Turo data: extension when Chrome is up, plus Gmail ingestion 24/7. Extensions don't run on phones.\n\u2022 ASP: parse the citywide sign dataset, with capture-once as the fallback that ships first.\n\u2022 Render + Google sign-in. 15\u201325 cars in 12 months, so Task carries an owner from day one.\n\nStill open: does the Transit need its own parking rules?"
+    },
+    {
+      "id": "note-3",
+      "page": "page-2",
+      "x": 1240,
+      "y": 0,
+      "w": 300,
+      "text": "The layered read: adapters are replaceable and never load-bearing, modules only emit Tasks, and the run sheet consumes nothing but Tasks.\n\nThat is what lets \"car is out on a trip, so don't nag about street cleaning\" be one rule instead of four modules knowing about each other."
+    }
+  ],
+  "launch": {
+    "view": "canvas",
+    "page": "page-1"
+  }
+}

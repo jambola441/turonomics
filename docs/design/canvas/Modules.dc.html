@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&amp;family=IBM+Plex+Mono:wght@400;500;600&amp;display=swap">
+  <style>
+    body { margin: 0; font-family: "Archivo", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; background: #0d0f12; }
+    a { color: #5aa2f5; text-decoration: none; }
+    a:hover { color: #8cc0ff; }
+  </style>
+</helmet>
+
+<div style="width: 1180px; min-height: 1020px; background: #0d0f12; color: #f0f2f4; padding: 40px; display: flex; flex-direction: column; gap: 28px; box-sizing: border-box;">
+
+  <!-- Header -->
+  <div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 40px; padding-bottom: 22px; border-bottom: 1px solid #2a2f36;">
+    <div style="display: flex; flex-direction: column; gap: 10px; max-width: 720px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; letter-spacing: .16em; text-transform: uppercase; color: #8a939d;">Turonomics · module architecture</div>
+      <div style="font-size: 32px; font-weight: 700; letter-spacing: -.025em; line-height: 1.15;">Not a dashboard — a prioritized, geographically routed action queue.</div>
+      <div style="font-size: 14.5px; color: #98a1ab; line-height: 1.55;">Four independent streams accrue deadlines against one operator who can only be in one place at a time. Every module below exists to feed one queue; the dashboard is a by-product.</div>
+    </div>
+    <div style="display: flex; gap: 10px; flex-shrink: 0;">
+      <div style="display: flex; flex-direction: column; gap: 5px; padding: 13px 16px; background: #16191d; border: 1px solid #2a2f36; border-radius: 10px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .11em; text-transform: uppercase; color: #8a939d;">Fleet</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 600; letter-spacing: -.02em;">4</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 5px; padding: 13px 16px; background: #16191d; border: 1px solid #2a2f36; border-radius: 10px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 9.5px; letter-spacing: .11em; text-transform: uppercase; color: #8a939d;">Ticket</div>
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 22px; font-weight: 600; letter-spacing: -.02em; color: #ff6259;">$65</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Diagram -->
+  <svg viewBox="0 0 1100 470" width="100%" style="display: block;">
+    <defs>
+      <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+        <path d="M 0 0 L 10 5 L 0 10 z" fill="#3a4048"></path>
+      </marker>
+    </defs>
+
+    <!-- layer 1 -->
+    <text x="0" y="12" font-family="IBM Plex Mono, monospace" font-size="10" letter-spacing="1.6" fill="#8a939d">THE PRODUCT</text>
+    <rect x="0" y="24" width="800" height="66" rx="11" fill="#12211b" stroke="#2c5843" stroke-width="1.5"></rect>
+    <text x="22" y="52" font-family="Archivo, sans-serif" font-size="17" font-weight="600" fill="#3ddc97">Today · Run sheet</text>
+    <text x="22" y="74" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7fae96">every open obligation, ordered by deadline × location — the morning becomes a route, not a pile of alerts</text>
+
+    <rect x="830" y="24" width="270" height="66" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5" stroke-dasharray="5 4"></rect>
+    <text x="852" y="52" font-family="Archivo, sans-serif" font-size="17" font-weight="600" fill="#98a1ab">Money · per-car P&amp;L</text>
+    <text x="852" y="74" font-family="IBM Plex Mono, monospace" font-size="11.5" fill="#7b848e">answers &quot;does car five pay?&quot; · later</text>
+
+    <!-- layer 2 -->
+    <text x="0" y="128" font-family="IBM Plex Mono, monospace" font-size="10" letter-spacing="1.6" fill="#8a939d">MODULES — each one produces Tasks, none of them notify on their own</text>
+    <g>
+      <rect x="0" y="140" width="260" height="84" rx="11" fill="#16191d" stroke="#f5a524" stroke-width="1.5"></rect>
+      <text x="20" y="168" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Parking &amp; ASP</text>
+      <text x="20" y="189" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">GPS → segment + SIDE → must-move-by</text>
+      <text x="20" y="206" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">suspension calendar · confirm the guess</text>
+      <rect x="176" y="148" width="76" height="17" rx="4" fill="#3a2a10"></rect>
+      <text x="214" y="160" text-anchor="middle" font-family="IBM Plex Mono, monospace" font-size="9" font-weight="600" fill="#f5a524" letter-spacing="0.6">THE WEDGE</text>
+    </g>
+
+    <rect x="280" y="140" width="260" height="84" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5"></rect>
+    <text x="300" y="168" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Trips &amp; turnaround</text>
+    <text x="300" y="189" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">the gap between trip N and N+1</text>
+    <text x="300" y="206" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">checklist sized to the window</text>
+
+    <rect x="560" y="140" width="260" height="84" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5"></rect>
+    <text x="580" y="168" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Check-out / check-in</text>
+    <text x="580" y="189" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">timestamped, geotagged photo record</text>
+    <text x="580" y="206" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">this is what wins a damage claim</text>
+
+    <rect x="840" y="140" width="260" height="84" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5"></rect>
+    <text x="860" y="168" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Guest messaging</text>
+    <text x="860" y="189" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">templates merged with live fleet data</text>
+    <text x="860" y="206" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">draft → assisted → auto</text>
+
+    <!-- layer 3 -->
+    <text x="0" y="262" font-family="IBM Plex Mono, monospace" font-size="10" letter-spacing="1.6" fill="#8a939d">ADAPTERS — replaceable, best-effort, never load-bearing</text>
+    <rect x="0" y="274" width="540" height="72" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5"></rect>
+    <text x="20" y="302" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Location &amp; telemetry · Bouncie</text>
+    <text x="20" y="324" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">webhooks: ignition, GPS, geozone, fuel, odometer, battery, DTC → parked position</text>
+
+    <rect x="560" y="274" width="540" height="72" rx="11" fill="#16191d" stroke="#4a3a1e" stroke-width="1.5"></rect>
+    <text x="580" y="302" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Turo adapter · extension → email → manual</text>
+    <text x="580" y="324" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#f5a524">no public API since Apr 2023 — everything downstream must survive this being stale</text>
+
+    <!-- layer 4 -->
+    <text x="0" y="384" font-family="IBM Plex Mono, monospace" font-size="10" letter-spacing="1.6" fill="#8a939d">FOUNDATION</text>
+    <rect x="0" y="396" width="1100" height="62" rx="11" fill="#16191d" stroke="#2a2f36" stroke-width="1.5"></rect>
+    <text x="20" y="422" font-family="Archivo, sans-serif" font-size="15.5" font-weight="600" fill="#f0f2f4">Fleet registry</text>
+    <text x="20" y="443" font-family="IBM Plex Mono, monospace" font-size="10.5" fill="#98a1ab">vehicle · plate (joins tolls) · VIN (joins telemetry) · device IMEI · Turo listing · tank · registration · inspection</text>
+
+    <!-- arrows: foundation → adapters -->
+    <line x1="270" y1="396" x2="270" y2="352" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <line x1="830" y1="396" x2="830" y2="352" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <!-- adapters → modules -->
+    <line x1="130" y1="274" x2="130" y2="230" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <line x1="410" y1="274" x2="410" y2="230" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <line x1="690" y1="274" x2="690" y2="230" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <line x1="970" y1="274" x2="970" y2="230" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></line>
+    <!-- modules → run sheet -->
+    <path d="M 130 140 L 130 112 L 400 112 L 400 96" fill="none" stroke="#3a4048" stroke-width="1.4" marker-end="url(#ar)"></path>
+    <path d="M 410 140 L 410 112" fill="none" stroke="#3a4048" stroke-width="1.4"></path>
+    <path d="M 690 140 L 690 112 L 400 112" fill="none" stroke="#3a4048" stroke-width="1.4"></path>
+    <path d="M 970 140 L 970 112 L 400 112" fill="none" stroke="#3a4048" stroke-width="1.4"></path>
+
+    <!-- suppression note -->
+    <path d="M 970 182 L 1096 182" fill="none" stroke="#2a2f36" stroke-width="1" stroke-dasharray="3 3"></path>
+  </svg>
+
+  <!-- Panels -->
+  <div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px;">
+
+    <div style="display: flex; flex-direction: column; gap: 13px; padding: 20px; background: #16191d; border: 1px solid #2a2f36; border-radius: 12px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: #f5a524;">Three constraints that decide the design</div>
+      <div style="display: flex; flex-direction: column; gap: 12px;">
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="font-size: 14.5px; font-weight: 600;">Turo has no public API</div>
+          <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.5;">Shut off Apr 2023; CarSync and Fleetwire were blocked with it. The extension in this repo is the only viable adapter — so the core must work when it is stale or gone.</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="font-size: 14.5px; font-weight: 600;">Auto-send is an account risk</div>
+          <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.5;">Automating a platform account is what Turo moved against. Ship Draft; the value is the merge, not the keystroke. Auto stays opt-in, per template.</div>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 4px;">
+          <div style="font-size: 14.5px; font-weight: 600;">GPS can&#39;t resolve side of street</div>
+          <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.5;">ASP rules are side-specific; a Brooklyn street is ~11 m and consumer GPS errs 5–10 m. So: confirm the guess in one tap, cache the spot. A wrong-side alert that gets distrusted kills the feature.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 13px; padding: 20px; background: #16191d; border: 1px solid #2a2f36; border-radius: 12px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: #5aa2f5;">The one abstraction that holds it together</div>
+      <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.55;">Every module emits <strong style="color: #f0f2f4; font-weight: 600;">Task</strong>. The run sheet consumes nothing else. That keeps modules decoupled and lets cross-module rules live in one place.</div>
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 11.5px; line-height: 1.7; color: #9fc7fa; background: #101820; border: 1px solid #1e3040; border-radius: 9px; padding: 14px; white-space: pre-line;">Task {
+  vehicle
+  kind      asp_move | turnaround
+            trip_start | trip_end
+            message | maintenance
+  due_by
+  location
+  priority
+  state
+}</div>
+      <div style="font-size: 12.5px; color: #98a1ab; line-height: 1.5;">Why it earns its place: a car out on a guest trip must not generate a street-cleaning alert. That suppression is one rule over Tasks — not four modules each learning about the others.</div>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 13px; padding: 20px; background: #16191d; border: 1px solid #2a2f36; border-radius: 12px;">
+      <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10.5px; letter-spacing: .13em; text-transform: uppercase; color: #3ddc97;">Proposed MVP cut · 4 cars, one operator</div>
+      <div style="display: flex; flex-direction: column; gap: 7px;">
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #3ddc97; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #dfe3e7; line-height: 1.45;">Fleet registry · 4 vehicles</div></div>
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #3ddc97; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #dfe3e7; line-height: 1.45;">Bouncie webhooks → parked position, fuel, odometer</div></div>
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #f5a524; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #f0f2f4; font-weight: 600; line-height: 1.45;">ASP clock, confirm-the-spot, tiered alerts</div></div>
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #3ddc97; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #dfe3e7; line-height: 1.45;">Trip sync, with manual entry as an equal path</div></div>
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #3ddc97; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #dfe3e7; line-height: 1.45;">Turnaround checklist with conflict detection</div></div>
+        <div style="display: flex; gap: 10px; align-items: flex-start;"><div style="width: 6px; height: 6px; border-radius: 50%; background: #3ddc97; flex-shrink: 0; margin-top: 6px;"></div><div style="font-size: 13px; color: #dfe3e7; line-height: 1.45;">Today run sheet · message templates, Draft only</div></div>
+      </div>
+      <div style="height: 1px; background: #2a2f36; margin: 3px 0;"></div>
+      <div style="display: flex; flex-direction: column; gap: 6px;">
+        <div style="font-family: 'IBM Plex Mono', ui-monospace, monospace; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: #8a939d;">Deliberately out</div>
+        <div style="font-size: 12.5px; color: #8a939d; line-height: 1.5;">Auto-send · full P&amp;L · staff roles and shift handoff · route optimization (sort-by-proximity beats a solver at four cars) · native apps · dynamic pricing</div>
+      </div>
+      <div style="display: flex; flex-direction: column; gap: 6px; padding: 12px 13px; background: #12211b; border: 1px solid #2c5843; border-radius: 9px;">
+        <div style="font-size: 12.5px; color: #7fae96; line-height: 1.5;"><strong style="color: #3ddc97; font-weight: 600;">Build order:</strong> registry → telemetry → ASP. Then live on it for two weeks before building anything on top. Module 3 alone justifies the project.</div>
+      </div>
+    </div>
+  </div>
+
+  <div style="display: flex; gap: 11px; align-items: flex-start; padding-top: 4px;">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8a939d" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 2px;"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="11"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+    <div style="font-size: 12.5px; color: #8a939d; line-height: 1.55; max-width: 900px;">Stack extends what is already here: FastAPI, plus Postgres with PostGIS (the one genuinely new piece of infrastructure — segment-and-side geo queries need it), APScheduler for deadline computation, a mobile-first PWA, MapLibre, and web push with SMS fallback for the parking alerts.</div>
+  </div>
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{"$preview":{"width":1180,"height":1020}}'>
+class Component extends DCLogic {}
+</script>
+</body>
+</html>

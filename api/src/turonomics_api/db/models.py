@@ -47,7 +47,9 @@ from sqlalchemy import (
     func,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, validates
+
+from turonomics_api.plates import normalize_plate
 
 
 class Base(DeclarativeBase):
@@ -173,9 +175,16 @@ class Vehicle(Base):
     model: Mapped[str] = mapped_column(String(60))
     year: Mapped[int] = mapped_column(SmallInteger)
 
-    # Plate joins to the EZPass matcher, VIN joins to telemetry. Both normalised
-    # on write by the same rule the existing toll parser uses.
-    plate: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    # Plate joins to the EZPass matcher, VIN joins to telemetry. Normalised on
+    # write by the same rule the toll parser uses.
+    #
+    # Nullable on purpose: Bouncie does not know plates, so a vehicle seeded
+    # from a device has none until someone enters it. A placeholder string
+    # would be a plate-shaped value that silently matches nothing, which reads
+    # as "no tolls this month" rather than as missing data. Postgres permits
+    # several NULLs under a unique index, so more than one vehicle may be
+    # awaiting a plate.
+    plate: Mapped[str | None] = mapped_column(String(16), unique=True, index=True)
     vin: Mapped[str | None] = mapped_column(String(17), unique=True)
 
     bouncie_imei: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
@@ -203,6 +212,14 @@ class Vehicle(Base):
 
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    @validates("plate")
+    def _normalize_plate(self, _key: str, value: str | None) -> str | None:
+        # Same rule the toll matcher applies, so the join cannot miss because
+        # someone typed "LEH-9892" here and the CSV said "LEH9892".
+        if value is None:
+            return None
+        return normalize_plate(value) or None
 
     telemetry: Mapped[list[TelemetryEvent]] = relationship(back_populates="vehicle")
     parking_sessions: Mapped[list[ParkingSession]] = relationship(back_populates="vehicle")

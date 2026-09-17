@@ -79,9 +79,10 @@ def sync_vehicles(
                 make=model.get("make", "Unknown").title(),
                 model=model.get("name", "Unknown"),
                 year=int(model.get("year") or 0) or 1900,
-                # Plate is not something Bouncie knows; it has to be filled in
-                # before toll matching works, so it is marked rather than faked.
-                plate=f"UNSET-{(imei or 'x')[-6:]}",
+                # Bouncie does not know plates. Left unset rather than faked:
+                # a placeholder would be a plate-shaped value that matches no
+                # toll, which looks like "no tolls" instead of missing data.
+                plate=None,
                 vin=vin,
                 bouncie_imei=imei,
             )

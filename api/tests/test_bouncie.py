@@ -188,9 +188,10 @@ def test_sync_seeds_and_derives_capability_flags(session):
     sparse = session.scalar(select(Vehicle).where(Vehicle.bouncie_nickname == "Sparse"))
     assert (sparse.reports_fuel_level, sparse.reports_obd_odometer) == (False, False)
 
-    # Plate is not something Bouncie knows, and toll matching joins on it, so a
-    # seeded row must be obviously incomplete rather than plausibly wrong.
-    assert jolene.plate.startswith("UNSET-")
+    # Bouncie does not know plates, and toll matching joins on plate. A seeded
+    # row must be missing one rather than carry a plausible-looking fake, which
+    # would silently match no tolls and read as a quiet month.
+    assert jolene.plate is None
 
 
 def test_sync_is_idempotent_for_an_unmoved_vehicle(session):

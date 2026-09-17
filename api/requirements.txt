@@ -1,6 +1,15 @@
-# Runtime dependencies — keep in sync with pyproject.toml [project.dependencies]
-# Generate with: pip-compile pyproject.toml (or update manually)
+# Runtime dependencies — MUST stay in sync with pyproject.toml
+# [project.dependencies]. The Dockerfile installs from this file and then
+# runs `pip install --no-deps -e .`, so anything missing here is simply not
+# installed and the app fails at import time in production while passing
+# every test locally.
 fastapi>=0.111.0
 uvicorn[standard]>=0.30.0
 python-multipart>=0.0.9
 pydantic>=2.7.0
+pydantic-settings>=2.3.0
+sqlalchemy>=2.0.30
+geoalchemy2>=0.15.0
+alembic>=1.13.0
+psycopg[binary]>=3.2.0
+httpx>=0.27.0

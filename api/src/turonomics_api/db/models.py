@@ -420,6 +420,15 @@ class ParkingSession(Base):
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="parking_sessions")
 
+    # Two foreign keys point at the same table, so each relationship has to say
+    # which one it follows.
+    segment_side: Mapped[StreetSegmentSide | None] = relationship(
+        foreign_keys=[segment_side_id]
+    )
+    guessed_segment_side: Mapped[StreetSegmentSide | None] = relationship(
+        foreign_keys=[guessed_segment_side_id]
+    )
+
     __table_args__ = (
         Index("ix_parking_vehicle_active", "vehicle_id", "ended_at"),
         Index("ix_parking_location", "location", postgresql_using="gist"),

@@ -297,7 +297,12 @@ class StreetSegmentSide(Base):
 
     # The curb line, not the street centreline — a point snaps to the nearer of
     # the two sides, which is the whole difficulty.
-    geom = mapped_column(Geography("LINESTRING", srid=4326, spatial_index=False), nullable=True)
+    #
+    # GEOMETRY rather than LINESTRING because the source is sign positions, and
+    # signs sit on the curb: two or more on a block-side trace the curb, but 9%
+    # of block-sides carry a single sign and a point is the honest
+    # representation of those. Distance queries work against either.
+    geom = mapped_column(Geography("GEOMETRY", srid=4326, spatial_index=False), nullable=True)
 
     # NYC has no length-based cleaning rule, so van fit is a spot property, not
     # a rule property. Parking suggestions for the Transit filter on it.

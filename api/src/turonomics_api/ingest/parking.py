@@ -23,8 +23,13 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import ParkingSession, StreetSegmentSide, Vehicle
 
-# Beyond this a candidate is not the block the car is on, it is the next street.
-SEARCH_RADIUS_M = 30.0
+# Generous on purpose. Measured against real reported positions, a parked car
+# can sit 40 m from the nearest signed kerb: signs do not cover every block, and
+# a fix taken between tall buildings drifts. A tight radius returns "no
+# candidates", which reads as "no rules here" and therefore as "nothing due" —
+# the silent failure this design exists to avoid. Better to offer several
+# candidates with honest distances and let the operator pick.
+SEARCH_RADIUS_M = 75.0
 
 # Below this margin between the best and second-best candidate, the guess is
 # not meaningfully better than a coin flip. Kept as a named constant because it

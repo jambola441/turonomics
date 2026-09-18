@@ -137,6 +137,58 @@
     return "green";
   }
 
+  // Anything beyond this is treated as away rather than as part of the
+  // operating area. Generous enough to cover a neighbouring borough.
+  var LOCAL_RADIUS_KM = 25;
+
+  function distanceKm(a, b) {
+    var R = 6371, toRad = Math.PI / 180;
+    var dLat = (b.lat - a.lat) * toRad, dLon = (b.lon - a.lon) * toRad;
+    var lat1 = a.lat * toRad, lat2 = b.lat * toRad;
+    var h = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+    return 2 * R * Math.asin(Math.sqrt(h));
+  }
+
+  function median(xs) {
+    var s = xs.slice().sort(function (a, b) { return a - b; });
+    var m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+  }
+
+  // A vehicle is "home" when its parking spot has candidate street segments —
+  // that is, when we hold cleaning rules for where it sits. That is a better
+  // definition of the operating area than anything geometric: a midpoint
+  // between Brooklyn and upstate is a field in the Hudson Valley, and anchoring
+  // on it frames neither.
+  function isHome(v) {
+    return !!(v.position && v.parking && v.parking.options && v.parking.options.length);
+  }
+
+  function fleetCentre(located) {
+    var home = located.filter(isHome);
+    var basis = home.length ? home : located;
+    return {
+      lat: median(basis.map(function (v) { return v.position.lat; })),
+      lon: median(basis.map(function (v) { return v.position.lon; })),
+    };
+  }
+
+  function nearbyGroup(located) {
+    if (located.length < 2) return located;
+    var c = fleetCentre(located);
+    var near = located.filter(function (v) {
+      return distanceKm(c, v.position) <= LOCAL_RADIUS_KM;
+    });
+    return near.length ? near : located;
+  }
+
+  function awayKm(v, located) {
+    if (!v.position || located.length < 2) return null;
+    var d = distanceKm(fleetCentre(located), v.position);
+    return d > LOCAL_RADIUS_KM ? d : null;
+  }
+
   function relative(iso) {
     if (!iso) return "—";
     var mins = Math.round((new Date() - new Date(iso)) / 6e4);
@@ -194,8 +246,18 @@
     });
 
     if (located.length && !map._fitted) {
-      map.fitBounds(located.map(function (v) { return [v.position.lat, v.position.lon]; }),
-                    { padding: [60, 60], maxZoom: 16 });
+      // Frame the operating area, not every vehicle. A car out on a trip can be
+      // a hundred miles away, and fitting to it shrinks the four blocks that
+      // actually need managing down to a dot. Vehicles outside the cluster
+      // still get pins — they are just not allowed to set the view.
+      var near = nearbyGroup(located);
+      map.fitBounds(near.map(function (v) { return [v.position.lat, v.position.lon]; }), {
+        // Extra bottom padding: the sheet and the attribution bar overlap the
+        // map, and a pin behind them is a pin you cannot tap.
+        paddingTopLeft: [50, 50],
+        paddingBottomRight: [50, 130],
+        maxZoom: 16,
+      });
       map._fitted = true;
     }
 
@@ -228,17 +290,31 @@
     } else if (v.parking && v.parking.confirmed) {
       where = esc(v.parking.street_name) + " — " + esc(v.parking.confirmed_side) + " side · parked " +
               relative(v.parking.since);
-    } else if (v.parking) {
+    } else if (v.parking && v.parking.options && v.parking.options.length) {
       where = "Parked " + relative(v.parking.since) + " · side not confirmed";
+    } else if (v.parking) {
+      // Parked, but nowhere we hold rules for. Saying "side not confirmed"
+      // here would imply there is something to confirm.
+      var far = awayKm(v, fleet.vehicles.filter(function (x) { return x.position; }));
+      where = "Parked " + relative(v.parking.since) +
+              (far ? " · " + Math.round(far * 0.621) + " mi from your blocks" : " · no cleaning rules here");
     } else if (v.position) {
-      where = "Last seen " + relative(v.position.reported_at);
+      var km = awayKm(v, fleet.vehicles.filter(function (x) { return x.position; }));
+      where = km
+        ? Math.round(km * 0.621) + " mi from your blocks · last seen " + relative(v.position.reported_at)
+        : "Last seen " + relative(v.position.reported_at);
     } else {
       where = v.has_tracker ? "No position reported yet" : "No tracker — location must be set by hand";
     }
 
     var moveBy = v.parking && v.parking.must_move_by;
     var stats =
-      stat("Must move", moveBy ? until(moveBy) : (v.parking && !v.parking.confirmed ? "unknown" : "—"),
+      // "unknown" only where there is something to find out. A car parked
+      // outside the rule coverage has no deadline to be uncertain about.
+      stat("Must move",
+           moveBy ? until(moveBy)
+                  : (v.parking && !v.parking.confirmed && v.parking.options &&
+                     v.parking.options.length ? "unknown" : "—"),
            moveBy ? c : "var(--dim)") +
       stat("Fuel", v.fuel_percent != null ? Math.round(v.fuel_percent) + "%" : "—",
            v.fuel_percent != null && v.fuel_percent < 20 ? COLORS.amber : "var(--text)") +
@@ -248,13 +324,18 @@
     var note = "";
     if (v.on_trip_with) {
       note = noteHtml(COLORS.blue, "On trip — parking clock suppressed until return.");
-    } else if (v.parking && !v.parking.confirmed) {
+    } else if (v.parking && !v.parking.confirmed &&
+               v.parking.options && v.parking.options.length) {
       note = noteHtml(COLORS.amber,
         "Which side of the street? GPS can't tell, and the two sides have different rules — " +
         "so there's no deadline until you say." +
         (v.parking.guess_confidence != null
           ? " Best guess confidence " + Math.round(v.parking.guess_confidence * 100) + "%."
           : ""));
+    } else if (v.parking && !v.parking.confirmed) {
+      note = noteHtml(COLORS.dim,
+        "No street-cleaning rules loaded for where this car is, so there is no parking " +
+        "clock for it. Nothing to confirm.");
     } else if (!v.has_tracker) {
       note = noteHtml(COLORS.dim, "No tracker on this vehicle yet, so nothing here updates on its own.");
     }

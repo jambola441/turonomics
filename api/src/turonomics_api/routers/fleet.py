@@ -25,7 +25,7 @@ from turonomics_api.db.models import (
     TelemetryEvent,
     Vehicle,
 )
-from turonomics_api.ingest.parking import confirm_side, resolve_side
+from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
 
 router = APIRouter(prefix="/api", tags=["fleet"])
@@ -139,9 +139,21 @@ def _parking_state(session: Session, vehicle: Vehicle) -> ParkingState | None:
             StreetSegmentSide.geom,
             func.ST_GeogFromText(f"SRID=4326;POINT({pos[1]} {pos[0]})"),
         ).label("distance_m")
+        # Bounded by the same radius the guess uses. Without it, a vehicle far
+        # from any signed block is offered the nearest segments anywhere in the
+        # dataset — a car upstate gets handed Brooklyn kerbs to confirm, and
+        # confirming one would produce a deadline for a street it is nowhere
+        # near.
         nearby = session.execute(
             select(StreetSegmentSide, distance)
             .where(StreetSegmentSide.geom.is_not(None))
+            .where(
+                func.ST_DWithin(
+                    StreetSegmentSide.geom,
+                    func.ST_GeogFromText(f"SRID=4326;POINT({pos[1]} {pos[0]})"),
+                    SEARCH_RADIUS_M,
+                )
+            )
             .order_by(distance)
             .limit(4)
         ).all()

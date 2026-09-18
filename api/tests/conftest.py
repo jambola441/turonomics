@@ -101,3 +101,21 @@ def session(engine) -> Session:
     finally:
         s.rollback()
         s.close()
+
+
+@pytest.fixture()
+def api_client(session):
+    """A TestClient whose endpoints use the test database.
+
+    ``get_session`` builds its engine at import time from ``DATABASE_URL``,
+    which in a test run points at nothing — so without this override any test
+    of a database-backed endpoint fails on connection rather than on the
+    behaviour it meant to check.
+    """
+    from turonomics_api.db.base import get_session
+
+    app.dependency_overrides[get_session] = lambda: session
+    try:
+        yield TestClient(app)
+    finally:
+        app.dependency_overrides.pop(get_session, None)

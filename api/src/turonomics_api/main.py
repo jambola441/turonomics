@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from turonomics_api.bouncie.sync import SyncResult
 from turonomics_api.db.base import session_scope
 from turonomics_api.ingest.poller import interval_minutes, poll_once, summarize
-from turonomics_api.routers import fleet, match, sync
+from turonomics_api.routers import fleet, gmail, match, sync
 
 # Uvicorn configures its own loggers and leaves everything else to the root
 # logger, which has no handler — so anything this package logs below WARNING
@@ -97,6 +97,7 @@ app.add_middleware(
 app.include_router(match.router)
 app.include_router(fleet.router)
 app.include_router(sync.router)
+app.include_router(gmail.router)
 
 
 @app.get("/health")

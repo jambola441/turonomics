@@ -12,12 +12,14 @@ nothing identifying gets committed to the repository.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from collections.abc import Sequence
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.asp.ingest import ZIP_11238_BBOX, fetch_signs, load_signs
 from turonomics_api.bootstrap import run_bootstrap
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.bouncie.sync import sync_vehicles
@@ -60,11 +62,33 @@ def cmd_vehicles(_args: argparse.Namespace) -> int:
                 untracked += 1
             plate = v.plate or "(none yet — tolls will not match)"
             print(f"  {v.nickname:10} {v.year} {v.make} {v.model:12} plate={plate}")
-            print(f"  {'':10} tracker={tracker}  fuel={v.reports_fuel_level}  odo={v.reports_obd_odometer}"
-                  f"  large-spot={v.needs_large_spot}")
+            print(
+                f"  {'':10} tracker={tracker}  fuel={v.reports_fuel_level}  odo={v.reports_obd_odometer}"
+                f"  large-spot={v.needs_large_spot}"
+            )
             if latest:
-                print(f"  {'':10} last seen {latest.occurred_at:%Y-%m-%d %H:%M} ({latest.event_type})")
+                print(
+                    f"  {'':10} last seen {latest.occurred_at:%Y-%m-%d %H:%M} ({latest.event_type})"
+                )
         print(f"\n{len(rows)} vehicles · {untracked} untracked")
+    return 0
+
+
+def cmd_load_signs(args: argparse.Namespace) -> int:
+    if args.bbox:
+        parts = [int(v) for v in args.bbox.split(",")]
+        if len(parts) != 4:
+            raise SystemExit("--bbox needs exactly four numbers: x0,y0,x1,y1")
+        bbox = (parts[0], parts[1], parts[2], parts[3])
+    else:
+        bbox = ZIP_11238_BBOX
+    print(f"fetching current street-cleaning signs in {bbox} ...")
+    rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
+    with session_scope() as session:
+        report = load_signs(session, rows)
+        print(report.summary())
+        for reason, n in report.unparsed_reasons.most_common():
+            print(f"  unparsed: {n} x {reason}")
     return 0
 
 
@@ -102,7 +126,9 @@ def cmd_set(args: argparse.Namespace) -> int:
         if args.large_spot is not None:
             vehicle.needs_large_spot = args.large_spot
         session.flush()
-        print(f"{vehicle.nickname}: nickname={vehicle.nickname} large-spot={vehicle.needs_large_spot}")
+        print(
+            f"{vehicle.nickname}: nickname={vehicle.nickname} large-spot={vehicle.needs_large_spot}"
+        )
     return 0
 
 
@@ -118,9 +144,22 @@ def build_parser() -> argparse.ArgumentParser:
     ).set_defaults(func=cmd_bootstrap)
 
     p_sync = sub.add_parser("sync", help="pull vehicle state from Bouncie")
-    p_sync.add_argument("--create-missing", action="store_true",
-                        help="add a fleet vehicle for each device not already registered")
+    p_sync.add_argument(
+        "--create-missing",
+        action="store_true",
+        help="add a fleet vehicle for each device not already registered",
+    )
     p_sync.set_defaults(func=cmd_sync)
+
+    p_signs = sub.add_parser(
+        "load-signs",
+        help="load NYC street-cleaning signs into segment sides and rules",
+    )
+    p_signs.add_argument(
+        "--bbox",
+        help="state plane (EPSG:2263) x0,y0,x1,y1; defaults to zip 11238 and its surroundings",
+    )
+    p_signs.set_defaults(func=cmd_load_signs)
 
     p_plate = sub.add_parser("set-plate", help="set a vehicle's licence plate")
     p_plate.add_argument("vehicle", help="nickname or current plate")
@@ -130,8 +169,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_set = sub.add_parser("set", help="edit vehicle attributes")
     p_set.add_argument("vehicle")
     p_set.add_argument("--nickname")
-    p_set.add_argument("--large-spot", dest="large_spot", action=argparse.BooleanOptionalAction,
-                       help="vehicle does not fit every on-street spot")
+    p_set.add_argument(
+        "--large-spot",
+        dest="large_spot",
+        action=argparse.BooleanOptionalAction,
+        help="vehicle does not fit every on-street spot",
+    )
     p_set.set_defaults(func=cmd_set)
 
     return parser

@@ -250,6 +250,12 @@ class TelemetryEvent(Base):
     heading_deg: Mapped[float | None] = mapped_column(Float)
     speed_mph: Mapped[float | None] = mapped_column(Float)
 
+    # Bouncie reports engine state directly, so "parked" does not have to be
+    # inferred from consecutive stationary fixes or waited for as a tripEnd
+    # webhook. None means the provider did not say, which is not the same as
+    # stopped.
+    is_running: Mapped[bool | None] = mapped_column(Boolean)
+
     fuel_percent: Mapped[float | None] = mapped_column(Float)
     odometer_miles: Mapped[float | None] = mapped_column(Float)
     # Bouncie reports battery as a status string ("normal"), not a voltage,
@@ -297,7 +303,12 @@ class StreetSegmentSide(Base):
 
     # The curb line, not the street centreline — a point snaps to the nearer of
     # the two sides, which is the whole difficulty.
-    geom = mapped_column(Geography("LINESTRING", srid=4326, spatial_index=False), nullable=True)
+    #
+    # GEOMETRY rather than LINESTRING because the source is sign positions, and
+    # signs sit on the curb: two or more on a block-side trace the curb, but 9%
+    # of block-sides carry a single sign and a point is the honest
+    # representation of those. Distance queries work against either.
+    geom = mapped_column(Geography("GEOMETRY", srid=4326, spatial_index=False), nullable=True)
 
     # NYC has no length-based cleaning rule, so van fit is a spot property, not
     # a rule property. Parking suggestions for the Transit filter on it.
@@ -407,12 +418,14 @@ class ParkingSession(Base):
     guessed_segment_side_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("street_segment_side.id", ondelete="SET NULL")
     )
-    guess_confidence: Mapped[float | None] = mapped_column(Float)
 
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
     # True when the operator corrected the guess — the signal worth learning from.
     was_corrected: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True when the guess came from what was confirmed here before rather
+    # than from distance. Recorded so the two can be scored separately.
+    guess_from_memory: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Cached so the run sheet doesn't recompute rules per render. Recomputed
     # when the rule, the suspension calendar or the confirmed side changes.

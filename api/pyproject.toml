@@ -14,7 +14,10 @@ dependencies = [
     "pydantic>=2.7.0",
     "pydantic-settings>=2.3.0",
     "sqlalchemy>=2.0.30",
-    "geoalchemy2>=0.15.0",
+    # [shapely] is not optional in practice: writing back a geometry that has
+    # been read from the database needs it, which only shows up once a value
+    # has round-tripped — i.e. in production, not in a fresh-object test.
+    "geoalchemy2[shapely]>=0.15.0",
     "alembic>=1.13.0",
     "psycopg[binary]>=3.2.0",
     "httpx>=0.27.0",

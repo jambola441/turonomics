@@ -183,7 +183,6 @@ def test_parking_session_records_the_correction(session):
         location=_point(JIMMY_LON, JIMMY_LAT),
         started_at=datetime(2026, 9, 16, 22, 30, tzinfo=UTC),
         guessed_segment_side_id=guess.id,
-        guess_confidence=0.55,
         segment_side_id=truth.id,
         confirmed_at=datetime(2026, 9, 16, 22, 31, tzinfo=UTC),
         was_corrected=True,

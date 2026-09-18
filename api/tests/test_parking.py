@@ -104,22 +104,24 @@ def test_the_guess_is_reported_as_ambiguous_for_a_real_fix(session, bergen):
     would pick one, and be wrong about half the time."""
     guess = resolve_side(session, lat=JIMMY_LAT, lon=JIMMY_LON)
     assert guess.segment_side is not None
-    assert guess.is_ambiguous is True
-    assert guess.confidence < 0.5
+    # Both kerbs within a car length, and the gap between them smaller than the
+    # device's own error — so the guess is not meaningfully better than a coin
+    # flip, whatever arithmetic is applied to it.
+    assert guess.distance_m < 12 and guess.runner_up_m < 12
+    assert abs(guess.runner_up_m - guess.distance_m) < 7.0
 
 
 def test_an_unambiguous_fix_gets_a_high_confidence(session, bergen):
     """Parked hard against one curb with the other side far off."""
     guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9702)
     assert guess.segment_side.side is StreetSide.north
-    assert guess.is_ambiguous is False
-    assert guess.confidence > 0.7
+    assert guess.runner_up_m - guess.distance_m > 7.0
 
 
 def test_nothing_in_range_is_not_a_guess(session, bergen):
     guess = resolve_side(session, lat=FAR_LAT, lon=-73.9702)
     assert guess.segment_side is None
-    assert guess.confidence == 0.0
+    assert guess.distance_m is None
 
 
 def test_a_van_is_not_offered_a_spot_it_does_not_fit(session, bergen):
@@ -329,3 +331,83 @@ def test_the_obligation_returns_when_the_trip_ends(session, bergen, jimmy):
     task = refresh_move_task(session, vehicle=jimmy, now=later)
     assert task.state is TaskState.open
     assert task.suppressed_reason is None
+
+
+def test_a_task_can_be_built_from_a_parking_session_read_back_from_the_database(
+    session, bergen, jimmy
+):
+    """Regression: Task.location copies the parking session's geometry, and a
+    value that has round-tripped through the database comes back as WKB rather
+    than as the string it went in as. Writing that back needs Shapely.
+
+    Every other test in this file builds the session in memory and hands the
+    geometry over as a string, so the round trip never happened and the failure
+    only appeared against real data.
+    """
+    north, _ = bergen
+    _rule(session, north, (1, 4), time(11, 30), time(13, 0))
+    at = datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=JIMMY_LAT, lon=JIMMY_LON, at=at)
+    confirm_side(session, parking_session=ps, segment_side=north, confirmed_at=at)
+    session.commit()
+
+    # Force the geometry to come back from Postgres rather than from identity map.
+    session.expire_all()
+    reloaded = session.get(Vehicle, jimmy.id)
+
+    task = refresh_move_task(session, vehicle=reloaded, now=at)
+    session.commit()
+    assert task is not None
+    assert task.due_by is not None
+    assert task.location is not None
+
+
+def test_what_was_confirmed_here_before_beats_the_nearest_kerb(session, bergen, jimmy):
+    """The operator puts the real-world hit rate of a distance-based guess at
+    about 60/40 — the kerbs are ~10 m apart and the device's error is
+    comparable. Someone who stood on the street and answered is better evidence
+    than a 1 m difference in distance, so a past confirmation at this spot wins.
+    """
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+
+    # A position the geometry reads as north, confirmed by hand as south.
+    first = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    assert session.get(StreetSegmentSide, first.guessed_segment_side_id).side is StreetSide.north
+    confirm_side(session, parking_session=first, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    # Parking in the same place again should now default to what was answered.
+    guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9702)
+    assert guess.segment_side.side is StreetSide.south
+    assert guess.remembered is True
+    assert guess.times_confirmed == 1
+
+
+def test_memory_does_not_reach_across_to_a_different_block(session, bergen, jimmy):
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    confirm_side(session, parking_session=ps, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    # Far enough away to be a different spot entirely.
+    guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9660)
+    assert guess.remembered is False
+
+
+def test_a_guess_from_memory_is_recorded_as_such(session, bergen, jimmy):
+    """Stored so the two kinds of guess can be scored separately later."""
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    assert ps.guess_from_memory is False
+    confirm_side(session, parking_session=ps, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    again = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702,
+                                 at=at + timedelta(hours=2))
+    assert again.guess_from_memory is True

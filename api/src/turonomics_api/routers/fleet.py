@@ -25,8 +25,9 @@ from turonomics_api.db.models import (
     TelemetryEvent,
     Vehicle,
 )
-from turonomics_api.ingest.parking import confirm_side, resolve_side
+from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
+from turonomics_api.settings import fleet_timezone
 
 router = APIRouter(prefix="/api", tags=["fleet"])
 
@@ -48,6 +49,8 @@ class SideOption(BaseModel):
     side: str
     distance_m: float | None = None
     is_guess: bool = False
+    # True when this option is what was confirmed at this spot before.
+    from_memory: bool = False
 
 
 class ParkingState(BaseModel):
@@ -57,8 +60,10 @@ class ParkingState(BaseModel):
     confirmed_side: str | None = None
     street_name: str | None = None
     must_move_by: datetime | None = None
-    guess_confidence: float | None = None
-    guess_is_ambiguous: bool = False
+    # No confidence score by design: see SideGuess. The distances in `options`
+    # say more, and more honestly, than a number derived from them.
+    guess_from_memory: bool = False
+    times_confirmed: int = 0
     options: list[SideOption] = []
 
 
@@ -84,6 +89,11 @@ class FleetResponse(BaseModel):
     as_of: datetime
     vehicles: list[VehicleState]
     untracked_count: int
+    # Sent so the client formats deadlines in the zone the rules are written
+    # in, rather than in whatever zone the device happens to be set to. A sign
+    # says 11:30am in Brooklyn whoever is reading the screen and wherever they
+    # are standing.
+    fleet_timezone: str
 
 
 def _latest_located_event(session: Session, vehicle_id: uuid.UUID) -> TelemetryEvent | None:
@@ -132,24 +142,40 @@ def _parking_state(session: Session, vehicle: Vehicle) -> ParkingState | None:
 
     pos = _lat_lon(session, "parking_session", parking.id)
     options: list[SideOption] = []
+    times_confirmed = 0
     if pos is not None:
         guess = resolve_side(session, lat=pos[0], lon=pos[1],
                              needs_large_spot=vehicle.needs_large_spot)
+        times_confirmed = guess.times_confirmed
         distance = func.ST_Distance(
             StreetSegmentSide.geom,
             func.ST_GeogFromText(f"SRID=4326;POINT({pos[1]} {pos[0]})"),
         ).label("distance_m")
+        # Bounded by the same radius the guess uses. Without it, a vehicle far
+        # from any signed block is offered the nearest segments anywhere in the
+        # dataset — a car upstate gets handed Brooklyn kerbs to confirm, and
+        # confirming one would produce a deadline for a street it is nowhere
+        # near.
         nearby = session.execute(
             select(StreetSegmentSide, distance)
             .where(StreetSegmentSide.geom.is_not(None))
+            .where(
+                func.ST_DWithin(
+                    StreetSegmentSide.geom,
+                    func.ST_GeogFromText(f"SRID=4326;POINT({pos[1]} {pos[0]})"),
+                    SEARCH_RADIUS_M,
+                )
+            )
             .order_by(distance)
             .limit(4)
         ).all()
         for seg, dist in nearby:
+            is_guess = guess.segment_side is not None and seg.id == guess.segment_side.id
             options.append(SideOption(
                 id=seg.id, street_name=seg.street_name, side=seg.side.value,
                 distance_m=round(float(dist), 1),
-                is_guess=guess.segment_side is not None and seg.id == guess.segment_side.id,
+                is_guess=is_guess,
+                from_memory=is_guess and guess.remembered,
             ))
 
     confirmed = parking.segment_side
@@ -160,8 +186,8 @@ def _parking_state(session: Session, vehicle: Vehicle) -> ParkingState | None:
         confirmed_side=confirmed.side.value if confirmed else None,
         street_name=confirmed.street_name if confirmed else None,
         must_move_by=parking.must_move_by,
-        guess_confidence=parking.guess_confidence,
-        guess_is_ambiguous=(parking.guess_confidence or 0) < 0.5,
+        guess_from_memory=parking.guess_from_memory,
+        times_confirmed=times_confirmed,
         options=options,
     )
 
@@ -210,7 +236,12 @@ def get_fleet(session: DbSession) -> FleetResponse:
             open_task_count=int(open_tasks),
         ))
 
-    return FleetResponse(as_of=now, vehicles=states, untracked_count=untracked)
+    return FleetResponse(
+        as_of=now,
+        vehicles=states,
+        untracked_count=untracked,
+        fleet_timezone=str(fleet_timezone()),
+    )
 
 
 class ConfirmRequest(BaseModel):

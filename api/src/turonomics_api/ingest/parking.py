@@ -23,28 +23,41 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import ParkingSession, StreetSegmentSide, Vehicle
 
-# Beyond this a candidate is not the block the car is on, it is the next street.
-SEARCH_RADIUS_M = 30.0
+# Generous on purpose. Measured against real reported positions, a parked car
+# can sit 40 m from the nearest signed kerb: signs do not cover every block, and
+# a fix taken between tall buildings drifts. A tight radius returns "no
+# candidates", which reads as "no rules here" and therefore as "nothing due" —
+# the silent failure this design exists to avoid. Better to offer several
+# candidates with honest distances and let the operator pick.
+SEARCH_RADIUS_M = 75.0
 
-# Below this margin between the best and second-best candidate, the guess is
-# not meaningfully better than a coin flip. Kept as a named constant because it
-# is a claim about GPS accuracy, not a tuning knob.
-AMBIGUOUS_MARGIN_M = 7.0
+
+# How close a past confirmation has to be to count as the same spot. Wide
+# enough to absorb the drift between two fixes of the same parked car, narrow
+# enough that it is still the same block.
+MEMORY_RADIUS_M = 25.0
 
 
 @dataclass(frozen=True)
 class SideGuess:
+    """A suggestion, not a verdict.
+
+    There is deliberately no confidence score. Any number derived from the gap
+    between two distances would look calibrated without being so — the kerbs
+    are metres apart and the device's error is comparable, so the real hit rate
+    is close to a coin flip however the arithmetic is dressed up. The raw
+    distances are reported instead, which the operator can read better than a
+    formula can, and the only claim made is whether this side was confirmed
+    here before.
+    """
+
     segment_side: StreetSegmentSide | None
     distance_m: float | None
     runner_up_m: float | None
-    confidence: float
-
-    @property
-    def is_ambiguous(self) -> bool:
-        """Whether the runner-up is close enough that the guess is unsafe."""
-        if self.runner_up_m is None or self.distance_m is None:
-            return False
-        return (self.runner_up_m - self.distance_m) < AMBIGUOUS_MARGIN_M
+    # True when this side is what the operator confirmed here before, rather
+    # than what the geometry suggests.
+    remembered: bool = False
+    times_confirmed: int = 0
 
 
 def resolve_side(
@@ -55,7 +68,7 @@ def resolve_side(
     needs_large_spot: bool = False,
     radius_m: float = SEARCH_RADIUS_M,
 ) -> SideGuess:
-    """Best-guess segment side for a point, with an honest confidence.
+    """Best-guess segment side for a point.
 
     ``needs_large_spot`` filters out segments a van does not fit on. NYC has no
     length-based cleaning rule, so this is about whether the spot is usable at
@@ -76,22 +89,41 @@ def resolve_side(
 
     rows = session.execute(query).all()
     if not rows:
-        return SideGuess(None, None, None, 0.0)
+        return SideGuess(None, None, None)
 
     best, best_m = rows[0]
     runner_up_m = float(rows[1][1]) if len(rows) > 1 else None
 
-    if runner_up_m is None:
-        # Only one candidate in range. Still not certain — the other side may
-        # simply be missing from the dataset — but there is nothing to confuse
-        # it with, so this is as good as a guess gets.
-        confidence = 0.75
-    else:
-        margin = runner_up_m - float(best_m)
-        # Full confidence needs a margin comfortably beyond GPS error.
-        confidence = max(0.0, min(1.0, margin / (AMBIGUOUS_MARGIN_M * 2)))
+    # What was confirmed here last time beats what the geometry suggests. The
+    # operator standing on the street is better evidence than a metre of
+    # difference between two distances.
+    remembered_id, times = _remembered_side(session, lat=lat, lon=lon)
+    if remembered_id is not None:
+        candidates = {seg.id: (seg, float(d)) for seg, d in rows}
+        if remembered_id in candidates:
+            seg, dist = candidates[remembered_id]
+            return SideGuess(seg, dist, runner_up_m, remembered=True, times_confirmed=times)
 
-    return SideGuess(best, float(best_m), runner_up_m, round(confidence, 2))
+    return SideGuess(best, float(best_m), runner_up_m)
+
+
+def _remembered_side(
+    session: Session, *, lat: float, lon: float
+) -> tuple[uuid.UUID | None, int]:
+    """The side confirmed most often at this spot before, and how many times."""
+    point = func.ST_GeogFromText(f"SRID=4326;POINT({lon} {lat})")
+    row = session.execute(
+        select(ParkingSession.segment_side_id, func.count().label("n"))
+        .where(
+            ParkingSession.segment_side_id.is_not(None),
+            ParkingSession.confirmed_at.is_not(None),
+            func.ST_DWithin(ParkingSession.location, point, MEMORY_RADIUS_M),
+        )
+        .group_by(ParkingSession.segment_side_id)
+        .order_by(func.count().desc())
+        .limit(1)
+    ).first()
+    return (row[0], int(row[1])) if row else (None, 0)
 
 
 def open_parking_session(
@@ -133,7 +165,7 @@ def open_parking_session(
         location=point,
         started_at=at,
         guessed_segment_side_id=guess.segment_side.id if guess.segment_side else None,
-        guess_confidence=guess.confidence,
+        guess_from_memory=guess.remembered,
     )
     session.add(record)
     session.flush()
@@ -180,3 +212,37 @@ def confirm_side(
     parking_session.confirmed_by_id = confirmed_by_id
     session.flush()
     return parking_session
+
+
+def apply_engine_state(
+    session: Session,
+    *,
+    vehicle: Vehicle,
+    is_running: bool | None,
+    lat: float | None,
+    lon: float | None,
+    at: datetime,
+) -> ParkingSession | None:
+    """Open or close a parking session from Bouncie's engine state.
+
+    Bouncie reports ``stats.isRunning`` on every poll, so a parked car is one
+    whose engine is off — no need to wait for a ``tripEnd`` webhook or to infer
+    stillness from consecutive fixes.
+
+    ``is_running`` of ``None`` means the provider did not say, which is not the
+    same as stopped. Nothing is opened or closed on silence: guessing "parked"
+    from a missing field would start a deadline the operator never earned, and
+    guessing "moving" would cancel one they need.
+    """
+    if is_running is None:
+        return None
+
+    if is_running:
+        return close_parking_session(session, vehicle=vehicle, at=at)
+
+    if lat is None or lon is None:
+        # Stopped, but the provider sent no position. A session without a place
+        # cannot produce a deadline, and inventing a place is worse than none.
+        return None
+
+    return open_parking_session(session, vehicle=vehicle, lat=lat, lon=lon, at=at)

@@ -23,10 +23,11 @@ import os
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.asp.ingest import ZIP_11238_BBOX, fetch_signs, load_signs
 from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.base import session_scope
-from turonomics_api.db.models import Vehicle
+from turonomics_api.db.models import StreetSegmentSide, Vehicle
 from turonomics_api.plates import normalize_plate
 
 log = logging.getLogger("turonomics.bootstrap")
@@ -75,6 +76,55 @@ def apply_plates(session: Session, plate_map: dict[str, str]) -> list[str]:
     return changed
 
 
+def _flag(name: str) -> str:
+    return os.environ.get(name, "").strip().lower()
+
+
+def _parse_bbox(raw: str) -> tuple[int, int, int, int]:
+    parts = [int(v) for v in raw.split(",")]
+    if len(parts) != 4:
+        raise ValueError("BOOTSTRAP_SIGNS_BBOX needs four numbers: x0,y0,x1,y1")
+    return parts[0], parts[1], parts[2], parts[3]
+
+
+def run_sign_bootstrap() -> int:
+    """Load street-cleaning rules if there are none. Returns rules created.
+
+    Skipped when segments already exist, because the fetch pulls several
+    thousand rows and re-doing it on every restart would add half a minute to
+    each deploy for no change. ``BOOTSTRAP_SIGNS=force`` reloads anyway, which
+    is how to pick up the monthly dataset refresh.
+
+    Runs before the vehicle sync: a parking session resolves its candidate
+    sides at the moment it opens, so the rules have to be in place first or the
+    first sync produces sessions with nothing to choose between.
+    """
+    mode = _flag("BOOTSTRAP_SIGNS")
+    if mode not in {"1", "true", "yes", "force"}:
+        log.info("BOOTSTRAP_SIGNS not set — skipping")
+        return 0
+
+    try:
+        with session_scope() as session:
+            existing = session.scalar(select(func.count()).select_from(StreetSegmentSide)) or 0
+            if existing and mode != "force":
+                log.info("%d street segments already loaded — skipping", existing)
+                return 0
+
+            raw = os.environ.get("BOOTSTRAP_SIGNS_BBOX", "").strip()
+            bbox = _parse_bbox(raw) if raw else ZIP_11238_BBOX
+            log.info("fetching street-cleaning signs for %s ...", bbox)
+            rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
+            report = load_signs(session, rows)
+            log.info("%s", report.summary())
+            return report.rules_created
+    except Exception as exc:  # noqa: BLE001 - boot convenience must not break boot
+        # Same reasoning as the fleet bootstrap: an Open Data outage should
+        # cost a stale rule set, not a service that will not start.
+        log.warning("sign bootstrap failed, continuing without it: %s", exc)
+        return 0
+
+
 def run_bootstrap() -> int:
     """Returns the number of vehicles registered. Never raises."""
     if os.environ.get("BOOTSTRAP_FLEET", "").lower() not in {"1", "true", "yes"}:
@@ -115,6 +165,9 @@ def main() -> int:
         level=os.environ.get("LOG_LEVEL", "info").upper(),
         format="%(levelname)s %(name)s: %(message)s",
     )
+    # Signs first: the vehicle sync opens parking sessions, and those resolve
+    # their candidate sides as they are created.
+    run_sign_bootstrap()
     run_bootstrap()
     return 0  # never fail the boot
 

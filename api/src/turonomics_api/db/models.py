@@ -418,7 +418,6 @@ class ParkingSession(Base):
     guessed_segment_side_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("street_segment_side.id", ondelete="SET NULL")
     )
-    guess_confidence: Mapped[float | None] = mapped_column(Float)
 
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     confirmed_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))

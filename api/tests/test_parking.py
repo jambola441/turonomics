@@ -104,22 +104,24 @@ def test_the_guess_is_reported_as_ambiguous_for_a_real_fix(session, bergen):
     would pick one, and be wrong about half the time."""
     guess = resolve_side(session, lat=JIMMY_LAT, lon=JIMMY_LON)
     assert guess.segment_side is not None
-    assert guess.is_ambiguous is True
-    assert guess.confidence < 0.5
+    # Both kerbs within a car length, and the gap between them smaller than the
+    # device's own error — so the guess is not meaningfully better than a coin
+    # flip, whatever arithmetic is applied to it.
+    assert guess.distance_m < 12 and guess.runner_up_m < 12
+    assert abs(guess.runner_up_m - guess.distance_m) < 7.0
 
 
 def test_an_unambiguous_fix_gets_a_high_confidence(session, bergen):
     """Parked hard against one curb with the other side far off."""
     guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9702)
     assert guess.segment_side.side is StreetSide.north
-    assert guess.is_ambiguous is False
-    assert guess.confidence > 0.7
+    assert guess.runner_up_m - guess.distance_m > 7.0
 
 
 def test_nothing_in_range_is_not_a_guess(session, bergen):
     guess = resolve_side(session, lat=FAR_LAT, lon=-73.9702)
     assert guess.segment_side is None
-    assert guess.confidence == 0.0
+    assert guess.distance_m is None
 
 
 def test_a_van_is_not_offered_a_spot_it_does_not_fit(session, bergen):
@@ -381,9 +383,6 @@ def test_what_was_confirmed_here_before_beats_the_nearest_kerb(session, bergen, 
     assert guess.segment_side.side is StreetSide.south
     assert guess.remembered is True
     assert guess.times_confirmed == 1
-    # Raised, but deliberately not certain: the same spot can be the other side
-    # today, and the two are metres apart.
-    assert 0.8 <= guess.confidence < 1.0
 
 
 def test_memory_does_not_reach_across_to_a_different_block(session, bergen, jimmy):

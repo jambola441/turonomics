@@ -31,11 +31,6 @@ from turonomics_api.db.models import ParkingSession, StreetSegmentSide, Vehicle
 # candidates with honest distances and let the operator pick.
 SEARCH_RADIUS_M = 75.0
 
-# Below this margin between the best and second-best candidate, the guess is
-# not meaningfully better than a coin flip. Kept as a named constant because it
-# is a claim about GPS accuracy, not a tuning knob.
-AMBIGUOUS_MARGIN_M = 7.0
-
 
 # How close a past confirmation has to be to count as the same spot. Wide
 # enough to absorb the drift between two fixes of the same parked car, narrow
@@ -45,21 +40,24 @@ MEMORY_RADIUS_M = 25.0
 
 @dataclass(frozen=True)
 class SideGuess:
+    """A suggestion, not a verdict.
+
+    There is deliberately no confidence score. Any number derived from the gap
+    between two distances would look calibrated without being so — the kerbs
+    are metres apart and the device's error is comparable, so the real hit rate
+    is close to a coin flip however the arithmetic is dressed up. The raw
+    distances are reported instead, which the operator can read better than a
+    formula can, and the only claim made is whether this side was confirmed
+    here before.
+    """
+
     segment_side: StreetSegmentSide | None
     distance_m: float | None
     runner_up_m: float | None
-    confidence: float
     # True when this side is what the operator confirmed here before, rather
     # than what the geometry suggests.
     remembered: bool = False
     times_confirmed: int = 0
-
-    @property
-    def is_ambiguous(self) -> bool:
-        """Whether the runner-up is close enough that the guess is unsafe."""
-        if self.runner_up_m is None or self.distance_m is None:
-            return False
-        return (self.runner_up_m - self.distance_m) < AMBIGUOUS_MARGIN_M
 
 
 def resolve_side(
@@ -70,7 +68,7 @@ def resolve_side(
     needs_large_spot: bool = False,
     radius_m: float = SEARCH_RADIUS_M,
 ) -> SideGuess:
-    """Best-guess segment side for a point, with an honest confidence.
+    """Best-guess segment side for a point.
 
     ``needs_large_spot`` filters out segments a van does not fit on. NYC has no
     length-based cleaning rule, so this is about whether the spot is usable at
@@ -91,36 +89,22 @@ def resolve_side(
 
     rows = session.execute(query).all()
     if not rows:
-        return SideGuess(None, None, None, 0.0)
+        return SideGuess(None, None, None)
 
     best, best_m = rows[0]
     runner_up_m = float(rows[1][1]) if len(rows) > 1 else None
 
-    if runner_up_m is None:
-        # Only one candidate in range. Still not certain — the other side may
-        # simply be missing from the dataset — but there is nothing to confuse
-        # it with, so this is as good as a guess gets.
-        confidence = 0.75
-    else:
-        margin = runner_up_m - float(best_m)
-        # Full confidence needs a margin comfortably beyond GPS error.
-        confidence = max(0.0, min(1.0, margin / (AMBIGUOUS_MARGIN_M * 2)))
-
     # What was confirmed here last time beats what the geometry suggests. The
-    # kerbs are about 10 m apart and the device's error is comparable, so
-    # distance alone is close to a coin flip; the operator standing on the
-    # street is not.
+    # operator standing on the street is better evidence than a metre of
+    # difference between two distances.
     remembered_id, times = _remembered_side(session, lat=lat, lon=lon)
     if remembered_id is not None:
         candidates = {seg.id: (seg, float(d)) for seg, d in rows}
         if remembered_id in candidates:
             seg, dist = candidates[remembered_id]
-            # Deliberately short of certain. The same spot can be the other
-            # side this time, and the two are metres apart, so this raises the
-            # default rather than removing the question.
-            return SideGuess(seg, dist, runner_up_m, 0.85, remembered=True, times_confirmed=times)
+            return SideGuess(seg, dist, runner_up_m, remembered=True, times_confirmed=times)
 
-    return SideGuess(best, float(best_m), runner_up_m, round(confidence, 2))
+    return SideGuess(best, float(best_m), runner_up_m)
 
 
 def _remembered_side(
@@ -181,7 +165,6 @@ def open_parking_session(
         location=point,
         started_at=at,
         guessed_segment_side_id=guess.segment_side.id if guess.segment_side else None,
-        guess_confidence=guess.confidence,
         guess_from_memory=guess.remembered,
     )
     session.add(record)

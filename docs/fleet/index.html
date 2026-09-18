@@ -326,12 +326,16 @@
       note = noteHtml(COLORS.blue, "On trip — parking clock suppressed until return.");
     } else if (v.parking && !v.parking.confirmed &&
                v.parking.options && v.parking.options.length) {
+      // Distances, not a score. A number derived from the gap between two
+      // measurements looks calibrated without being so, and the operator reads
+      // "0.4 m vs 5.9 m" better than any formula can summarise it.
+      var opts = v.parking.options.slice(0, 2).map(function (o) {
+        return esc(o.street_name) + " " + esc(o.side) + " (" + o.distance_m + " m)" +
+               (o.from_memory ? " — you chose this here before" : o.is_guess ? " — best guess" : "");
+      }).join("  ·  ");
       note = noteHtml(COLORS.amber,
-        "Which side of the street? GPS can't tell, and the two sides have different rules — " +
-        "so there's no deadline until you say." +
-        (v.parking.guess_confidence != null
-          ? " Best guess confidence " + Math.round(v.parking.guess_confidence * 100) + "%."
-          : ""));
+        "Which side? The two sides have different rules, so there's no deadline until you say.  " +
+        opts);
     } else if (v.parking && !v.parking.confirmed) {
       note = noteHtml(COLORS.dim,
         "No street-cleaning rules loaded for where this car is, so there is no parking " +

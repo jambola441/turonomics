@@ -27,6 +27,7 @@ from turonomics_api.db.models import (
 )
 from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
+from turonomics_api.settings import fleet_timezone
 
 router = APIRouter(prefix="/api", tags=["fleet"])
 
@@ -88,6 +89,11 @@ class FleetResponse(BaseModel):
     as_of: datetime
     vehicles: list[VehicleState]
     untracked_count: int
+    # Sent so the client formats deadlines in the zone the rules are written
+    # in, rather than in whatever zone the device happens to be set to. A sign
+    # says 11:30am in Brooklyn whoever is reading the screen and wherever they
+    # are standing.
+    fleet_timezone: str
 
 
 def _latest_located_event(session: Session, vehicle_id: uuid.UUID) -> TelemetryEvent | None:
@@ -230,7 +236,12 @@ def get_fleet(session: DbSession) -> FleetResponse:
             open_task_count=int(open_tasks),
         ))
 
-    return FleetResponse(as_of=now, vehicles=states, untracked_count=untracked)
+    return FleetResponse(
+        as_of=now,
+        vehicles=states,
+        untracked_count=untracked,
+        fleet_timezone=str(fleet_timezone()),
+    )
 
 
 class ConfirmRequest(BaseModel):

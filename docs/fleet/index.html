@@ -68,6 +68,21 @@
   .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
   .stat .v{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em}
   .note{font-size:12.5px;line-height:1.45;padding:10px 12px;border-radius:9px}
+  .ask{display:flex;flex-direction:column;gap:9px;padding:14px;border-radius:11px;
+       background:var(--surface2);border:1px solid var(--border)}
+  .ask h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+          text-transform:uppercase;color:var(--amber,#f5a524);font-weight:600}
+  .ask p{font-size:12.5px;color:var(--muted);line-height:1.45}
+  .side{display:flex;align-items:center;gap:12px;min-height:56px;padding:11px 13px;
+        border-radius:10px;background:var(--surface);border:1px solid var(--border2);
+        cursor:pointer;text-align:left;width:100%;font:inherit;color:inherit;
+        transition:border-color .12s ease,background .12s ease}
+  .side:hover{border-color:var(--green);background:#1b2a23}
+  .side:active{background:#22332b}
+  .side:disabled{opacity:.5;cursor:default}
+  .side .s-name{font-size:15px;font-weight:600;letter-spacing:-.005em}
+  .side .s-meta{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:3px}
+  .side .s-tag{font-size:11px;color:var(--green);margin-top:3px}
   .muted{color:var(--muted)}
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
@@ -201,12 +216,22 @@
 
   function until(iso) {
     if (!iso) return null;
-    var mins = Math.round((new Date(iso) - new Date()) / 6e4);
+    var when = new Date(iso);
+    var mins = Math.round((when - new Date()) / 6e4);
     if (mins < 0) return "overdue";
+    // A countdown is what you want when it is close. Further out, the day and
+    // time is what you actually plan around — "in 3d" does not tell you
+    // whether that is before or after Monday morning.
     if (mins < 60) return "in " + mins + " min";
     var hrs = Math.floor(mins / 60);
     if (hrs < 24) return "in " + hrs + "h " + (mins % 60) + "m";
-    return "in " + Math.round(hrs / 24) + "d";
+    // The fleet's zone, not the device's. A sign says 11:30am in Brooklyn
+    // regardless of where the phone thinks it is, and rendering a
+    // street-cleaning deadline an hour out is how a ticket happens.
+    return when.toLocaleString(undefined, {
+      weekday: "short", hour: "numeric", minute: "2-digit",
+      timeZone: (fleet && fleet.fleet_timezone) || undefined,
+    });
   }
 
   function esc(s) {
@@ -285,8 +310,9 @@
     var where;
     if (v.on_trip_with) {
       where = "On trip with " + esc(v.on_trip_with) +
-              (v.trip_ends_at ? " · back " + new Date(v.trip_ends_at).toLocaleDateString(undefined,
-                { weekday: "short", hour: "numeric", minute: "2-digit" }) : "");
+              (v.trip_ends_at ? " · back " + new Date(v.trip_ends_at).toLocaleString(undefined,
+                { weekday: "short", hour: "numeric", minute: "2-digit",
+                  timeZone: (fleet && fleet.fleet_timezone) || undefined }) : "");
     } else if (v.parking && v.parking.confirmed) {
       where = esc(v.parking.street_name) + " — " + esc(v.parking.confirmed_side) + " side · parked " +
               relative(v.parking.since);
@@ -329,13 +355,25 @@
       // Distances, not a score. A number derived from the gap between two
       // measurements looks calibrated without being so, and the operator reads
       // "0.4 m vs 5.9 m" better than any formula can summarise it.
-      var opts = v.parking.options.slice(0, 2).map(function (o) {
-        return esc(o.street_name) + " " + esc(o.side) + " (" + o.distance_m + " m)" +
-               (o.from_memory ? " — you chose this here before" : o.is_guess ? " — best guess" : "");
-      }).join("  ·  ");
-      note = noteHtml(COLORS.amber,
-        "Which side? The two sides have different rules, so there's no deadline until you say.  " +
-        opts);
+      note =
+        '<div class="ask"><h2>Which side?</h2>' +
+        "<p>The two sides have different rules, so there is no deadline until you say.</p>" +
+        v.parking.options.map(function (o) {
+          var tag = o.from_memory ? "you chose this here before"
+                  : o.is_guess ? "closest to the reported position" : "";
+          return '<button class="side" data-side="' + esc(o.id) +
+                 '" data-session="' + esc(v.parking.session_id) + '">' +
+                 '<div style="flex-grow:1;min-width:0">' +
+                   '<div class="s-name">' + esc(o.street_name) + " " + esc(o.side) + "</div>" +
+                   '<div class="s-meta">' + o.distance_m + " m away</div>" +
+                   (tag ? '<div class="s-tag">' + tag + "</div>" : "") +
+                 "</div>" +
+                 '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" ' +
+                 'stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" ' +
+                 'style="color:var(--dim);flex-shrink:0"><polyline points="9 18 15 12 9 6"/></svg>' +
+                 "</button>";
+        }).join("") +
+        "</div>";
     } else if (v.parking && !v.parking.confirmed) {
       note = noteHtml(COLORS.dim,
         "No street-cleaning rules loaded for where this car is, so there is no parking " +
@@ -359,6 +397,12 @@
     Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
       el.addEventListener("click", function () { selectedId = el.dataset.id; render(); });
     });
+
+    Array.prototype.forEach.call(body.querySelectorAll(".side"), function (el) {
+      el.addEventListener("click", function () {
+        confirmSide(el.dataset.session, el.dataset.side, body);
+      });
+    });
   }
 
   function stat(k, val, colour) {
@@ -369,6 +413,37 @@
   function noteHtml(colour, text) {
     return '<div class="note" style="color:' + colour + ";background:" + colour +
            "14;border:1px solid " + colour + '2e">' + esc(text) + "</div>";
+  }
+
+  function confirmSide(sessionId, segmentSideId, body) {
+    // One answer at a time: a second tap while the first is in flight would
+    // race, and the one that lands last would win rather than the one meant.
+    Array.prototype.forEach.call(body.querySelectorAll(".side"), function (el) {
+      el.disabled = true;
+    });
+
+    fetch(API + "/api/parking/" + encodeURIComponent(sessionId) + "/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ segment_side_id: segmentSideId }),
+    })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function () {
+        // Reload rather than patching in place: confirming produces a deadline
+        // and a task, and the server is the one that knows what they are.
+        load();
+      })
+      .catch(function (e) {
+        Array.prototype.forEach.call(body.querySelectorAll(".side"), function (el) {
+          el.disabled = false;
+        });
+        var el = document.getElementById("err");
+        el.hidden = false;
+        el.textContent = "Could not save that: " + e.message + " — nothing was changed.";
+      });
   }
 
   function load() {

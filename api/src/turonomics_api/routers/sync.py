@@ -31,7 +31,7 @@ DbSession = Annotated[Session, Depends(get_session)]
 
 class SyncResponse(BaseModel):
     events: int
-    reconciled: int
+    parked: int
 
 
 def _check_token(authorization: str | None) -> None:
@@ -51,4 +51,4 @@ def trigger_sync(
 ) -> SyncResponse:
     _check_token(authorization)
     result = poll_once(session)
-    return SyncResponse(events=result.events, reconciled=result.reconciled)
+    return SyncResponse(events=result.events, parked=result.parked)

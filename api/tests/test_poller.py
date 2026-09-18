@@ -1,19 +1,22 @@
 """The poll that keeps the run sheet current.
 
-The claim worth testing is not that syncing works — that is covered elsewhere —
-but that reconciling recovers a car whose parked fix was recorded before the
-parking logic ever saw it, and that doing so repeatedly does not pile up
-sessions or tasks.
+The case that matters most here is the one that reached production: a stored
+snapshot row with ``is_running`` NULL whose provider timestamp has not changed,
+so no new row is ever written to carry the field. Both cars sat parked with no
+session and no deadline while the value they needed was in every poll's
+response. Engine state is therefore applied from the live payload on every
+poll, and the first test below is that bug.
 """
 
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 
 import pytest
 from sqlalchemy import func, select
 
+from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.models import (
     AspRule,
     ParkingSession,
@@ -24,20 +27,45 @@ from turonomics_api.db.models import (
     TelemetryEvent,
     Vehicle,
 )
-from turonomics_api.ingest.poller import (
-    DEFAULT_INTERVAL_MINUTES,
-    interval_minutes,
-    reconcile_engine_state,
-)
+from turonomics_api.ingest.poller import DEFAULT_INTERVAL_MINUTES, interval_minutes
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL") and not os.environ.get("DATABASE_URL"),
     reason="no database configured",
 )
 
-# Where the 4Runner actually sits, on the north side of Bergen St.
-LAT, LON = 40.679865, -73.970204
-PARKED_AT = datetime(2026, 9, 17, 16, 34, tzinfo=UTC)
+# Jimmy's real reported fix, on the north side of Bergen St.
+LAT, LON = 40.679884, -73.970193
+IMEI = "111111111111111"
+LAST_UPDATED = "2026-09-17T16:34:13.000Z"
+PARKED_AT = datetime(2026, 9, 17, 16, 34, 13, tzinfo=UTC)
+
+
+class FakeBouncie:
+    """Stands in for the provider. ``vehicles()`` is all ``sync_vehicles`` uses."""
+
+    def __init__(self, *, is_running: bool = False, last_updated: str = LAST_UPDATED):
+        self.is_running = is_running
+        self.last_updated = last_updated
+        self.calls = 0
+
+    def vehicles(self) -> list[dict]:
+        self.calls += 1
+        return [
+            {
+                "nickName": "Jimmy",
+                "imei": IMEI,
+                "vin": "V1",
+                "model": {"make": "TOYOTA", "name": "4-Runner", "year": 2023},
+                "stats": {
+                    "lastUpdated": self.last_updated,
+                    "isRunning": self.is_running,
+                    "location": {"lat": LAT, "lon": LON, "heading": 98.0},
+                    "fuelLevel": 65.3,
+                    "odometer": 45942.9,
+                },
+            }
+        ]
 
 
 def _bergen(session) -> StreetSegmentSide:
@@ -54,8 +82,8 @@ def _bergen(session) -> StreetSegmentSide:
         AspRule(
             segment_side_id=seg.id,
             days_of_week=[1, 4],
-            starts_at=datetime(2026, 1, 1, 11, 30, tzinfo=UTC).timetz().replace(tzinfo=None),
-            ends_at=datetime(2026, 1, 1, 13, 0, tzinfo=UTC).timetz().replace(tzinfo=None),
+            starts_at=time(11, 30),
+            ends_at=time(13, 0),
             source=RuleSource.nyc_signs,
             confidence=1.0,
         )
@@ -64,102 +92,95 @@ def _bergen(session) -> StreetSegmentSide:
     return seg
 
 
-def _parked_car(session, *, is_running: bool = False, at: datetime = PARKED_AT) -> Vehicle:
-    v = Vehicle(nickname="Jimmy", make="Toyota", model="4-Runner", year=2023, plate="LEH9892")
+def _jimmy(session) -> Vehicle:
+    v = Vehicle(
+        nickname="Jimmy",
+        make="Toyota",
+        model="4-Runner",
+        year=2023,
+        plate="LEH9892",
+        bouncie_imei=IMEI,
+    )
     session.add(v)
     session.flush()
+    return v
+
+
+def test_a_stored_row_with_no_engine_state_still_gets_a_parking_session(session):
+    """The production bug, exactly.
+
+    The snapshot row for this provider timestamp already exists and predates
+    the ``is_running`` column, so it holds NULL. Because the timestamp has not
+    changed, no new row will ever be written to carry the value. If parking
+    were derived from stored rows, or only when the log grew, this car would
+    never get a session no matter how long it polled.
+    """
+    _bergen(session)
+    v = _jimmy(session)
     session.add(
         TelemetryEvent(
             vehicle_id=v.id,
             event_type="statsSnapshot",
-            occurred_at=at,
+            occurred_at=PARKED_AT,
             location=f"SRID=4326;POINT({LON} {LAT})",
-            is_running=is_running,
+            is_running=None,  # the column did not exist when this was written
             payload={},
-            provider_event_id=f"stats:{at.isoformat()}",
+            provider_event_id=f"stats:{PARKED_AT.isoformat()}",
         )
     )
     session.commit()
-    return v
 
+    result = sync_vehicles(session, FakeBouncie())
 
-def test_a_fix_recorded_before_the_parking_logic_still_gets_a_session(session):
-    """The gap this exists to close. The event is already stored, so no sync
-    will ever re-deliver it; without reconciling, the car has no deadline until
-    it next moves."""
-    _bergen(session)
-    v = _parked_car(session)
-    assert session.scalar(select(func.count()).select_from(ParkingSession)) == 0
-
-    assert reconcile_engine_state(session) == 1
-    session.commit()
-
+    assert result.events == 0, "the row already exists, so the log must not grow"
+    assert result.parked == 1, "but parking must still be derived from the live payload"
     ps = session.scalar(select(ParkingSession).where(ParkingSession.vehicle_id == v.id))
     assert ps is not None
-    assert ps.ended_at is None
-    # The clock starts when the car parked, not when we noticed.
-    assert ps.started_at == PARKED_AT
+    assert ps.started_at == PARKED_AT, "the clock starts when it parked, not when we noticed"
 
 
 def test_polling_repeatedly_does_not_pile_up_sessions_or_tasks(session):
-    """It runs every ten minutes forever, so non-accumulation is the property
-    that matters most."""
+    """It runs every ten minutes forever, so non-accumulation matters most."""
     _bergen(session)
-    _parked_car(session)
+    _jimmy(session)
+    client = FakeBouncie()
     for _ in range(5):
-        reconcile_engine_state(session)
-        session.commit()
+        sync_vehicles(session, client)
 
+    assert client.calls == 5
     assert session.scalar(select(func.count()).select_from(ParkingSession)) == 1
+    assert session.scalar(select(func.count()).select_from(TelemetryEvent)) == 1
     assert session.scalar(select(func.count()).select_from(Task)) <= 1
 
 
 def test_a_car_that_has_driven_off_has_its_session_closed(session):
     _bergen(session)
-    v = _parked_car(session)
-    reconcile_engine_state(session)
-    session.commit()
+    v = _jimmy(session)
+    sync_vehicles(session, FakeBouncie())
+    assert session.scalar(select(ParkingSession)).ended_at is None
 
-    moving = PARKED_AT + timedelta(hours=2)
-    session.add(
-        TelemetryEvent(
-            vehicle_id=v.id,
-            event_type="statsSnapshot",
-            occurred_at=moving,
-            location=f"SRID=4326;POINT({LON} {LAT})",
-            is_running=True,
-            payload={},
-            provider_event_id=f"stats:{moving.isoformat()}",
-        )
-    )
-    session.commit()
-
-    reconcile_engine_state(session)
-    session.commit()
+    later = (PARKED_AT + timedelta(hours=2)).isoformat().replace("+00:00", ".000Z")
+    sync_vehicles(session, FakeBouncie(is_running=True, last_updated=later))
 
     ps = session.scalar(select(ParkingSession).where(ParkingSession.vehicle_id == v.id))
     assert ps.ended_at is not None
 
 
-def test_a_vehicle_with_no_telemetry_is_skipped_not_guessed_at(session):
-    session.add(Vehicle(nickname="No tracker", make="Ford", model="Transit", year=2024))
-    session.commit()
-    assert reconcile_engine_state(session) == 0
-    assert session.scalar(select(func.count()).select_from(ParkingSession)) == 0
-
-
 def test_silence_about_engine_state_opens_nothing(session):
-    """``is_running`` of None means the provider did not say. Treating that as
+    """``isRunning`` absent means the provider did not say. Treating that as
     parked would start a deadline the operator never earned."""
     _bergen(session)
-    v = _parked_car(session)
-    session.execute(
-        TelemetryEvent.__table__.update()
-        .where(TelemetryEvent.vehicle_id == v.id)
-        .values(is_running=None)
-    )
-    session.commit()
-    assert reconcile_engine_state(session) == 0
+    _jimmy(session)
+
+    class Silent(FakeBouncie):
+        def vehicles(self):
+            rows = super().vehicles()
+            del rows[0]["stats"]["isRunning"]
+            return rows
+
+    result = sync_vehicles(session, Silent())
+    assert result.parked == 0
+    assert session.scalar(select(func.count()).select_from(ParkingSession)) == 0
 
 
 @pytest.mark.parametrize(
@@ -195,8 +216,6 @@ def test_the_sync_endpoint_is_shut_when_no_token_is_configured(client, monkeypat
 def test_the_sync_endpoint_rejects_a_wrong_token(client, monkeypatch):
     monkeypatch.setenv("SYNC_TOKEN", "the-real-token")
     assert client.post("/api/sync").status_code == 401
-    assert (
-        client.post("/api/sync", headers={"Authorization": "Bearer wrong"}).status_code == 401
-    )
+    assert client.post("/api/sync", headers={"Authorization": "Bearer wrong"}).status_code == 401
     # An empty bearer is not a pass.
     assert client.post("/api/sync", headers={"Authorization": "Bearer "}).status_code == 401

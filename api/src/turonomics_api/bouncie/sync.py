@@ -27,6 +27,7 @@ class SyncResult:
     matched: int = 0
     created: int = 0
     events: int = 0
+    parked: int = 0
     unmatched_imeis: list[str] | None = None
 
     def __post_init__(self) -> None:
@@ -138,19 +139,32 @@ def sync_vehicles(
             )
             result.events += 1
 
-            # Engine state drives the parking clock. Done on the same poll that
-            # recorded it, so a car that stops is on the run sheet within one
-            # cycle rather than waiting for a separate job.
-            loc = stats.get("location") or {}
-            apply_engine_state(
-                session,
-                vehicle=vehicle,
-                is_running=stats.get("isRunning"),
-                lat=loc.get("lat"),
-                lon=loc.get("lon"),
-                at=occurred,
-            )
-            refresh_move_task(session, vehicle=vehicle)
+        # Engine state is applied on every poll, deliberately outside the
+        # de-duplication above.
+        #
+        # Recording telemetry and deriving parking are different jobs. The
+        # event row is an append-only log, so one row per provider timestamp is
+        # right. Parking is a projection of where the car is *now*, and a
+        # projection has to be rebuilt from current state whether or not the
+        # log grew.
+        #
+        # Tying the two together cost the fleet a day: `is_running` was added
+        # after those snapshot rows were written, so every stored row had it
+        # NULL, and because the provider timestamp had not changed no new row
+        # was ever written to carry it. Both cars sat parked with no session
+        # and no deadline while the field they needed was in every poll's
+        # response. Applying it from the live payload cannot get stuck that way.
+        loc = stats.get("location") or {}
+        if apply_engine_state(
+            session,
+            vehicle=vehicle,
+            is_running=stats.get("isRunning"),
+            lat=loc.get("lat"),
+            lon=loc.get("lon"),
+            at=occurred,
+        ):
+            result.parked += 1
+        refresh_move_task(session, vehicle=vehicle)
 
     session.commit()
     return result

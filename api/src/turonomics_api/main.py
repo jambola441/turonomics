@@ -8,9 +8,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from turonomics_api.bouncie.sync import SyncResult
 from turonomics_api.db.base import session_scope
-from turonomics_api.ingest.poller import PollResult, interval_minutes, poll_once
+from turonomics_api.ingest.poller import interval_minutes, poll_once, summarize
 from turonomics_api.routers import fleet, match, sync
+
+# Uvicorn configures its own loggers and leaves everything else to the root
+# logger, which has no handler — so anything this package logs below WARNING
+# vanishes in the server process. The boot script calls basicConfig for its own
+# process; this is the equivalent for the server, and without it the poller
+# runs completely unobservably.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "info").upper(),
+    format="%(levelname)s %(name)s: %(message)s",
+)
 
 log = logging.getLogger("turonomics.poller")
 
@@ -29,12 +40,12 @@ async def _poll_forever(minutes: int) -> None:
         await asyncio.sleep(minutes * 60)
         try:
             result = await asyncio.to_thread(_poll_blocking)
-            log.info("poll: %s", result.summary())
+            log.info("poll: %s", summarize(result))
         except Exception as exc:  # noqa: BLE001 - a bad poll must not end the loop
             log.warning("poll failed, will retry in %dm: %s", minutes, exc)
 
 
-def _poll_blocking() -> PollResult:
+def _poll_blocking() -> SyncResult:
     with session_scope() as session:
         return poll_once(session)
 

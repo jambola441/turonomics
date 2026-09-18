@@ -18,6 +18,8 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.db.models import TelemetryEvent, Vehicle
+from turonomics_api.ingest.parking import apply_engine_state
+from turonomics_api.ingest.tasks import refresh_move_task
 
 
 @dataclass
@@ -124,6 +126,7 @@ def sync_vehicles(
                     location=_point(loc["lat"], loc["lon"]) if loc.get("lat") is not None else None,
                     heading_deg=loc.get("heading"),
                     speed_mph=stats.get("speed"),
+                is_running=stats.get("isRunning"),
                     fuel_percent=stats.get("fuelLevel"),
                     odometer_miles=stats.get("odometer"),
                     battery_status=battery.get("status"),
@@ -134,6 +137,20 @@ def sync_vehicles(
                 )
             )
             result.events += 1
+
+            # Engine state drives the parking clock. Done on the same poll that
+            # recorded it, so a car that stops is on the run sheet within one
+            # cycle rather than waiting for a separate job.
+            loc = stats.get("location") or {}
+            apply_engine_state(
+                session,
+                vehicle=vehicle,
+                is_running=stats.get("isRunning"),
+                lat=loc.get("lat"),
+                lon=loc.get("lon"),
+                at=occurred,
+            )
+            refresh_move_task(session, vehicle=vehicle)
 
     session.commit()
     return result

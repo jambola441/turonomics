@@ -173,9 +173,21 @@ class BouncieClient:
         result = self._get("/v1/vehicles")
         return list(result) if isinstance(result, list) else []
 
-    def trips(self, imei: str, starts_after: str | None = None) -> list[dict[str, Any]]:
-        params: dict[str, Any] = {"imei": imei, "gps-format": "geojson"}
-        if starts_after:
-            params["starts-after"] = starts_after
+    def trips(
+        self, imei: str, *, starts_after: str | None = None, ends_before: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Trips for one device.
+
+        Bouncie rejects a range wider than a week, so both ends are sent and
+        default to the last seven days. Omitting the end date is a 400, not an
+        open-ended query.
+        """
+        now = datetime.now(UTC)
+        params: dict[str, Any] = {
+            "imei": imei,
+            "gps-format": "geojson",
+            "starts-after": starts_after or (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ends-before": ends_before or now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        }
         result = self._get("/v1/trips", params)
         return list(result) if isinstance(result, list) else []

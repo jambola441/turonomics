@@ -185,3 +185,37 @@ def confirm_side(
     parking_session.confirmed_by_id = confirmed_by_id
     session.flush()
     return parking_session
+
+
+def apply_engine_state(
+    session: Session,
+    *,
+    vehicle: Vehicle,
+    is_running: bool | None,
+    lat: float | None,
+    lon: float | None,
+    at: datetime,
+) -> ParkingSession | None:
+    """Open or close a parking session from Bouncie's engine state.
+
+    Bouncie reports ``stats.isRunning`` on every poll, so a parked car is one
+    whose engine is off — no need to wait for a ``tripEnd`` webhook or to infer
+    stillness from consecutive fixes.
+
+    ``is_running`` of ``None`` means the provider did not say, which is not the
+    same as stopped. Nothing is opened or closed on silence: guessing "parked"
+    from a missing field would start a deadline the operator never earned, and
+    guessing "moving" would cancel one they need.
+    """
+    if is_running is None:
+        return None
+
+    if is_running:
+        return close_parking_session(session, vehicle=vehicle, at=at)
+
+    if lat is None or lon is None:
+        # Stopped, but the provider sent no position. A session without a place
+        # cannot produce a deadline, and inventing a place is worse than none.
+        return None
+
+    return open_parking_session(session, vehicle=vehicle, lat=lat, lon=lon, at=at)

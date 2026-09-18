@@ -250,6 +250,12 @@ class TelemetryEvent(Base):
     heading_deg: Mapped[float | None] = mapped_column(Float)
     speed_mph: Mapped[float | None] = mapped_column(Float)
 
+    # Bouncie reports engine state directly, so "parked" does not have to be
+    # inferred from consecutive stationary fixes or waited for as a tripEnd
+    # webhook. None means the provider did not say, which is not the same as
+    # stopped.
+    is_running: Mapped[bool | None] = mapped_column(Boolean)
+
     fuel_percent: Mapped[float | None] = mapped_column(Float)
     odometer_miles: Mapped[float | None] = mapped_column(Float)
     # Bouncie reports battery as a status string ("normal"), not a voltage,

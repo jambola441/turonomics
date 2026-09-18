@@ -329,3 +329,32 @@ def test_the_obligation_returns_when_the_trip_ends(session, bergen, jimmy):
     task = refresh_move_task(session, vehicle=jimmy, now=later)
     assert task.state is TaskState.open
     assert task.suppressed_reason is None
+
+
+def test_a_task_can_be_built_from_a_parking_session_read_back_from_the_database(
+    session, bergen, jimmy
+):
+    """Regression: Task.location copies the parking session's geometry, and a
+    value that has round-tripped through the database comes back as WKB rather
+    than as the string it went in as. Writing that back needs Shapely.
+
+    Every other test in this file builds the session in memory and hands the
+    geometry over as a string, so the round trip never happened and the failure
+    only appeared against real data.
+    """
+    north, _ = bergen
+    _rule(session, north, (1, 4), time(11, 30), time(13, 0))
+    at = datetime(2026, 9, 18, 10, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=JIMMY_LAT, lon=JIMMY_LON, at=at)
+    confirm_side(session, parking_session=ps, segment_side=north, confirmed_at=at)
+    session.commit()
+
+    # Force the geometry to come back from Postgres rather than from identity map.
+    session.expire_all()
+    reloaded = session.get(Vehicle, jimmy.id)
+
+    task = refresh_move_task(session, vehicle=reloaded, now=at)
+    session.commit()
+    assert task is not None
+    assert task.due_by is not None
+    assert task.location is not None

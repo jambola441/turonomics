@@ -358,3 +358,57 @@ def test_a_task_can_be_built_from_a_parking_session_read_back_from_the_database(
     assert task is not None
     assert task.due_by is not None
     assert task.location is not None
+
+
+def test_what_was_confirmed_here_before_beats_the_nearest_kerb(session, bergen, jimmy):
+    """The operator puts the real-world hit rate of a distance-based guess at
+    about 60/40 — the kerbs are ~10 m apart and the device's error is
+    comparable. Someone who stood on the street and answered is better evidence
+    than a 1 m difference in distance, so a past confirmation at this spot wins.
+    """
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+
+    # A position the geometry reads as north, confirmed by hand as south.
+    first = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    assert session.get(StreetSegmentSide, first.guessed_segment_side_id).side is StreetSide.north
+    confirm_side(session, parking_session=first, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    # Parking in the same place again should now default to what was answered.
+    guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9702)
+    assert guess.segment_side.side is StreetSide.south
+    assert guess.remembered is True
+    assert guess.times_confirmed == 1
+    # Raised, but deliberately not certain: the same spot can be the other side
+    # today, and the two are metres apart.
+    assert 0.8 <= guess.confidence < 1.0
+
+
+def test_memory_does_not_reach_across_to_a_different_block(session, bergen, jimmy):
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    confirm_side(session, parking_session=ps, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    # Far enough away to be a different spot entirely.
+    guess = resolve_side(session, lat=NORTH_LAT, lon=-73.9660)
+    assert guess.remembered is False
+
+
+def test_a_guess_from_memory_is_recorded_as_such(session, bergen, jimmy):
+    """Stored so the two kinds of guess can be scored separately later."""
+    north, south = bergen
+    at = datetime(2026, 9, 18, 2, 0, tzinfo=UTC)
+    ps = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702, at=at)
+    assert ps.guess_from_memory is False
+    confirm_side(session, parking_session=ps, segment_side=south, confirmed_at=at)
+    close_parking_session(session, vehicle=jimmy, at=at + timedelta(hours=1))
+    session.commit()
+
+    again = open_parking_session(session, vehicle=jimmy, lat=NORTH_LAT, lon=-73.9702,
+                                 at=at + timedelta(hours=2))
+    assert again.guess_from_memory is True

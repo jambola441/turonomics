@@ -424,6 +424,9 @@ class ParkingSession(Base):
     confirmed_by_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("app_user.id"))
     # True when the operator corrected the guess — the signal worth learning from.
     was_corrected: Mapped[bool] = mapped_column(Boolean, default=False)
+    # True when the guess came from what was confirmed here before rather
+    # than from distance. Recorded so the two can be scored separately.
+    guess_from_memory: Mapped[bool] = mapped_column(Boolean, default=False)
 
     # Cached so the run sheet doesn't recompute rules per render. Recomputed
     # when the rule, the suspension calendar or the confirmed side changes.

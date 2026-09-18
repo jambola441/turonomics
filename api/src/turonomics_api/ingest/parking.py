@@ -37,12 +37,22 @@ SEARCH_RADIUS_M = 75.0
 AMBIGUOUS_MARGIN_M = 7.0
 
 
+# How close a past confirmation has to be to count as the same spot. Wide
+# enough to absorb the drift between two fixes of the same parked car, narrow
+# enough that it is still the same block.
+MEMORY_RADIUS_M = 25.0
+
+
 @dataclass(frozen=True)
 class SideGuess:
     segment_side: StreetSegmentSide | None
     distance_m: float | None
     runner_up_m: float | None
     confidence: float
+    # True when this side is what the operator confirmed here before, rather
+    # than what the geometry suggests.
+    remembered: bool = False
+    times_confirmed: int = 0
 
     @property
     def is_ambiguous(self) -> bool:
@@ -96,7 +106,40 @@ def resolve_side(
         # Full confidence needs a margin comfortably beyond GPS error.
         confidence = max(0.0, min(1.0, margin / (AMBIGUOUS_MARGIN_M * 2)))
 
+    # What was confirmed here last time beats what the geometry suggests. The
+    # kerbs are about 10 m apart and the device's error is comparable, so
+    # distance alone is close to a coin flip; the operator standing on the
+    # street is not.
+    remembered_id, times = _remembered_side(session, lat=lat, lon=lon)
+    if remembered_id is not None:
+        candidates = {seg.id: (seg, float(d)) for seg, d in rows}
+        if remembered_id in candidates:
+            seg, dist = candidates[remembered_id]
+            # Deliberately short of certain. The same spot can be the other
+            # side this time, and the two are metres apart, so this raises the
+            # default rather than removing the question.
+            return SideGuess(seg, dist, runner_up_m, 0.85, remembered=True, times_confirmed=times)
+
     return SideGuess(best, float(best_m), runner_up_m, round(confidence, 2))
+
+
+def _remembered_side(
+    session: Session, *, lat: float, lon: float
+) -> tuple[uuid.UUID | None, int]:
+    """The side confirmed most often at this spot before, and how many times."""
+    point = func.ST_GeogFromText(f"SRID=4326;POINT({lon} {lat})")
+    row = session.execute(
+        select(ParkingSession.segment_side_id, func.count().label("n"))
+        .where(
+            ParkingSession.segment_side_id.is_not(None),
+            ParkingSession.confirmed_at.is_not(None),
+            func.ST_DWithin(ParkingSession.location, point, MEMORY_RADIUS_M),
+        )
+        .group_by(ParkingSession.segment_side_id)
+        .order_by(func.count().desc())
+        .limit(1)
+    ).first()
+    return (row[0], int(row[1])) if row else (None, 0)
 
 
 def open_parking_session(
@@ -139,6 +182,7 @@ def open_parking_session(
         started_at=at,
         guessed_segment_side_id=guess.segment_side.id if guess.segment_side else None,
         guess_confidence=guess.confidence,
+        guess_from_memory=guess.remembered,
     )
     session.add(record)
     session.flush()

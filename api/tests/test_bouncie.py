@@ -6,6 +6,7 @@ here were taken from real responses, not from the spec alone.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from datetime import UTC, datetime, timedelta
@@ -225,3 +226,111 @@ def test_sync_matches_an_existing_vehicle_by_vin_when_imei_is_unset(session):
     van = session.scalar(select(Vehicle).where(Vehicle.nickname == "Van"))
     assert van.bouncie_imei == "222222222222222"
     assert session.scalar(select(func.count()).select_from(Vehicle)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Re-authorisation
+# ---------------------------------------------------------------------------
+
+
+def test_a_changed_authorization_code_is_exchanged_rather_than_refreshed(session, monkeypatch):
+    """Bouncie consent is per device. Authorising two cars and later fitting a
+    third leaves the third outside the grant, and the fix is to re-authorise
+    and supply the new code.
+
+    The trap is that the stored refresh chain keeps working indefinitely, so
+    without noticing the code changed the client would refresh the *old* grant
+    forever: the new car stays invisible and the operator's re-authorisation
+    looks like it silently failed.
+    """
+    session.add(
+        OAuthToken(
+            provider="bouncie",
+            access_token="old-grant-token",
+            refresh_token="old-refresh",
+            expires_at=datetime.now(UTC) + timedelta(minutes=55),
+            grant_fingerprint=hashlib.sha256(b"OLD-CODE").hexdigest(),
+        )
+    )
+    session.commit()
+
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        seen.append(body["grant_type"])
+        return httpx.Response(
+            200, json={"access_token": "new-grant-token", "refresh_token": "r", "expires_in": 3600}
+        )
+
+    cfg = BouncieConfig(
+        client_id="cid", client_secret="sec", auth_code="NEW-CODE", redirect_uri="http://x/cb"
+    )
+    client = BouncieClient(
+        session, cfg, http=httpx.Client(transport=httpx.MockTransport(handler))
+    )
+
+    assert client.access_token() == "new-grant-token"
+    assert seen == ["authorization_code"], "the new code must be exchanged, not the old refreshed"
+
+    row = session.scalar(select(OAuthToken).where(OAuthToken.provider == "bouncie"))
+    assert row.grant_fingerprint == hashlib.sha256(b"NEW-CODE").hexdigest()
+
+
+def test_an_unchanged_code_still_uses_the_stored_token(session):
+    """The check must not make every call re-exchange; that would throw away a
+    live token on every poll."""
+    code = "SAME-CODE"
+    session.add(
+        OAuthToken(
+            provider="bouncie",
+            access_token="still-good",
+            refresh_token="r",
+            expires_at=datetime.now(UTC) + timedelta(minutes=55),
+            grant_fingerprint=hashlib.sha256(code.encode()).hexdigest(),
+        )
+    )
+    session.commit()
+
+    def explode(request: httpx.Request) -> httpx.Response:  # pragma: no cover
+        raise AssertionError("re-exchanged a grant that had not changed")
+
+    cfg = BouncieConfig(
+        client_id="cid", client_secret="sec", auth_code=code, redirect_uri="http://x/cb"
+    )
+    client = BouncieClient(
+        session, cfg, http=httpx.Client(transport=httpx.MockTransport(explode))
+    )
+    assert client.access_token() == "still-good"
+
+
+def test_a_grant_stored_before_fingerprints_existed_is_re_exchanged_once(session):
+    """The live row predates the column. NULL means "unknown authorization", so
+    it is re-exchanged once and stamped rather than left ambiguous forever."""
+    session.add(
+        OAuthToken(
+            provider="bouncie",
+            access_token="legacy",
+            refresh_token="r",
+            expires_at=datetime.now(UTC) + timedelta(minutes=55),
+            grant_fingerprint=None,
+        )
+    )
+    session.commit()
+
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(json.loads(request.content)["grant_type"])
+        return httpx.Response(
+            200, json={"access_token": "fresh", "refresh_token": "r2", "expires_in": 3600}
+        )
+
+    cfg = BouncieConfig(
+        client_id="cid", client_secret="sec", auth_code="CODE", redirect_uri="http://x/cb"
+    )
+    http = httpx.Client(transport=httpx.MockTransport(handler))
+    assert BouncieClient(session, cfg, http=http).access_token() == "fresh"
+    # Stamped now, so a second call does not exchange again.
+    assert BouncieClient(session, cfg, http=http).access_token() == "fresh"
+    assert calls == ["authorization_code"]

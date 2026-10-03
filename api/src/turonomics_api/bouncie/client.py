@@ -15,6 +15,8 @@ the code again rather than needing a human at a browser.
 
 from __future__ import annotations
 
+import hashlib
+import logging
 import os
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -29,6 +31,8 @@ from turonomics_api.db.models import OAuthToken
 AUTH_BASE = "https://auth.bouncie.com"
 API_BASE = "https://api.bouncie.dev"
 PROVIDER = "bouncie"
+
+log = logging.getLogger("turonomics.bouncie")
 
 # Refresh a little early rather than racing the expiry.
 EXPIRY_SKEW = timedelta(seconds=90)
@@ -98,6 +102,10 @@ class BouncieClient:
         row.refresh_token = payload.get("refresh_token") or row.refresh_token
         row.expires_at = expires_at
         row.obtained_at = datetime.now(UTC)
+        # Stamped on every store, including refreshes: a refresh continues the
+        # grant that the current code produced, so recording it keeps the row
+        # honest about which authorization it belongs to.
+        row.grant_fingerprint = self._fingerprint()
         if refreshed:
             row.refresh_count += 1
         self._session.commit()
@@ -138,9 +146,24 @@ class BouncieClient:
             refreshed=True,
         )
 
+    def _fingerprint(self) -> str:
+        return hashlib.sha256(self._config.auth_code.encode()).hexdigest()
+
     def access_token(self) -> str:
         """A usable access token, obtained however is necessary."""
         row = self._session.scalar(select(OAuthToken).where(OAuthToken.provider == PROVIDER))
+
+        # A changed authorization code means the operator re-authorised, which
+        # on Bouncie is how a newly fitted device joins the grant. Honour it
+        # immediately: the stored refresh chain would otherwise keep working
+        # forever and the new code would never be exchanged, so the new vehicle
+        # would stay invisible and the re-authorisation would look like it had
+        # failed for no reason. A NULL fingerprint is a grant from before this
+        # was recorded, so treat it as unknown and re-exchange once to stamp it.
+        if row is not None and row.grant_fingerprint != self._fingerprint():
+            log.info("authorization code changed — re-exchanging rather than refreshing")
+            self._session.rollback()
+            return self.exchange_auth_code().access_token
 
         if row is not None and row.expires_at - EXPIRY_SKEW > datetime.now(UTC):
             return row.access_token

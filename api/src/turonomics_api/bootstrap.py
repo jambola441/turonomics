@@ -28,6 +28,7 @@ from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.base import session_scope
 from turonomics_api.db.models import StreetSegmentSide, Vehicle
+from turonomics_api.gmail.probe import DEFAULT_QUERY, probe
 from turonomics_api.plates import normalize_plate
 
 log = logging.getLogger("turonomics.bootstrap")
@@ -125,6 +126,32 @@ def run_sign_bootstrap() -> int:
         return 0
 
 
+def run_gmail_probe() -> int:
+    """Log the shape of recent Turo mail when GMAIL_PROBE is set.
+
+    A diagnostic, not a feature: it exists so the email parser can be written
+    against the real format without anyone pasting their mail into a chat
+    window or handing over mailbox access. It reports labels and field order
+    with every value replaced by a token naming its type, so the output is
+    useful to a parser and uninteresting to anyone else.
+
+    Off by default and meant to be turned off again once the shapes are known —
+    a diagnostic that runs forever is just noise in the log.
+    """
+    if _flag("GMAIL_PROBE") not in {"1", "true", "yes"}:
+        return 0
+    try:
+        with session_scope() as session:
+            shapes = probe(
+                session,
+                query=os.environ.get("GMAIL_PROBE_QUERY", "").strip() or DEFAULT_QUERY,
+            )
+            return len(shapes)
+    except Exception as exc:  # noqa: BLE001 - a diagnostic must not break boot
+        log.warning("gmail probe failed, continuing without it: %s", exc)
+        return 0
+
+
 def run_bootstrap() -> int:
     """Returns the number of vehicles registered. Never raises."""
     if os.environ.get("BOOTSTRAP_FLEET", "").lower() not in {"1", "true", "yes"}:
@@ -169,6 +196,7 @@ def main() -> int:
     # their candidate sides as they are created.
     run_sign_bootstrap()
     run_bootstrap()
+    run_gmail_probe()
     return 0  # never fail the boot
 
 

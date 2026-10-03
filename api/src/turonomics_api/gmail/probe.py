@@ -1,0 +1,212 @@
+"""Learn the shape of Turo's notification emails without reading them.
+
+A parser needs to know which labels an email carries and in what order. It does
+not need the values, and nobody should have to paste their mail into a chat
+window to get a parser written — nor should that mail end up in a log that is
+retained and readable by anyone with dashboard access.
+
+So this reports structure and masks content. For each matching message it logs
+the sender, a masked subject, and the ordered labels it found. Every value is
+replaced by a token naming its type, so the output says
+
+    label: trip starts -> <DATE> <TIME>
+
+rather than the date, and
+
+    subject: <NAME> booked your <NAME> for <DATE>
+
+rather than the guest. That is enough to write and test a parser against, and
+it stays true even as the values change.
+
+Masking is deliberately over-eager: a capitalised word that is not part of
+Turo's own vocabulary is treated as a name. Losing a label to over-masking
+costs a round trip; leaking a guest's name into a log cannot be undone.
+"""
+
+from __future__ import annotations
+
+import base64
+import logging
+import re
+from dataclasses import dataclass, field
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from turonomics_api.gmail.client import GmailClient, GmailError
+
+log = logging.getLogger("turonomics.gmail.probe")
+
+# Broad on purpose: better to see every notification type once and narrow the
+# real query later than to miss the one carrying the trip id.
+DEFAULT_QUERY = "from:turo.com newer_than:180d"
+DEFAULT_LIMIT = 12
+
+# Words that are structure rather than content, so they survive masking. Losing
+# these would hide the labels the parser has to match on.
+VOCABULARY = frozenset(
+    # Split from a block rather than written as a list: the point is that it is
+    # easy to add a word to when a label comes back over-masked.
+    """
+    turo trip trips booking booked reservation request requested confirmed
+    cancelled canceled checkout check checkin in out start starts started
+    end ends ended pickup pick up return returns returned drop off
+    guest host vehicle car van total earnings payout fee fees tolls
+    message messages sent reply you your my the a an for from to at on of and
+    is are was were has have will reminder reminders upcoming today tomorrow
+    location address delivery airport day days hour hours am pm
+    id number no ref reference code
+    """.split()  # noqa: SIM905
+)
+
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_URL = re.compile(r"https?://\S+")
+_MONEY = re.compile(r"\$\s?\d[\d,]*(?:\.\d{2})?")
+_TIME = re.compile(r"\b\d{1,2}:\d{2}\s?(?:[AaPp]\.?[Mm]\.?)?\b|\b\d{1,2}\s?[AaPp]\.?[Mm]\.?\b")
+_DATE = re.compile(
+    r"\b\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?\b"
+    r"|\b\d{4}-\d{2}-\d{2}\b"
+    r"|\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}(?:,?\s*\d{4})?\b"
+    r"|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b",
+    re.IGNORECASE,
+)
+_PLATE = re.compile(r"\b[A-Z]{2,3}[- ]?\d{3,4}\b")
+_NUM = re.compile(r"\b\d[\d,]{2,}\b")
+_CAPS = re.compile(r"\b[A-Z][a-zA-Z'’]+\b")
+# No '/' in a label: "Message Dana at https://..." would otherwise read as
+# label "message dana at https" with the URL as its value, and the value
+# would reach the masker already stripped of its scheme — so the URL regex
+# would miss it and the link would survive. Keep URLs on the line path.
+_LABEL = re.compile(r"^\s*([A-Za-z][A-Za-z \t'’&-]{1,40}?)\s*:\s*(.*)$")
+
+
+def mask(text: str) -> str:
+    """Replace values with type tokens, keeping structural words.
+
+    Substitutions go to lowercase sentinels first and become ``<TOKEN>`` only at
+    the end. Writing ``<DATE>`` directly would hand the capitalised-word pass a
+    capitalised word to eat, turning every typed value back into ``<NAME>`` —
+    which is both useless to a parser and not stable under a second pass. Logs
+    get re-read, so stability matters.
+    """
+    kinds = (
+        ("url", _URL),
+        ("email", _EMAIL),
+        ("money", _MONEY),
+        ("date", _DATE),
+        ("time", _TIME),
+        ("plate", _PLATE),
+        ("num", _NUM),
+    )
+    out = text
+    # Tokens already present (a second pass over logged output) become
+    # sentinels too, so they are not re-masked.
+    for kind, _ in (*kinds, ("name", None), ("empty", None)):
+        out = out.replace(f"<{kind.upper()}>", f"\x00{kind}\x00")
+    for kind, pattern in kinds:
+        assert pattern is not None
+        out = pattern.sub(f"\x00{kind}\x00", out)
+
+    def _word(m: re.Match[str]) -> str:
+        word = m.group(0)
+        return word if word.lower() in VOCABULARY else "\x00name\x00"
+
+    out = _CAPS.sub(_word, out)
+    for kind, _ in (*kinds, ("name", None), ("empty", None)):
+        out = out.replace(f"\x00{kind}\x00", f"<{kind.upper()}>")
+    # A run of the same token says no more than one of it, and reads worse.
+    out = re.sub(r"(<[A-Z]+>)(?:[\s,.;:/|-]*\1)+", r"\1", out)
+    return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
+@dataclass
+class Shape:
+    """What one email looks like, with nothing in it."""
+
+    sender: str = ""
+    subject: str = ""
+    labels: list[str] = field(default_factory=list)
+    lines: list[str] = field(default_factory=list)
+
+
+def _header(payload: dict[str, Any], name: str) -> str:
+    for h in payload.get("headers") or []:
+        if h.get("name", "").lower() == name.lower():
+            return str(h.get("value", ""))
+    return ""
+
+
+def _decode(data: str) -> str:
+    pad = "=" * (-len(data) % 4)
+    try:
+        return base64.urlsafe_b64decode(data + pad).decode("utf-8", "replace")
+    except Exception:  # noqa: BLE001 - a body we cannot decode is not fatal
+        return ""
+
+
+def plain_text(payload: dict[str, Any]) -> str:
+    """The text/plain part, falling back to de-tagged HTML."""
+    mime = payload.get("mimeType", "")
+    body = (payload.get("body") or {}).get("data")
+    if mime == "text/plain" and body:
+        return _decode(body)
+    for part in payload.get("parts") or []:
+        found = plain_text(part)
+        if found:
+            return found
+    if mime == "text/html" and body:
+        html = _decode(body)
+        html = re.sub(r"(?is)<(script|style).*?</\1>", " ", html)
+        html = re.sub(r"(?i)<br\s*/?>|</(p|div|tr|li|h\d)>", "\n", html)
+        return re.sub(r"<[^>]+>", " ", html)
+    return ""
+
+
+def shape_of(message: dict[str, Any]) -> Shape:
+    payload = message.get("payload") or {}
+    shape = Shape(
+        sender=mask(_header(payload, "From")),
+        subject=mask(_header(payload, "Subject")),
+    )
+    for raw in plain_text(payload).splitlines():
+        # URLs first, before the line is split on a colon. "Message Dana at
+        # https://turo.com/..." reads as label "message dana at https" with
+        # "//turo.com/..." as its value, and a value that has already lost its
+        # scheme no longer looks like a URL to the masker — so the link
+        # survived. Masking is idempotent, so doing this early is free.
+        line = _URL.sub("<URL>", raw.strip())
+        if not line:
+            continue
+        matched = _LABEL.match(line)
+        if matched:
+            label = matched.group(1).strip().lower()
+            shape.labels.append(f"{label}: {mask(matched.group(2)) or '<EMPTY>'}")
+        elif len(shape.lines) < 12:
+            shape.lines.append(mask(line))
+    return shape
+
+
+def probe(
+    session: Session, *, query: str = DEFAULT_QUERY, limit: int = DEFAULT_LIMIT
+) -> list[Shape]:
+    """Log the shape of recent Turo mail. Never raises."""
+    shapes: list[Shape] = []
+    try:
+        client = GmailClient(session)
+        ids = client.search(query, limit=limit)
+        log.info("probe: %d message(s) match %r", len(ids), query)
+        for message_id in ids:
+            shape = shape_of(client.message(message_id))
+            shapes.append(shape)
+            log.info("---- message ----")
+            log.info("  from    : %s", shape.sender)
+            log.info("  subject : %s", shape.subject)
+            for label in shape.labels:
+                log.info("  label   : %s", label)
+            for line in shape.lines:
+                log.info("  line    : %s", line)
+    except GmailError as exc:
+        log.warning("probe failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - diagnostics must not break boot
+        log.warning("probe failed unexpectedly: %s", exc)
+    return shapes

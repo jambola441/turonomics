@@ -135,6 +135,20 @@ pasted `GMAIL_REFRESH_TOKEN`; the handshake exists so that config does not.
 
 Required setup, and the parts that bite:
 
+- **Enable the Gmail API in the project** (`gcloud services enable
+  gmail.googleapis.com`, or the console). Easy to skip, because the whole OAuth
+  flow succeeds without it and fails only at the last step — reading the
+  profile to check the address — with a 403 naming a project *number* rather
+  than saying the API is off:
+
+  ```
+  Gmail API has not been used in project 608263863877 before or it is disabled.
+  ```
+
+  Nothing is left half-connected when this happens: the grant is stored and the
+  address checked in that order, and the store is only committed once the check
+  passes, so the flush is discarded on session close. Enable the API, then
+  connect again.
 - OAuth client type must be **Web application**. A Desktop client only permits
   loopback redirects, so it cannot serve the deployed callback.
 - Redirect URI must be registered exactly:

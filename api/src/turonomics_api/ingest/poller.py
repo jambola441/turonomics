@@ -26,8 +26,18 @@ DEFAULT_INTERVAL_MINUTES = 10
 
 
 def poll_once(session: Session, *, client: BouncieClient | None = None) -> SyncResult:
-    """One cycle: pull current state from Bouncie and re-derive parking from it."""
-    result = sync_vehicles(session, client or BouncieClient(session))
+    """One cycle: pull current state from Bouncie and re-derive parking from it.
+
+    ``create_missing`` is on here. The operator owns the Bouncie account, so
+    fitting a device to a car *is* how they add it to the fleet — and with it
+    off the poll collected the new device into ``unmatched_imeis`` and dropped
+    it, leaving the car invisible until the next deploy with nothing saying
+    why. The cost of being wrong is a row that needs renaming; the cost of the
+    old behaviour was a car nobody could see.
+    """
+    result = sync_vehicles(session, client or BouncieClient(session), create_missing=True)
+    if result.created:
+        log.info("adopted %d new device(s) from the Bouncie account", result.created)
     session.commit()
     return result
 

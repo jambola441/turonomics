@@ -56,6 +56,9 @@ VOCABULARY = frozenset(
     is are was were has have will reminder reminders upcoming today tomorrow
     location address delivery airport day days hour hours am pm
     id number no ref reference code
+    view send reply earn earns earned mileage included miles note
+    profile deposit payment business week once per within three days
+    by about your has have question questions answers common concerns
     """.split()  # noqa: SIM905
 )
 
@@ -77,6 +80,7 @@ _CAPS = re.compile(r"\b[A-Z][a-zA-Z'’]+\b")
 # label "message dana at https" with the URL as its value, and the value
 # would reach the masker already stripped of its scheme — so the URL regex
 # would miss it and the link would survive. Keep URLs on the line path.
+_TOKEN = re.compile(r"<[A-Z]+(?: \\d+w)?>")
 _LABEL = re.compile(r"^\s*([A-Za-z][A-Za-z \t'’&-]{1,40}?)\s*:\s*(.*)$")
 
 
@@ -117,6 +121,39 @@ def mask(text: str) -> str:
     # A run of the same token says no more than one of it, and reads worse.
     out = re.sub(r"(<[A-Z]+>)(?:[\s,.;:/|-]*\1)+", r"\1", out)
     return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
+# More than a couple of words that are neither a token nor part of Turo's own
+# vocabulary means the line is somebody's sentence rather than structure. The
+# first version only asked whether a line contained *any* token, which let
+# "all good, is that the address you want it back at on <NAME>?" through — the
+# token came from masking "Tuesday", and the guest's message rode along with it.
+# In a message notification the prose is the message, so this has to be the
+# default rather than the exception.
+MAX_FREE_WORDS = 2
+
+
+def _is_structure(masked: str) -> bool:
+    free = [
+        word
+        for word in re.findall(r"[A-Za-z][\w'’-]*", _TOKEN.sub(" ", masked))
+        if word.lower() not in VOCABULARY
+    ]
+    return len(free) <= MAX_FREE_WORDS
+
+
+def _label_text(raw: str) -> str:
+    """A label, masked and lowered, with its tokens left intact.
+
+    Masking only the value was not enough: Turo writes "View Jenna's profile:",
+    so the guest's name *is* part of the label. Lowercasing it did not help, and
+    a first name in a retained log is exactly what this module exists to avoid.
+    """
+    masked = mask(raw.strip())
+    lowered = masked.lower()
+    for token in _TOKEN.findall(masked):
+        lowered = lowered.replace(token.lower(), token)
+    return lowered
 
 
 @dataclass
@@ -179,10 +216,12 @@ def shape_of(message: dict[str, Any]) -> Shape:
             continue
         matched = _LABEL.match(line)
         if matched:
-            label = matched.group(1).strip().lower()
-            shape.labels.append(f"{label}: {mask(matched.group(2)) or '<EMPTY>'}")
+            shape.labels.append(
+                f"{_label_text(matched.group(1))}: {mask(matched.group(2)) or '<EMPTY>'}"
+            )
         elif len(shape.lines) < 12:
-            shape.lines.append(mask(line))
+            masked = mask(line)
+            shape.lines.append(masked if _is_structure(masked) else f"<PROSE {len(masked.split())}w>")
     return shape
 
 

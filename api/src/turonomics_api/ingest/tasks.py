@@ -62,6 +62,27 @@ def active_trip(session: Session, vehicle_id: uuid.UUID, *, now: datetime) -> Tr
     )
 
 
+def _retire_stale_move_tasks(session: Session, *, vehicle: Vehicle, keep: uuid.UUID | None) -> None:
+    """Cancel this vehicle's open move tasks except the one for ``keep``.
+
+    ``keep`` is the currently open parking session, if there is one. Everything
+    else is an obligation for a spot the car has left.
+    """
+    query = select(Task).where(
+        Task.vehicle_id == vehicle.id,
+        Task.kind == TaskKind.asp_move,
+        Task.state == TaskState.open,
+    )
+    if keep is not None:
+        query = query.where(Task.source_id != keep)
+    stale = session.scalars(query).all()
+    for task in stale:
+        task.state = TaskState.cancelled
+        task.suppressed_reason = "the car left this spot"
+    if stale:
+        session.flush()
+
+
 def refresh_move_task(
     session: Session,
     *,
@@ -85,23 +106,17 @@ def refresh_move_task(
         .order_by(ParkingSession.started_at.desc())
         .limit(1)
     )
+    # Retire anything left over from a spot the car has left, before any of the
+    # early returns below. A move task is scoped to the parking session that
+    # produced it, so a car that parks somewhere new gets a new session and the
+    # old task is never looked at again — it just stays open, telling the
+    # operator to go and move a car that is no longer there. The run sheet is
+    # only worth trusting if everything on it is still true, and one phantom
+    # task teaches the operator to ignore the real ones.
+    _retire_stale_move_tasks(
+        session, vehicle=vehicle, keep=parking.id if parking is not None else None
+    )
     if parking is None:
-        # The car has driven off, so any surviving move task is an instruction
-        # to go and move a vehicle that is no longer there. Leaving it open was
-        # worse than useless: the run sheet is only trustworthy if everything on
-        # it is still true, and a phantom task teaches the operator to ignore it.
-        stale = session.scalars(
-            select(Task).where(
-                Task.vehicle_id == vehicle.id,
-                Task.kind == TaskKind.asp_move,
-                Task.state == TaskState.open,
-            )
-        ).all()
-        for task in stale:
-            task.state = TaskState.cancelled
-            task.suppressed_reason = "the car left this spot"
-        if stale:
-            session.flush()
         return None
 
     existing = session.scalar(

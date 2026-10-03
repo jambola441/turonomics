@@ -21,6 +21,8 @@ Two ways this differs from the Bouncie client next door, both of which matter:
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -107,8 +109,19 @@ class GmailClient:
 
     # -- token lifecycle ---------------------------------------------------
 
-    def _client(self) -> httpx.Client:
-        return self._http or httpx.Client(timeout=30.0)
+    @contextmanager
+    def _client(self) -> Iterator[httpx.Client]:
+        """Yield a client, closing it only if we made it.
+
+        Closing an injected one would be a lifecycle bug: the caller owns it,
+        and a flow that makes two calls — exchange the code, then read the
+        address — would fail on the second.
+        """
+        if self._http is not None:
+            yield self._http
+            return
+        with httpx.Client(timeout=30.0) as owned:
+            yield owned
 
     def _store(self, payload: dict[str, Any], *, keep_refresh: str | None = None) -> OAuthToken:
         row = self._session.scalar(select(OAuthToken).where(OAuthToken.provider == PROVIDER))

@@ -52,6 +52,14 @@ DbSession = Annotated[Session, Depends(get_session)]
 
 STATE_TTL_SECONDS = 600
 
+# The API and the UI are different hosts: this service answers on
+# turonomics.onrender.com, the fleet page is a static site on
+# turonomics-site.onrender.com. The redirect URI has to be here, because this is
+# where the client secret and the token store live — but landing the operator
+# here after they approve is useless, since the API root is a 404. Send them to
+# the page that shows the result instead.
+DEFAULT_UI_URL = "https://turonomics-site.onrender.com/fleet/"
+
 
 def _state_secret() -> bytes:
     """Keyed on the OAuth client secret, so there is no extra thing to set.
@@ -135,7 +143,8 @@ def callback(
 
     session.commit()
     log.info("Gmail connected for %s", address)
-    return RedirectResponse(os.environ.get("UI_URL", "/") + "?gmail=connected", status_code=302)
+    ui = (os.environ.get("UI_URL") or DEFAULT_UI_URL).rstrip("/")
+    return RedirectResponse(f"{ui}/?gmail=connected", status_code=302)
 
 
 @router.get("/status", response_model=GmailStatus)

@@ -159,6 +159,16 @@ class OAuthToken(Base):
     )
     refresh_count: Mapped[int] = mapped_column(Integer, default=0)
 
+    # A fingerprint of the authorization that produced this grant, so a
+    # re-authorisation actually takes effect. Bouncie consent is per-device:
+    # authorising three cars and later fitting a fourth leaves the fourth
+    # outside the grant, and the fix is to re-authorise and supply the new
+    # code. Without this the stored refresh token keeps working, the new code
+    # is never exchanged, and the new car stays invisible with the operator
+    # believing they fixed it. Hashed rather than stored: knowing whether it
+    # changed is all this needs.
+    grant_fingerprint: Mapped[str | None] = mapped_column(String(64))
+
 
 # ---------------------------------------------------------------------------
 # Fleet

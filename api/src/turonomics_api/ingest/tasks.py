@@ -86,6 +86,22 @@ def refresh_move_task(
         .limit(1)
     )
     if parking is None:
+        # The car has driven off, so any surviving move task is an instruction
+        # to go and move a vehicle that is no longer there. Leaving it open was
+        # worse than useless: the run sheet is only trustworthy if everything on
+        # it is still true, and a phantom task teaches the operator to ignore it.
+        stale = session.scalars(
+            select(Task).where(
+                Task.vehicle_id == vehicle.id,
+                Task.kind == TaskKind.asp_move,
+                Task.state == TaskState.open,
+            )
+        ).all()
+        for task in stale:
+            task.state = TaskState.cancelled
+            task.suppressed_reason = "the car left this spot"
+        if stale:
+            session.flush()
         return None
 
     existing = session.scalar(

@@ -24,14 +24,18 @@ from turonomics_api.db.models import (
     StreetSegmentSide,
     StreetSide,
     Task,
+    TaskKind,
+    TaskState,
     TelemetryEvent,
     Vehicle,
 )
+from turonomics_api.ingest.parking import confirm_side
 from turonomics_api.ingest.poller import (
     DEFAULT_INTERVAL_MINUTES,
     interval_minutes,
     poll_once,
 )
+from turonomics_api.ingest.tasks import refresh_move_task
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL") and not os.environ.get("DATABASE_URL"),
@@ -263,3 +267,35 @@ def test_adopting_is_not_repeated_on_every_poll(session):
     for _ in range(4):
         poll_once(session, client=client)
     assert session.scalar(select(func.count()).select_from(Vehicle)) == 1
+
+
+def test_a_move_task_does_not_outlive_the_spot_it_was_for(session):
+    """Found live: Jimmy still showed an open move task after driving to another
+    county. refresh_move_task returned early when there was no open parking
+    session, leaving the task from the previous one — an instruction to go move
+    a car that is not there. The run sheet is only worth trusting if everything
+    on it is still true.
+    """
+    _bergen(session)
+    v = _jimmy(session)
+    client = FakeBouncie()
+    poll_once(session, client=client)
+
+    ps = session.scalar(select(ParkingSession).where(ParkingSession.vehicle_id == v.id))
+    seg = session.get(StreetSegmentSide, ps.guessed_segment_side_id)
+    confirm_side(session, parking_session=ps, segment_side=seg, confirmed_at=PARKED_AT)
+    refresh_move_task(session, vehicle=v)
+    session.commit()
+    assert session.scalar(
+        select(func.count()).select_from(Task).where(Task.state == TaskState.open)
+    ) == 1
+
+    # Drives off: engine running, so the session closes.
+    later = (PARKED_AT + timedelta(hours=3)).isoformat().replace("+00:00", ".000Z")
+    poll_once(session, client=FakeBouncie(is_running=True, last_updated=later))
+
+    task = session.scalar(select(Task).where(Task.kind == TaskKind.asp_move))
+    assert task.state is TaskState.cancelled
+    assert session.scalar(
+        select(func.count()).select_from(Task).where(Task.state == TaskState.open)
+    ) == 0

@@ -53,9 +53,16 @@ def sync_vehicles(
 ) -> SyncResult:
     """Reconcile the registry against the devices on the account.
 
-    ``create_missing`` is off by default: a device appearing on the account is
-    not by itself proof that the operator wants a new fleet vehicle row, and a
-    vehicle with no device is a first-class case rather than an error.
+    ``create_missing`` is off by default so that a caller reconciling state
+    cannot quietly grow the fleet, and because a vehicle with no device is a
+    first-class case rather than an error. The boot bootstrap and the poll both
+    turn it on: there, a device on the operator's own account is exactly how a
+    car joins the fleet, and the alternative is a car that stays invisible
+    until someone redeploys.
+
+    Callers that leave it off get the unmatched IMEIs back in the result. Drop
+    them silently and a car the operator fitted a tracker to simply never
+    appears, which is indistinguishable from a bug.
     """
     result = SyncResult()
 

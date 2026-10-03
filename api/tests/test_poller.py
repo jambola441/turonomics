@@ -27,7 +27,11 @@ from turonomics_api.db.models import (
     TelemetryEvent,
     Vehicle,
 )
-from turonomics_api.ingest.poller import DEFAULT_INTERVAL_MINUTES, interval_minutes
+from turonomics_api.ingest.poller import (
+    DEFAULT_INTERVAL_MINUTES,
+    interval_minutes,
+    poll_once,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL") and not os.environ.get("DATABASE_URL"),
@@ -219,3 +223,43 @@ def test_the_sync_endpoint_rejects_a_wrong_token(client, monkeypatch):
     assert client.post("/api/sync", headers={"Authorization": "Bearer wrong"}).status_code == 401
     # An empty bearer is not a pass.
     assert client.post("/api/sync", headers={"Authorization": "Bearer "}).status_code == 401
+
+
+def test_a_newly_fitted_tracker_joins_the_fleet_on_the_next_poll(session):
+    """The operator owns the Bouncie account, so fitting a device is how a car
+    joins the fleet. With create_missing off the poll collected the device into
+    unmatched_imeis and dropped it, leaving the car invisible until the next
+    deploy — the same "only updates at boot" failure as the parking clock.
+    """
+    _bergen(session)
+
+    class TwoNewCars(FakeBouncie):
+        def vehicles(self):
+            rows = super().vehicles()
+            for nick, imei, model in (
+                ("Transit", "222222222222222", "Transit"),
+                ("Jerry", "333333333333333", "Corolla"),
+            ):
+                row = dict(rows[0])
+                row["nickName"] = nick
+                row["imei"] = imei
+                row["vin"] = f"VIN-{imei[-3:]}"
+                row["model"] = {"make": "FORD", "name": model, "year": 2024}
+                rows.append(row)
+            return rows
+
+    result = poll_once(session, client=TwoNewCars())
+
+    assert result.created == 3, "every device on the account becomes a vehicle"
+    assert not result.unmatched_imeis, "nothing may be silently dropped"
+    nicknames = {v.nickname for v in session.scalars(select(Vehicle)).all()}
+    assert {"Jimmy", "Transit", "Jerry"} <= nicknames
+
+
+def test_adopting_is_not_repeated_on_every_poll(session):
+    """It runs every ten minutes; a device must become one vehicle, not sixty."""
+    _bergen(session)
+    client = FakeBouncie()
+    for _ in range(4):
+        poll_once(session, client=client)
+    assert session.scalar(select(func.count()).select_from(Vehicle)) == 1

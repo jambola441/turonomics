@@ -204,3 +204,56 @@ def test_status_reports_not_connected_before_anyone_has_connected(api_client):
     body = api_client.get("/api/gmail/status").json()
     assert body["connected"] is False
     assert body["address"] is None
+
+
+def test_a_successful_connect_lands_on_the_ui_not_the_api(session, monkeypatch):
+    """The API and the UI are different hosts. The redirect URI has to be on the
+    API — that is where the client secret and token store are — but the API root
+    is a 404, so defaulting the post-approval redirect to "/" would drop the
+    operator on an error page with no idea whether it worked.
+    """
+    import turonomics_api.routers.gmail as mod
+
+    monkeypatch.delenv("UI_URL", raising=False)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sekrit")
+    monkeypatch.setenv("GMAIL_ADDRESS", "jambola441@gmail.com")
+
+    def handler(request):
+        if "token" in str(request.url):
+            return httpx.Response(
+                200, json={"access_token": "at", "refresh_token": "rt", "expires_in": 3600}
+            )
+        return httpx.Response(200, json={"emailAddress": "jambola441@gmail.com"})
+
+    monkeypatch.setattr(mod, "GmailClient", lambda s, c=None: GmailClient(s, CONFIG, _http(handler)))
+
+    resp = mod.callback(session, code="code", state=mod._sign_state())
+    assert resp.headers["location"].startswith("https://turonomics-site.onrender.com/fleet/")
+    assert "gmail=connected" in resp.headers["location"]
+
+
+def test_the_landing_page_is_overridable(session, monkeypatch):
+    import turonomics_api.routers.gmail as mod
+
+    monkeypatch.setenv("UI_URL", "http://localhost:8080/fleet")
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "sekrit")
+    monkeypatch.delenv("GMAIL_ADDRESS", raising=False)
+
+    def handler(request):
+        if "token" in str(request.url):
+            return httpx.Response(
+                200, json={"access_token": "at", "refresh_token": "rt", "expires_in": 3600}
+            )
+        return httpx.Response(200, json={"emailAddress": "whoever@gmail.com"})
+
+    cfg = GmailConfig(
+        client_id="cid", client_secret="sekrit", redirect_uri=CONFIG.redirect_uri, address=None
+    )
+    monkeypatch.setattr(mod, "GmailClient", lambda s, c=None: GmailClient(s, cfg, _http(handler)))
+    monkeypatch.setattr(mod.GmailConfig, "from_env", classmethod(lambda cls: cfg))
+
+    resp = mod.callback(session, code="code", state=mod._sign_state())
+    # No double slash, whether or not UI_URL has a trailing one.
+    assert resp.headers["location"] == "http://localhost:8080/fleet/?gmail=connected"

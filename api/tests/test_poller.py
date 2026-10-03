@@ -269,6 +269,54 @@ def test_adopting_is_not_repeated_on_every_poll(session):
     assert session.scalar(select(func.count()).select_from(Vehicle)) == 1
 
 
+def test_a_task_does_not_survive_the_car_parking_somewhere_new(session):
+    """Jimmy's actual state in production: a confirmed Bergen St deadline, then
+    driven 100 miles upstate and parked where no rules are loaded.
+
+    A move task is scoped to the parking session that produced it, so the new
+    session means the old task is never looked at again — it stayed open,
+    telling the operator to move a car that was in another county. My first fix
+    only handled the car having no open session at all, which is the rarer case
+    and not this one.
+    """
+    _bergen(session)
+    v = _jimmy(session)
+    poll_once(session, client=FakeBouncie())
+    ps = session.scalar(select(ParkingSession).where(ParkingSession.vehicle_id == v.id))
+    seg = session.get(StreetSegmentSide, ps.guessed_segment_side_id)
+    confirm_side(session, parking_session=ps, segment_side=seg, confirmed_at=PARKED_AT)
+    refresh_move_task(session, vehicle=v)
+    session.commit()
+    old_task_id = session.scalar(select(Task.id))
+    assert old_task_id is not None
+
+    # Straight from parked-here to parked-there, with no running poll in
+    # between. This is the real path and the one that matters: the poll only
+    # ever sees what Bouncie last reported, so a car driven away and parked
+    # between two polls is simply stopped somewhere else next time we look.
+    # open_parking_session closes the old session and opens the new one in the
+    # same call, so refresh_move_task never observes "no open session" — which
+    # is exactly why handling only that case was not enough.
+    class Upstate(FakeBouncie):
+        def vehicles(self):
+            rows = super().vehicles()
+            rows[0]["stats"]["location"] = {"lat": 42.125419, "lon": -73.555721, "heading": 218.0}
+            return rows
+
+    parked_far = (PARKED_AT + timedelta(hours=4)).isoformat().replace("+00:00", ".000Z")
+    poll_once(session, client=Upstate(last_updated=parked_far))
+
+    fresh = session.scalar(
+        select(ParkingSession)
+        .where(ParkingSession.vehicle_id == v.id, ParkingSession.ended_at.is_(None))
+    )
+    assert fresh is not None and fresh.id != ps.id, "a new spot means a new session"
+    assert session.get(Task, old_task_id).state is TaskState.cancelled
+    assert session.scalar(
+        select(func.count()).select_from(Task).where(Task.state == TaskState.open)
+    ) == 0, "no phantom task for a spot 100 miles away"
+
+
 def test_a_move_task_does_not_outlive_the_spot_it_was_for(session):
     """Found live: Jimmy still showed an open move task after driving to another
     county. refresh_move_task returned early when there was no open parking

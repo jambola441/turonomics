@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 
+from turonomics_api.gmail.client import GmailError
 from turonomics_api.gmail.probe import mask, plain_text, shape_of
 
 # A realistic booking notification. Invented, but shaped like the real thing and
@@ -282,3 +283,62 @@ def test_the_default_query_matches_turos_sending_subdomain():
 
     assert "from:turo.com" not in DEFAULT_QUERY, "an apex-only filter misses mail.turo.com"
     assert "from:turo" in DEFAULT_QUERY
+
+
+# ---------------------------------------------------------------------------
+# Surviving the quota, which the first wide run did not
+# ---------------------------------------------------------------------------
+
+
+class _FakeClient:
+    """Stands in for GmailClient. Fails on whichever fetches you nominate."""
+
+    def __init__(self, bodies: list[str], *, fail_at: set[int], error: str):
+        self.bodies = bodies
+        self.fail_at = fail_at
+        self.error = error
+        self.fetched = 0
+
+    def search(self, query: str, *, limit: int = 0) -> list[str]:
+        return [str(i) for i in range(len(self.bodies))]
+
+    def message(self, message_id: str) -> dict:
+        index = int(message_id)
+        self.fetched += 1
+        if index in self.fail_at:
+            raise GmailError(self.error)
+        return _message(self.bodies[index], sender="Turo <x@mail.turo.com>", subject=f"S{index}")
+
+
+def _probe_with(client, monkeypatch):
+    import turonomics_api.gmail.probe as mod
+
+    monkeypatch.setattr(mod, "GmailClient", lambda session: client)
+    monkeypatch.setattr(mod, "SECONDS_BETWEEN_FETCHES", 0)
+    monkeypatch.setattr(mod, "QUOTA_BACKOFF_SECONDS", 0)
+    return mod.probe(None)
+
+
+def test_a_quota_error_does_not_discard_what_was_already_read(monkeypatch):
+    """What happened live: Gmail's per-minute quota tripped after about
+    twenty-five messages, the exception escaped the loop, and because shapes
+    were only logged at the end, every message already read was lost with it.
+    """
+    bodies = [f"Guest: Person{i}\nTotal: ${i}.00\n" for i in range(6)]
+    client = _FakeClient(
+        bodies,
+        fail_at={3},
+        error="GET /users/me/messages/x failed (403): Quota exceeded for quota metric",
+    )
+    shapes = _probe_with(client, monkeypatch)
+
+    assert client.fetched == 6, "the scan must continue past the quota error"
+    assert shapes, "shapes read before the error must survive it"
+
+
+def test_it_gives_up_rather_than_grinding_through_a_broken_mailbox(monkeypatch):
+    """Skipping forever would turn a systemic failure into a slow one."""
+    bodies = [f"Guest: Person{i}\n" for i in range(40)]
+    client = _FakeClient(bodies, fail_at=set(range(40)), error="GET x failed (500): boom")
+    assert _probe_with(client, monkeypatch) == []
+    assert client.fetched < 40, "must stop once failures are clearly systemic"

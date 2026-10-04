@@ -202,7 +202,12 @@ class GmailClient:
                 headers={"Authorization": f"Bearer {self.access_token()}"},
             )
         if resp.status_code != 200:
-            raise GmailError(f"GET {path} failed ({resp.status_code}): {resp.text[:200]}")
+            # Collapse first, then truncate. Google's error bodies are
+            # multi-line JSON, so slicing the raw text put "{" on the log line
+            # and the actual reason — a quota message — on later lines that no
+            # filter was looking at.
+            detail = " ".join(resp.text.split())[:300]
+            raise GmailError(f"GET {path} failed ({resp.status_code}): {detail}")
         result: dict[str, Any] = resp.json()
         return result
 

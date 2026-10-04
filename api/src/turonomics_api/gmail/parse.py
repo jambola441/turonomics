@@ -76,23 +76,43 @@ STATE_FOR_KIND = {
 }
 
 _RESERVATION = re.compile(r"Reservation\s+ID\s*#\s*(\d+)", re.IGNORECASE)
-_BOOKED_BY = re.compile(r"^(?:booked|requested)\s+by\s+(.+)$", re.IGNORECASE | re.MULTILINE)
+_BOOKED_BY = re.compile(r"^[ \t]*(?:booked|requested)\s+by\s+(.+?)[ \t]*$",
+                        re.IGNORECASE | re.MULTILINE)
 _EARNINGS = re.compile(r"You\s+earn:?\s*\$\s?([\d,]+(?:\.\d{2})?)", re.IGNORECASE)
-_LABEL_START = re.compile(r"^Trip\s+start:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
-_LABEL_END = re.compile(r"^Trip\s+end:\s*(.+)$", re.IGNORECASE | re.MULTILINE)
+_LABEL_START = re.compile(r"^[ \t]*Trip\s+start:[ \t]*(.+?)[ \t]*$",
+                          re.IGNORECASE | re.MULTILINE)
+_LABEL_END = re.compile(r"^[ \t]*Trip\s+end:[ \t]*(.+?)[ \t]*$",
+                        re.IGNORECASE | re.MULTILINE)
 
 # "...is booked from Oct 5, 2026, 10:00 AM to Oct 8, 2026, 4:00 PM."
+_STAMP = (
+    r"[A-Z][a-z]{2,8}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s*\d{4},?"
+    r"(?:\s+at)?\s*\d{1,2}(?::\d{2})?\s*[AP]\.?M\.?"
+)
 _RANGE = re.compile(
-    r"from\s+(?P<from>[A-Z][a-z]{2,8}\.?\s+\d{1,2},\s*\d{4},?\s*\d{1,2}:\d{2}\s*[AP]M)"
-    r"\s+to\s+(?P<to>[A-Z][a-z]{2,8}\.?\s+\d{1,2},\s*\d{4},?\s*\d{1,2}:\d{2}\s*[AP]M)",
-    re.IGNORECASE,
+    rf"from\s+(?P<from>{_STAMP})\s+to\s+(?P<to>{_STAMP})", re.IGNORECASE
 )
 
 # A make/model/year line: "Ford Transit 2024", "Toyota 4Runner 2023".
-_VEHICLE_LINE = re.compile(r"^([A-Z][A-Za-z-]+(?:\s+[A-Za-z0-9][\w-]*){1,3})\s+(19|20)\d{2}\s*$",
-                           re.MULTILINE)
+_VEHICLE_LINE = re.compile(
+    r"^[ \t]*([A-Z][A-Za-z-]+(?:\s+[A-Za-z0-9][\w-]*){1,3})\s+(19|20)\d{2}[ \t]*$",
+    re.MULTILINE,
+)
 
 _WITH_YOUR = re.compile(r"with your\s+(.+?)(?:\s+is\b|\s*\(|[.!]|$)", re.IGNORECASE)
+
+
+def _tidy(text: str) -> str:
+    """Normalise a date string enough for strptime.
+
+    Turo writes "Oct 5, 2026, 10:00 AM" in one place and "Oct 5 at 10 AM" in
+    another, and a non-breaking space turns up wherever the HTML had one.
+    """
+    cleaned = text.replace("\u00a0", " ").replace(",", " ")
+    cleaned = re.sub(r"\b(\d{1,2})(?:st|nd|rd|th)\b", r"\1", cleaned)
+    cleaned = re.sub(r"\bat\b", " ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\.", "", cleaned)
+    return " ".join(cleaned.split())
 
 
 class ParseError(ValueError):
@@ -123,8 +143,8 @@ def classify(subject: str) -> str:
 
 
 def _parse_stamp(text: str, tz: ZoneInfo) -> datetime:
-    cleaned = " ".join(text.replace(",", " ").split())
-    for fmt in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p"):
+    cleaned = _tidy(text)
+    for fmt in ("%b %d %Y %I:%M %p", "%B %d %Y %I:%M %p", "%b %d %Y %I %p", "%B %d %Y %I %p"):
         try:
             return datetime.strptime(cleaned, fmt).replace(tzinfo=tz)
         except ValueError:
@@ -139,8 +159,15 @@ def _infer_year(text: str, *, received: datetime, tz: ZoneInfo) -> datetime:
     to the arrival date is right. Trying the same year first and stepping
     forward would put a December email about a January trip in the past.
     """
-    cleaned = " ".join(text.replace(",", " ").split())
-    for fmt in ("%b %d %I:%M %p", "%B %d %I:%M %p", "%b %d %H:%M", "%B %d %H:%M"):
+    cleaned = _tidy(text)
+    for fmt in (
+        "%b %d %I:%M %p",
+        "%B %d %I:%M %p",
+        "%b %d %I %p",
+        "%B %d %I %p",
+        "%b %d %H:%M",
+        "%B %d %H:%M",
+    ):
         try:
             bare = datetime.strptime(cleaned, fmt)
         except ValueError:

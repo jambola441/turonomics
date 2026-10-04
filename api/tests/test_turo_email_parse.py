@@ -210,3 +210,57 @@ def test_times_are_read_in_the_fleet_zone_not_utc():
                        received_at=RECEIVED, fleet_timezone="America/Los_Angeles")
     assert trip.starts_at.utcoffset().total_seconds() == -7 * 3600
     assert trip.assumed_timezone == "America/Los_Angeles"
+
+
+# ---------------------------------------------------------------------------
+# Formatting the live mailbox actually uses
+# ---------------------------------------------------------------------------
+#
+# The first production run rejected all 40 Turo emails in a week with "no trip
+# dates". The parser was written against a fixture typed by hand, which was
+# tidier than the real thing in two ways that both mattered: de-tagged HTML
+# indents its lines, and Turo does not always write minutes.
+
+INDENTED = "\n".join("  " + line for line in BOOKING.splitlines())
+LABELS_ONLY = "\n".join(line for line in BOOKING.splitlines() if "Ka-ching" not in line)
+
+
+@pytest.mark.parametrize(
+    ("name", "body"),
+    [
+        ("indented", INDENTED),
+        ("indented with no prose range", "\n".join("  " + x for x in LABELS_ONLY.splitlines())),
+        ("no minutes", BOOKING.replace("10:00 AM", "10 AM").replace("4:00 PM", "4 PM")),
+        ("'at' before the time", BOOKING.replace(", 10:00 AM", " at 10:00 AM")),
+        ("ordinal day", BOOKING.replace("Oct 5,", "Oct 5th,")),
+        ("non-breaking spaces", BOOKING.replace(" ", " ")),
+        ("lowercase meridiem", BOOKING.replace("AM", "am").replace("PM", "pm")),
+    ],
+)
+def test_real_world_formatting_still_parses(name, body):
+    trip = parse_email(
+        subject="Dana's trip with your Ford Transit is booked!",
+        body=body,
+        received_at=RECEIVED,
+    )
+    assert trip.reservation_id == "12345", name
+    assert trip.starts_at == datetime(2026, 10, 5, 10, 0, tzinfo=ET), name
+    assert trip.ends_at == datetime(2026, 10, 8, 16, 0, tzinfo=ET), name
+
+
+def test_an_indented_label_block_alone_is_enough():
+    """The common case in production: HTML tables indent every line, and a
+    message notification has no prose range to fall back on. Anchoring the
+    label patterns at "^Trip" rejected every one of them."""
+    body = "\n".join("    " + line for line in LABELS_ONLY.splitlines())
+    trip = parse_email(subject="Dana has sent you a message about your Transit",
+                       body=body, received_at=RECEIVED)
+    assert trip.year_was_explicit is False
+    assert trip.starts_at == datetime(2026, 10, 5, 10, 0, tzinfo=ET)
+
+
+def test_the_guest_and_vehicle_survive_indentation_too():
+    trip = parse_email(subject="Dana's trip with your Ford Transit is booked!",
+                       body=INDENTED, received_at=RECEIVED)
+    assert trip.guest_name == "Dana"
+    assert trip.vehicle_text == "Ford Transit 2024"

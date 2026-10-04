@@ -124,6 +124,63 @@ def apply_listings(session: Session, listing_map: dict[str, str]) -> list[str]:
     return changed
 
 
+def parse_tag_map(raw: str) -> dict[str, str]:
+    """``"Jerry=00414500433,Bubba=00414500987"`` -> ``{"jerry": "...", ...}``.
+
+    An EZPass statement bills a tag-read crossing against the tag and nothing
+    else, so without this the common case of a toll cannot be attributed to a
+    car at all. Which tag is in which vehicle is a fact only the operator has,
+    the same shape of problem as which Turo listing is which Corolla.
+    """
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        name, _, tag = pair.partition("=")
+        name, tag = name.strip(), tag.strip()
+        if name and tag:
+            out[name.lower()] = tag
+    return out
+
+
+def apply_tags(session: Session, tag_map: dict[str, str]) -> list[str]:
+    """Bind EZPass transponders to vehicles by nickname. Returns what changed."""
+    changed: list[str] = []
+    if not tag_map:
+        return changed
+
+    held = {v.ezpass_tag: v for v in session.scalars(select(Vehicle)) if v.ezpass_tag}
+    for vehicle in session.scalars(select(Vehicle)):
+        for name in filter(None, (vehicle.nickname, vehicle.bouncie_nickname)):
+            tag = tag_map.get(name.lower())
+            if tag is None:
+                continue
+            if vehicle.ezpass_tag == tag:
+                break
+            holder = held.get(tag)
+            if holder is not None and holder.id != vehicle.id:
+                # A transponder is in one car. Two claiming it would attribute
+                # the same crossing to both, and the unique index would reject
+                # it with a stack trace at boot.
+                log.warning(
+                    "transponder %s already belongs to %s — not binding it to %s",
+                    tag, holder.nickname, vehicle.nickname,
+                )
+                break
+            if vehicle.ezpass_tag is not None:
+                log.info(
+                    "%s already has transponder %s — leaving it",
+                    vehicle.nickname, vehicle.ezpass_tag,
+                )
+                break
+            vehicle.ezpass_tag = tag
+            held[tag] = vehicle
+            changed.append(f"{vehicle.nickname}={tag}")
+            break
+    return changed
+
+
 def apply_plates(session: Session, plate_map: dict[str, str]) -> list[str]:
     """Attach plates to vehicles by nickname. Returns what changed."""
     changed: list[str] = []
@@ -257,6 +314,10 @@ def run_bootstrap() -> int:
             )
             if bound:
                 log.info("turo listings bound: %s", ", ".join(bound))
+
+            tags = apply_tags(session, parse_tag_map(os.environ.get("EZPASS_TAGS", "")))
+            if tags:
+                log.info("ezpass transponders bound: %s", ", ".join(tags))
 
             after = session.scalar(select(func.count()).select_from(Vehicle)) or 0
             log.info("fleet: %d vehicles (was %d)", after, before)

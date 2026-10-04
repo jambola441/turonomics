@@ -89,8 +89,12 @@ def dispatch(
         result.sent += 1
         log.info("alert sent: %s — %s", alert.title, delivery.summary())
 
-    if result.considered or result.sent:
-        log.info("alerts: %s", result.summary())
+    # Logged unconditionally, even when nothing was due. A dispatcher that
+    # reports nothing when it found nothing is indistinguishable from one that
+    # is not running, and this project has already paid for that twice — once
+    # in the poller, once in the mail sync. "No deadlines are close" is an
+    # answer; silence is not.
+    log.info("alerts: %s", result.summary())
     return result
 
 

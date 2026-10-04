@@ -195,6 +195,18 @@ def test_a_done_task_is_not_alerted_on(session, fleet, configured):
     assert dispatch(session, now=NOW, http=_transport()).considered == 0
 
 
+def test_a_quiet_poll_still_says_so(session, fleet, configured, caplog):
+    """"Nothing is due" and "the dispatcher is not running" produce identical
+    output if a quiet poll logs nothing — and the second one is the failure
+    that matters. This project has shipped that bug twice already."""
+    task = session.scalars(select(Task)).one()
+    task.state = TaskState.done
+    session.commit()
+    with caplog.at_level("INFO", logger="turonomics.notify"):
+        dispatch(session, now=NOW, http=_transport())
+    assert "alerts: 0 due" in caplog.text
+
+
 def test_the_record_points_at_the_task_so_an_alert_can_be_traced_back(
     session, fleet, configured
 ):

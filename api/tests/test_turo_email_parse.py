@@ -343,3 +343,55 @@ def test_a_trailing_carriage_return_does_not_defeat_the_parse():
     trip = parse_email(subject="Dana has sent you a message about your Transit",
                        body=body, received_at=datetime(2026, 10, 4, tzinfo=UTC))
     assert trip.starts_at == datetime(2026, 10, 2, 8, 0, tzinfo=ET)
+
+
+# ---------------------------------------------------------------------------
+# The link behind the car's photo
+# ---------------------------------------------------------------------------
+
+# The shape the probe found on every trip-bearing email, with an invented id.
+COROLLA_LISTING = (
+    "https://turo.com/us/en/car-rental/united-states/brooklyn-ny/toyota/corolla/12345678"
+)
+
+BOOKING_HTML = f"""\
+<html><body>
+  <a href="https://turo.com/us/en/drivers/9876543"><img alt="Dana" src="g.jpg"></a>
+  <p>Ka-ching! Dana's trip with your Toyota Corolla is booked from Oct 5, 2026, 10:00 AM
+     to Oct 8, 2026, 4:00 PM.</p>
+  <a href="{COROLLA_LISTING}"><img alt="Toyota Corolla" src="car.jpg"></a>
+  <a href="https://turo.com/us/en/reservation/12345/messages">Reply</a>
+  <p>Reservation ID #12345</p>
+</body></html>
+"""
+
+
+def test_the_listing_id_comes_through_when_the_markup_is_passed():
+    parsed = parse_email(
+        subject="Dana's trip with your Toyota Corolla is booked!",
+        body=BOOKING,
+        received_at=RECEIVED,
+        html=BOOKING_HTML,
+    )
+    assert parsed.turo_listing_id == "12345678"
+
+
+def test_a_message_without_markup_still_parses():
+    """Markup is optional. A parser that required it would reject the text/plain
+    alternative Turo also sends, which is the body everything else reads."""
+    parsed = parse_email(subject="Dana's trip is booked!", body=BOOKING, received_at=RECEIVED)
+    assert parsed.turo_listing_id is None
+    assert parsed.reservation_id == "12345"
+
+
+def test_the_guest_profile_link_is_not_mistaken_for_the_car():
+    """Both are turo.com links ending in digits, and the guest's comes first in
+    the markup. Taking the first would attach every trip to one vehicle."""
+    parsed = parse_email(
+        subject="Dana's trip is booked!",
+        body=BOOKING,
+        received_at=RECEIVED,
+        html=BOOKING_HTML,
+    )
+    assert parsed.turo_listing_id == "12345678"
+    assert parsed.turo_listing_id != "9876543"

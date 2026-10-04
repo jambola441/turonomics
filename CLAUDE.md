@@ -20,15 +20,24 @@ are noise, and the second one hid a real `--strict` failure that reached CI.
 
 ## Postgres
 
-The local cluster does not survive between sessions. Start it before the
-tests touch the database:
+The local cluster does not survive between sessions, and half the suite gates
+on an environment variable rather than on whether the cluster is reachable.
+Both are needed, every time:
 
 ```sh
 pg_isready -q || pg_ctlcluster 16 main start
+export TEST_DATABASE_URL="postgresql+psycopg://postgres:devpass@127.0.0.1:5432/turonomics_test"
+cd api && python3 -m pytest -q      # 397 passed, 0 skipped
 ```
 
-Tests that need it skip rather than fail when it is down, so a run reporting
-"135 skipped" means the database is not up, not that all is well.
+**A clean run has no skips.** An earlier version of this note said a run
+reporting "135 skipped" meant the database was down; it did not. The database
+was up and `TEST_DATABASE_URL` was unset, so `tests/test_trip_ingest.py` and
+everything like it never ran at all — through a whole session of changes to
+exactly that code. CI sets the variable, so CI was the only thing running them.
+
+If pytest reports any number of skips, stop and fix the environment before
+reading the result as a pass.
 
 ## Mutation-test anything that masks or derives
 

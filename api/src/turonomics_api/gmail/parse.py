@@ -26,6 +26,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from turonomics_api.db.models import TripState
+from turonomics_api.gmail.links import listing_id
 
 # What kind of event the email reports. The subject is what distinguishes them;
 # the body block is near-identical across the trip-bearing ones.
@@ -131,6 +132,10 @@ class ParsedTrip:
     ends_at: datetime
     state: TripState
     vehicle_text: str | None
+    # Turo's listing id, from the link behind the car's photo. Present on every
+    # trip-bearing email type; None when the message was plain text or linked
+    # more than one car. This is what resolves two cars of the same model.
+    turo_listing_id: str | None
     earnings_cents: int | None
     # True when the year came from the prose range rather than being inferred.
     year_was_explicit: bool
@@ -216,8 +221,15 @@ def parse_email(
     body: str,
     received_at: datetime,
     fleet_timezone: str = "America/New_York",
+    html: str | None = None,
 ) -> ParsedTrip:
-    """Parse one Turo notification. Raises ParseError when it carries no trip."""
+    """Parse one Turo notification. Raises ParseError when it carries no trip.
+
+    ``html`` is the raw markup, if the message had any. The body text alone
+    names the car as "Toyota Corolla 2025", which is not an identifier; the
+    link behind the car's photo is. Optional because a plain-text message still
+    parses — it just falls back to matching on words.
+    """
     kind = classify(subject)
     if kind not in TRIP_BEARING:
         raise ParseError(f"{kind} emails carry no trip record")
@@ -282,6 +294,7 @@ def parse_email(
         ends_at=ends_at,
         state=STATE_FOR_KIND[kind],
         vehicle_text=vehicle_text,
+        turo_listing_id=listing_id(html) if html else None,
         earnings_cents=(
             int(round(float(earnings.group(1).replace(",", "")) * 100)) if earnings else None
         ),

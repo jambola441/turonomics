@@ -44,19 +44,43 @@ def _tokens(text: str) -> set[str]:
     return {word.lower() for word in text.replace("-", " ").split() if len(word) > 1}
 
 
-def match_vehicle(session: Session, vehicle_text: str | None) -> Vehicle | None:
-    """Find the fleet vehicle a Turo vehicle string refers to.
+def match_vehicle(
+    session: Session, vehicle_text: str | None, *, listing_id: str | None = None
+) -> Vehicle | None:
+    """Find the fleet vehicle a Turo email refers to.
 
-    Scored on shared words rather than exact equality: Turo says "Ford Transit
-    2024" where the registry holds make "Ford", model "Transit", year 2024, and
-    the subject line sometimes says only "Transit".
+    Two routes, in order of how much they can be trusted:
 
-    Returns None when nothing matches *or* when two vehicles tie. A tie means
-    two cars of the same make and model, which this fleet has — two Corollas —
-    and picking either would be a coin flip with a street-cleaning alert riding
-    on it.
+    1. **The listing id**, read from the link behind the car's photo. Turo's own
+       identifier for the car, so this is a lookup rather than a guess.
+    2. **The vehicle text**, scored on shared words. Turo says "Ford Transit
+       2024" where the registry holds make "Ford", model "Transit", year 2024,
+       and the subject line sometimes says only "Transit".
+
+    Returns None when nothing matches *or* when two vehicles tie on words. A tie
+    means two cars of the same make and model, which this fleet has — two
+    Corollas — and picking either would be a coin flip with a street-cleaning
+    alert riding on it. Before the listing id existed that dropped half the
+    mailbox; it is still the right answer when the id is absent.
+
+    An unambiguous word match *teaches* the id, so a car with a distinctive
+    model binds itself on the first email and never needs the fuzzy path again.
     """
+    if listing_id:
+        known = session.scalar(
+            select(Vehicle).where(Vehicle.turo_listing_id == listing_id)
+        )
+        if known is not None:
+            return known
+
     if not vehicle_text:
+        if listing_id:
+            log.info(
+                "trip links Turo listing %s, which no fleet vehicle claims — "
+                "bind it with `cli set <vehicle> --turo-listing %s`",
+                listing_id,
+                listing_id,
+            )
         return None
     wanted = _tokens(vehicle_text)
     if not wanted:
@@ -86,10 +110,42 @@ def match_vehicle(session: Session, vehicle_text: str | None) -> Vehicle | None:
     scored.sort(key=lambda pair: -pair[0])
     best = scored[0][0]
     if sum(1 for score, _ in scored if score == best) > 1:
-        log.info("vehicle %r matches more than one car equally well — leaving unmatched",
-                 vehicle_text)
+        # The log names the listing id when there is one, because that is the
+        # single fact that resolves this permanently. Unmasked deliberately:
+        # it is the operator's own listing, visible in the URL of their own
+        # Turo page, and a log that says "ambiguous" without saying which
+        # listing is a log you cannot act on.
+        if listing_id:
+            log.info(
+                "vehicle %r matches more than one car equally well — Turo listing %s "
+                "is unclaimed; bind it with `cli set <vehicle> --turo-listing %s`",
+                vehicle_text,
+                listing_id,
+                listing_id,
+            )
+        else:
+            log.info(
+                "vehicle %r matches more than one car equally well and the email "
+                "carried no car link — leaving unmatched",
+                vehicle_text,
+            )
         return None
-    return scored[0][1]
+
+    matched = scored[0][1]
+    if listing_id and matched.turo_listing_id is None:
+        # Learned, not assumed: reached only when the words picked out exactly
+        # one car.
+        #
+        # No "is this listing already taken" check here, because it could never
+        # fire: the lookup at the top of this function returns early for any
+        # listing a vehicle already claims, so by this line nothing holds it.
+        # A first draft had that guard, with a comment explaining what it
+        # protected against; mutation testing showed it was unreachable. Dead
+        # code that claims to be a safety net is worse than no safety net,
+        # because the next reader believes it.
+        matched.turo_listing_id = listing_id
+        log.info("learned Turo listing %s for %s", listing_id, matched.nickname)
+    return matched
 
 
 def apply_parsed_trip(
@@ -107,7 +163,7 @@ def apply_parsed_trip(
         select(Trip).where(Trip.turo_trip_id == parsed.reservation_id)
     )
 
-    vehicle = match_vehicle(session, parsed.vehicle_text)
+    vehicle = match_vehicle(session, parsed.vehicle_text, listing_id=parsed.turo_listing_id)
     if existing is None and vehicle is None:
         return None
 

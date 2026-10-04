@@ -25,7 +25,12 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.models import Trip, Vehicle
 from turonomics_api.gmail.client import GmailClient, GmailError
 from turonomics_api.gmail.parse import TRIP_BEARING, ParseError, classify, parse_email
-from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text, shape_of
+from turonomics_api.gmail.probe import (
+    SECONDS_BETWEEN_FETCHES,
+    html_of,
+    plain_text,
+    shape_of,
+)
 from turonomics_api.ingest.tasks import refresh_move_task
 from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
 from turonomics_api.ingest.turnaround import refresh_turnaround_tasks
@@ -102,6 +107,10 @@ def sync_trips_from_mail(
                 body=plain_text(payload),
                 received_at=_received_at(message, now),
                 fleet_timezone=str(fleet_timezone()),
+                # The markup as well as the text: plain_text() de-tags it, and
+                # the href behind the car's photo is the only thing in a Turo
+                # email that identifies the car rather than describing it.
+                html=html_of(payload),
             )
         except ParseError as exc:
             # Most Turo mail genuinely is not a trip — payouts, marketing,

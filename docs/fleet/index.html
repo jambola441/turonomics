@@ -34,6 +34,11 @@
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:#101317}
   .leaflet-container{background:#101317;font-family:inherit}
+  /* Darken the basemap itself, not the map. The filter is on the tile pane
+     alone so vehicle markers, the deadline ring and the controls keep their
+     real colours — inverting the whole container would turn the red
+     must-move marker cyan, which is worse than a light map. */
+  .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   /* Leaflet's controls ship light and glare against a dark map. */
   .leaflet-control-attribution{
     background:rgba(13,15,18,.82)!important;color:var(--dim)!important;
@@ -474,9 +479,17 @@
     map = L.map("map", { zoomControl: false, attributionControl: true })
            .setView([40.6795, -73.9705], 15);
     L.control.zoom({ position: "bottomright" }).addTo(map);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap &copy; CARTO",
-      subdomains: "abcd", maxZoom: 20,
+    // OpenStreetMap's own tiles, darkened in CSS rather than fetched dark.
+    //
+    // Carto's dark basemap now answers anonymous requests with a tile that
+    // says "API KEY REQUIRED" across it — and serves it as HTTP 200, so the
+    // map silently looked wrong and no status check could tell. Rather than
+    // take on a key that can lapse and fail the same invisible way, this uses
+    // tiles that need no account and inverts them. Same look, nothing to
+    // expire.
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19,
     }).addTo(map);
   } catch (e) {
     map = null;

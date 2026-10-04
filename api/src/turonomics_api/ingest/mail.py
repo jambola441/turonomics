@@ -16,6 +16,7 @@ import logging
 import os
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -41,12 +42,71 @@ log = logging.getLogger("turonomics.ingest.mail")
 DEFAULT_QUERY = "from:turo newer_than:7d"
 DEFAULT_LIMIT = 40
 
+# Widening TURO_MAIL_QUERY without raising this does nothing: the search caps
+# at the limit and returns the *newest* matches, which are the ones already
+# ingested. Backfilling six months with the cap left at 40 reads the same forty
+# messages again and reports success.
+LIMIT_ENV = "TURO_MAIL_LIMIT"
+
+# Gmail bills per-minute query-cost units per user, and a backfill is the only
+# thing here that goes near them — the routine seven-day poll is forty
+# messages. Pausing and retrying the same message beats skipping it, because a
+# skipped message in a backfill is a trip that is simply never recorded.
+QUOTA_BACKOFF_SECONDS = 20.0
+MAX_QUOTA_PAUSES = 6
+
 
 def _header(payload: dict[str, Any], name: str) -> str:
     for item in payload.get("headers") or []:
         if item.get("name", "").lower() == name.lower():
             return str(item.get("value", ""))
     return ""
+
+
+def _limit_from_env() -> int:
+    raw = os.environ.get(LIMIT_ENV, "").strip()
+    if not raw:
+        return DEFAULT_LIMIT
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        log.warning("%s=%r is not a number — using the default", LIMIT_ENV, raw)
+        return DEFAULT_LIMIT
+
+
+@dataclass
+class _Quota:
+    """How many times this run has already paused for Gmail's rate limit."""
+
+    pauses: int = 0
+
+
+def _fetch(gmail: GmailClient, message_id: str, quota: _Quota) -> dict[str, Any] | None:
+    """One message, with a pause and a retry when the quota is the reason.
+
+    Retrying the same message rather than moving on, because a message skipped
+    during a backfill is a trip that is never recorded — the sync only looks
+    forward, so nothing comes back for it later.
+    """
+    try:
+        return gmail.message(message_id)
+    except GmailError as exc:
+        if "quota" not in str(exc).lower() or quota.pauses >= MAX_QUOTA_PAUSES:
+            log.warning("skipping a message: %s", exc)
+            return None
+        quota.pauses += 1
+        log.warning(
+            "gmail quota hit; pausing %.0fs and retrying (%d/%d)",
+            QUOTA_BACKOFF_SECONDS,
+            quota.pauses,
+            MAX_QUOTA_PAUSES,
+        )
+        time.sleep(QUOTA_BACKOFF_SECONDS)
+    try:
+        return gmail.message(message_id)
+    except GmailError as exc:
+        log.warning("still failing after a quota pause: %s", exc)
+        return None
 
 
 def _received_at(payload: dict[str, Any], fallback: datetime) -> datetime:
@@ -72,7 +132,7 @@ def sync_trips_from_mail(
     now = now or datetime.now(UTC)
     result = TripSyncResult()
     query = query or os.environ.get("TURO_MAIL_QUERY", "").strip() or DEFAULT_QUERY
-    limit = limit or DEFAULT_LIMIT
+    limit = limit or _limit_from_env()
 
     try:
         gmail = client or GmailClient(session)
@@ -89,13 +149,12 @@ def sync_trips_from_mail(
     unreadable = 0
     first_skipped: str | None = None
     first_shape: object | None = None
+    quota = _Quota()
     for index, message_id in enumerate(ids):
         if index:
             time.sleep(SECONDS_BETWEEN_FETCHES)
-        try:
-            message = gmail.message(message_id)
-        except GmailError as exc:
-            log.warning("skipping a message: %s", exc)
+        message = _fetch(gmail, message_id, quota)
+        if message is None:
             unreadable += 1
             continue
         scanned += 1
@@ -165,6 +224,8 @@ def sync_trips_from_mail(
         not_a_trip,
         unreadable,
     )
+    if quota.pauses:
+        log.info("gmail quota paused this run %d time(s)", quota.pauses)
     if first_skipped and not (result.created or result.updated):
         # Nothing landed, so the first rejection is the most useful clue there
         # is. Only the classification and the reason — no subject text.

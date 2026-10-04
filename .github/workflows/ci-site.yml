@@ -1,0 +1,63 @@
+# The fleet view had no CI at all. ci-api.yml is filtered to api/**, and
+# ci-extension.yml to extension/**, so every change to the page the operator
+# actually looks at went in unchecked — map centring, alerts, guest notes, the
+# task list, the spot suggestions. All of it was verified by a person loading
+# the page and clicking, which does not scale and does not run on a pull
+# request.
+name: Site CI
+
+on:
+  push:
+    paths:
+      - "docs/**"
+      - "site-tests/**"
+      - ".github/workflows/ci-site.yml"
+  pull_request:
+    paths:
+      - "docs/**"
+      - "site-tests/**"
+      - ".github/workflows/ci-site.yml"
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Cheap and first: a syntax error in the inline script blanks the whole
+      # page, and catching it here takes a second rather than a browser.
+      - name: Parse the page's JavaScript
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, subprocess, sys, tempfile
+          page = pathlib.Path("docs/fleet/index.html").read_text()
+          match = re.search(r"<script>\n(\(function.*?)\n</script>", page, re.S)
+          if not match:
+              sys.exit("could not find the inline script in docs/fleet/index.html")
+          with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as handle:
+              handle.write(match.group(1))
+              path = handle.name
+          subprocess.run(["node", "--check", path], check=True)
+          subprocess.run(["node", "--check", "docs/fleet/sw.js"], check=True)
+          print("inline script and service worker parse")
+          PY
+
+      - name: Check the web manifest is valid JSON
+        run: python3 -c "import json;json.load(open('docs/fleet/manifest.webmanifest'))"
+
+      - name: Install Playwright
+        run: |
+          pip install playwright
+          playwright install --with-deps chromium
+
+      - name: Render the page and drive it
+        run: python3 site-tests/smoke.py

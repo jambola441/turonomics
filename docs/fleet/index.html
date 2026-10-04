@@ -34,6 +34,11 @@
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:#101317}
   .leaflet-container{background:#101317;font-family:inherit}
+  /* Darken the basemap itself, not the map. The filter is on the tile pane
+     alone so vehicle markers, the deadline ring and the controls keep their
+     real colours — inverting the whole container would turn the red
+     must-move marker cyan, which is worse than a light map. */
+  body.invert-tiles .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   /* Leaflet's controls ship light and glare against a dark map. */
   .leaflet-control-attribution{
     background:rgba(13,15,18,.82)!important;color:var(--dim)!important;
@@ -129,7 +134,7 @@
     var meta = document.querySelector('meta[name="turonomics-api"]');
     return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
   })();
-  var map, markers = {}, fleet = null, selectedId = null;
+  var map, markers = {}, fleet = null, selectedId = null, tilesAdded = false;
 
   function initials(name) {
     var parts = String(name || "?").trim().split(/[\s·—-]+/).filter(Boolean);
@@ -455,6 +460,7 @@
       .then(function (data) {
         document.getElementById("err").hidden = true;
         fleet = data;
+        addTiles(data.map_tiles);
         render();
       })
       .catch(function (e) {
@@ -474,10 +480,12 @@
     map = L.map("map", { zoomControl: false, attributionControl: true })
            .setView([40.6795, -73.9705], 15);
     L.control.zoom({ position: "bottomright" }).addTo(map);
-    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
-      attribution: "&copy; OpenStreetMap &copy; CARTO",
-      subdomains: "abcd", maxZoom: 20,
-    }).addTo(map);
+    // The basemap is chosen by the API, not hard-coded here: Thunderforest
+    // when a key is configured, OpenStreetMap otherwise. The key is public by
+    // necessity — any browser map key is — so serving it keeps it in one place
+    // rather than committed to this file.
+    //
+    // Added once the first fleet response arrives, in addTiles() below.
   } catch (e) {
     map = null;
     var el = document.getElementById("map");
@@ -491,6 +499,36 @@
     el.textContent = "Map unavailable offline — positions are listed below.";
     if (fleet) render();
   }
+  // A lapsed or wrong key is the failure worth designing for. Thunderforest
+  // answers an invalid key with 401 rather than a plausible-looking tile, so
+  // unlike Carto it is detectable — and the honest response to a basemap that
+  // will not load is to fall back to one that will, and say so, rather than
+  // leave the operator looking at an empty grey rectangle wondering whether
+  // their cars are missing or the map is.
+  function addTiles(cfg) {
+    if (!map || tilesAdded) return;
+    tilesAdded = true;
+    document.body.classList.toggle("invert-tiles", !!(cfg && cfg.invert));
+    var url = (cfg && cfg.url) || "https://tile.openstreetmap.org/{z}/{x}/{y}.png";
+    var layer = L.tileLayer(url, {
+      attribution: (cfg && cfg.attribution) || "&copy; OpenStreetMap contributors",
+      maxZoom: (cfg && cfg.max_zoom) || 19,
+    });
+    var failures = 0;
+    layer.on("tileerror", function () {
+      failures += 1;
+      // One failure is a dropped request; several is the provider refusing.
+      if (failures !== 4 || url.indexOf("openstreetmap.org") !== -1) return;
+      map.removeLayer(layer);
+      document.body.classList.add("invert-tiles");
+      L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        attribution: "&copy; OpenStreetMap contributors — basemap key rejected",
+        maxZoom: 19,
+      }).addTo(map);
+    });
+    layer.addTo(map);
+  }
+
   // Telemetry only changes when a car moves, so this is a gentle refresh, not a poll.
   setInterval(load, 60000);
 })();

@@ -34,6 +34,9 @@
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:#101317}
   .leaflet-container{background:#101317;font-family:inherit}
+  .name[data-focus]{cursor:pointer}
+  .name[data-focus]:hover{text-decoration:underline;text-underline-offset:3px}
+  .chip{cursor:pointer}
   /* Off unless MAP_INVERT is set. When it is on, the filter goes on the tile
      pane alone so vehicle markers, the deadline ring and the controls keep
      their real colours — inverting the whole container would turn the red
@@ -294,6 +297,24 @@
     renderSheet();
   }
 
+
+  // Selecting a car moves the map to it. The fleet is spread across three
+  // states on a bad week, so "which one am I looking at" is a real question —
+  // and panning there is cheaper than reading coordinates off the sheet.
+  function focusVehicle(id) {
+    selectedId = id;
+    render();
+    if (!map) return;
+    var v = (fleet.vehicles.filter(function (x) { return x.id === id; })[0]) || null;
+    if (!v || !v.position) return;
+    // Zoom in if we are further out than street level, but never zoom *out* —
+    // someone who has deliberately zoomed to a block should keep that.
+    var zoom = Math.max(map.getZoom(), 16);
+    map.flyTo([v.position.lat, v.position.lon], zoom, { duration: 0.6 });
+    // The one-time auto-fit must not undo a deliberate move.
+    map._fitted = true;
+  }
+
   function renderSheet() {
     var body = document.getElementById("sheet-body");
     if (!fleet.vehicles.length) {
@@ -392,7 +413,8 @@
       '<div class="chips">' + chips + "</div>" +
       '<div class="row" style="align-items:flex-start">' +
         '<div style="display:flex;flex-direction:column;gap:4px;min-width:0">' +
-          '<div class="name">' + esc(v.nickname) + "</div>" +
+          '<div class="name"' + (v.position ? ' data-focus="' + v.id + '" title="Centre the map here"' : "") +
+            ">" + esc(v.nickname) + "</div>" +
           '<div class="where">' + where + "</div>" +
         "</div>" +
         (v.plate ? '<div class="plate">' + esc(v.plate) + "</div>" : "") +
@@ -400,7 +422,11 @@
       '<div class="stats">' + stats + "</div>" + note;
 
     Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
-      el.addEventListener("click", function () { selectedId = el.dataset.id; render(); });
+      el.addEventListener("click", function () { focusVehicle(el.dataset.id); });
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll("[data-focus]"), function (el) {
+      el.addEventListener("click", function () { focusVehicle(el.dataset.focus); });
     });
 
     Array.prototype.forEach.call(body.querySelectorAll(".side"), function (el) {

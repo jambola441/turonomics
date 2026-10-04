@@ -108,7 +108,10 @@ def _tidy(text: str) -> str:
     Turo writes "Oct 5, 2026, 10:00 AM" in one place and "Oct 5 at 10 AM" in
     another, and a non-breaking space turns up wherever the HTML had one.
     """
-    cleaned = text.replace("\u00a0", " ").replace(",", " ")
+    # U+202F (narrow no-break space) is what Turo puts before AM/PM; U+00A0 and
+    # U+2009 turn up elsewhere, and \r survives CRLF line endings because "$"
+    # in multiline mode matches before the \n, not before the \r.
+    cleaned = re.sub(r"[\u00a0\u2009\u202f\r]", " ", text).replace(",", " ")
     cleaned = re.sub(r"\b(\d{1,2})(?:st|nd|rd|th)\b", r"\1", cleaned)
     cleaned = re.sub(r"\bat\b", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\.", "", cleaned)
@@ -152,22 +155,49 @@ def _parse_stamp(text: str, tz: ZoneInfo) -> datetime:
     raise ParseError(f"unparseable timestamp: {text!r}")
 
 
-def _infer_year(text: str, *, received: datetime, tz: ZoneInfo) -> datetime:
-    """A label date with no year, resolved against when the email arrived.
+# Label dates that carry their own year. The live mailbox writes "10/2/26 8:00 AM"
+# — numeric, two-digit year — which the first version of this did not expect at
+# all, having been written against a hand-typed "Oct 5 10:00 AM".
+_DATED_FORMATS = (
+    "%m/%d/%y %I:%M %p",
+    "%m/%d/%Y %I:%M %p",
+    "%m/%d/%y %I %p",
+    "%m/%d/%Y %I %p",
+    "%m/%d/%y %H:%M",
+    "%m/%d/%Y %H:%M",
+    "%b %d %Y %I:%M %p",
+    "%B %d %Y %I:%M %p",
+)
 
-    Turo sends these days or weeks ahead, never years, so the nearest candidate
-    to the arrival date is right. Trying the same year first and stepping
-    forward would put a December email about a January trip in the past.
+# Label dates that do not, and have to be placed against the email's arrival.
+_UNDATED_FORMATS = (
+    "%b %d %I:%M %p",
+    "%B %d %I:%M %p",
+    "%b %d %I %p",
+    "%B %d %I %p",
+    "%b %d %H:%M",
+    "%B %d %H:%M",
+)
+
+
+def _parse_label(text: str, *, received: datetime, tz: ZoneInfo) -> tuple[datetime, bool]:
+    """A ``Trip start:`` value, and whether it told us the year itself.
+
+    Year-bearing formats are tried first, because a year that was stated beats
+    one that was deduced — and the live mailbox does state it.
+
+    When it does not, the nearest candidate to the email's arrival wins. Turo
+    sends these days or weeks ahead, never years, so trying the arrival year
+    first and stepping forward would put a December email about a January trip
+    eleven months in the past.
     """
     cleaned = _tidy(text)
-    for fmt in (
-        "%b %d %I:%M %p",
-        "%B %d %I:%M %p",
-        "%b %d %I %p",
-        "%B %d %I %p",
-        "%b %d %H:%M",
-        "%B %d %H:%M",
-    ):
+    for fmt in _DATED_FORMATS:
+        try:
+            return datetime.strptime(cleaned, fmt).replace(tzinfo=tz), True
+        except ValueError:
+            continue
+    for fmt in _UNDATED_FORMATS:
         try:
             bare = datetime.strptime(cleaned, fmt)
         except ValueError:
@@ -176,7 +206,7 @@ def _infer_year(text: str, *, received: datetime, tz: ZoneInfo) -> datetime:
             bare.replace(year=year, tzinfo=tz)
             for year in (received.year - 1, received.year, received.year + 1)
         ]
-        return min(candidates, key=lambda when: abs(when - received))
+        return min(candidates, key=lambda when: abs(when - received)), False
     raise ParseError(f"unparseable label date: {text!r}")
 
 
@@ -191,6 +221,12 @@ def parse_email(
     kind = classify(subject)
     if kind not in TRIP_BEARING:
         raise ParseError(f"{kind} emails carry no trip record")
+
+    # Normalise line endings once rather than teaching every line-anchored
+    # pattern about \r. "$" in multiline mode matches before the \n, so on CRLF
+    # mail every captured value keeps a trailing carriage return — which is
+    # invisible in a log and rejected by strptime.
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
 
     reservation = _RESERVATION.search(body)
     if not reservation:
@@ -210,9 +246,11 @@ def parse_email(
         end_label = _LABEL_END.search(body)
         if not (start_label and end_label):
             raise ParseError("no trip dates")
-        starts_at = _infer_year(start_label.group(1), received=received_at, tz=tz)
-        ends_at = _infer_year(end_label.group(1), received=received_at, tz=tz)
-        year_was_explicit = False
+        starts_at, start_dated = _parse_label(
+            start_label.group(1), received=received_at, tz=tz
+        )
+        ends_at, end_dated = _parse_label(end_label.group(1), received=received_at, tz=tz)
+        year_was_explicit = start_dated and end_dated
 
     if ends_at <= starts_at:
         # A trip crossing New Year with inferred years lands here: the end was

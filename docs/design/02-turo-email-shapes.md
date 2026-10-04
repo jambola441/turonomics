@@ -10,10 +10,31 @@ looked like findings. `from:turo.com` did not match Turo's sending subdomain
 itself as "12 message(s) match", which read like a total. The conclusion drawn
 then — that no booking email existed — was an artefact of both.
 
-## The trip lifecycle is fully covered by email
+## The trip lifecycle is fully covered by email — for reading
 
-This is the important finding. Turo emails every state change, so trips can be
-tracked end to end without the browser extension:
+Turo emails every state change, so the full lifecycle can be *observed* from
+mail alone. That makes email a complete ingress rather than the backstop D2
+assumed, and it works with no browser open, which the extension never could.
+
+**It changes nothing about writing.** The extension still holds the only
+authenticated Turo session, so every action taken *in reply* to one of these
+emails goes through it:
+
+| Email tells you | Acting on it needs the extension |
+|---|---|
+| A guest sent a message | Replying to them |
+| A guest requested a change | Approving or declining it |
+| A guest's licence is unconfirmed | Confirming it |
+| A trip needs cancelling from your side | Cancelling it |
+| Earnings look wrong for a listing | Changing price or availability |
+
+So the two halves are complements, not alternatives: email is how the app
+learns there is something to do, and the extension is how the operator does it.
+D2's "only write path" stands unchanged. An earlier version of this file said
+this finding meant the extension was not needed for trip sync, which was true
+only for the read half and misleading as written.
+
+The observable lifecycle:
 
 | Event | Subject template |
 |---|---|

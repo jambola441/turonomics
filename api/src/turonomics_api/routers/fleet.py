@@ -27,7 +27,7 @@ from turonomics_api.db.models import (
 )
 from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
-from turonomics_api.settings import fleet_timezone
+from turonomics_api.settings import fleet_timezone, map_tiles
 
 router = APIRouter(prefix="/api", tags=["fleet"])
 
@@ -94,6 +94,7 @@ class FleetResponse(BaseModel):
     # says 11:30am in Brooklyn whoever is reading the screen and wherever they
     # are standing.
     fleet_timezone: str
+    map_tiles: dict[str, object]
 
 
 def _latest_located_event(session: Session, vehicle_id: uuid.UUID) -> TelemetryEvent | None:
@@ -241,6 +242,7 @@ def get_fleet(session: DbSession) -> FleetResponse:
         vehicles=states,
         untracked_count=untracked,
         fleet_timezone=str(fleet_timezone()),
+        map_tiles=map_tiles(),
     )
 
 

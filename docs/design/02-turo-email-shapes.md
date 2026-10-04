@@ -1,87 +1,92 @@
 # Turo notification email shapes
 
-Observed by running the probe (`GMAIL_PROBE=true`) against the real mailbox on
-2026-10-03, with `from:turo.com newer_than:180d` capped at the 12 newest.
+Observed by running the probe against the real mailbox, 2026-10-04, with
+`from:turo newer_than:365d`. Over 150 messages; 26+ distinct shapes. Every
+value below is a type token — no values were read or logged.
 
-**That first run was wrong twice, and this file is incomplete because of it.**
-Turo sends booking mail from `noreply@mail.turo.com`, and Gmail did not match
-that subdomain against `turo.com` — so every booking email was excluded. The cap
-compounded it: the log said "12 message(s) match", which was the cap being hit
-rather than a total. The query is now `from:turo` and shapes are deduplicated
-before logging, so a year of mail can be scanned without drowning the output.
+Two earlier runs were wrong and are worth remembering, because both failures
+looked like findings. `from:turo.com` did not match Turo's sending subdomain
+`mail.turo.com`, so every booking email was excluded; and a cap of 12 logged
+itself as "12 message(s) match", which read like a total. The conclusion drawn
+then — that no booking email existed — was an artefact of both.
 
-Re-run the probe and extend this file with the booking shape.
+## The trip lifecycle is fully covered by email
 
-Every value is a type token. This file is the input the email parser is built
-and tested against, the same way the sign parser was built against 3,012 real
-signs rather than a guess at the format.
+This is the important finding. Turo emails every state change, so trips can be
+tracked end to end without the browser extension:
 
-## Type 1 — guest message notification
+| Event | Subject template |
+|---|---|
+| Booked | `<GUEST> trip with your <VEHICLE> is booked!` |
+| Change requested | `<GUEST> has requested a change to their trip with your <VEHICLE>` |
+| Change confirmed | `<GUEST> confirmed <…> change request with your <VEHICLE>` |
+| Changed | `<GUEST> has changed their trip with your <VEHICLE> (<NUM>)` |
+| Driver added | `<GUEST> has added another driver to their trip with your <VEHICLE>` |
+| Upcoming | `<GUEST> has an upcoming trip with your <VEHICLE>` |
+| Ends tomorrow | `<GUEST> ends tomorrow for your <VEHICLE>` |
+| Message | `<GUEST> has sent you a message about your <VEHICLE>` |
+| Cancelled | `<GUEST> has canceled their trip with your <VEHICLE>` |
+| Rated | `<GUEST> just rated their trip` |
 
-The dominant type by volume, and the useful one: it carries the whole trip
-record as a side effect of telling you someone sent a message.
+Also present, and useful beyond trip sync:
+
+| Event | Subject template | Why it matters |
+|---|---|---|
+| Licence check | `You still need to confirm your guest's license` | An actionable task before a trip starts |
+| Payout | `Your earnings are on the way!` | Money module; carries `<MONEY>` but no reservation id |
+| Reimbursement charged | `<GUEST> has been charged for your reimbursement invoice` | Toll and fuel recovery |
+| Reimbursement ignored | `<GUEST> has not responded to your reimbursement invoice` | Chase task |
+| Relisted / inspection / marketing | various | Noise; filter out |
+
+## The trip-bearing shape
+
+Booking, upcoming, message and cancellation all carry the same block:
 
 ```
 from    : Turo <<EMAIL>>
-subject : <NAME> has sent you a message about your <NAME>
+subject : <GUEST> trip with your <VEHICLE> is booked!
 
 label   : trip start: <DATE> <TIME>
 label   : trip end: <DATE> <TIME>
 label   : you earn: <MONEY>
 label   : mileage included: <NUM> miles
-label   : view <NAME> profile: <URL>
-label   : send <NAME> a message: <URL>
-label   : notice: <boilerplate about off-platform payment>
+label   : view <GUEST> profile: <URL>
+label   : send <GUEST> a message: <URL>
 
-line    : <NAME> has sent you a message about your <NAME>.
-line    : <PROSE>                  <- the guest's message
-line    : Reply <URL>
-line    : <NAME> <NUM>             <- vehicle and year, e.g. "Ford Transit 2024"
-line    : booked by <NAME>
-line    : <NAME>                   <- guest, full name
-line    : (<NUM>) <NUM>            <- guest phone
+line    : <GUEST> trip is booked.
+line    : Ka-ching! <GUEST> trip with your <VEHICLE> is booked
+          from <DATE>, <YEAR>, <TIME> to <DATE>, <YEAR>, <TIME>.
+line    : <GUEST> earn <MONEY>.
+line    : <VEHICLE> <YEAR>
+line    : booked by <GUEST>
+line    : <GUEST>
+line    : (<NUM>) <NUM>
 line    : Reservation ID #<NUM>
 ```
 
-Notes for the parser:
+Notes that shape the parser:
 
-- **`Reservation ID #<NUM>` is the trip key.** It is the only stable
-  identifier, and it appears in the body rather than in a header or the subject.
-- The subject names the guest and the vehicle but not the reservation, so
-  subject matching alone cannot tie a message to a trip.
-- `trip start` and `trip end` carry a date and a time but **no year** — it has
-  to be inferred, and inferring it wrongly in late December is the obvious bug.
-- No timezone marker. These are presumably the vehicle's local time, which for
-  this fleet is `America/New_York`, but that is an assumption and should be
-  recorded as one rather than hidden.
-- The vehicle appears as a free-text `make model year` line, not a plate or a
-  VIN, so matching to a fleet vehicle is fuzzy. `Vehicle.bouncie_nickname` and
-  `model` are the fields to match against.
-- The guest's name appears three times in different forms (subject, "booked by",
-  and a bare line), which gives some redundancy to cross-check against.
+- **`Reservation ID #<NUM>` is the trip key.** It is in the body, not a header
+  or the subject, and it is the only stable identifier across the lifecycle —
+  so it is what ties a cancellation to the booking it cancels.
+- **The year is in the body, not the label.** `trip start:` carries a date and
+  time with no year, but the "Ka-ching!" sentence spells out
+  `from <DATE>, <YEAR>, <TIME> to <DATE>, <YEAR>, <TIME>`. Parse the sentence
+  rather than the label and the year-rollover bug never exists. This corrects
+  the earlier note here, which said the year had to be inferred.
+- **No timezone marker anywhere.** Presumably the vehicle's local time. For
+  this fleet that is `America/New_York`; it is an assumption, and should be
+  recorded as one in the parsed record rather than silently applied.
+- **The vehicle is free text**, `make model year`, with no plate or VIN, so
+  matching to a fleet vehicle is fuzzy. Match on `Vehicle.model` and
+  `bouncie_nickname`.
+- **Cancellations say `requested by <GUEST>`** where bookings say `booked by`,
+  and drop the `you earn` and `mileage included` labels.
 
-## Type 2 — payout notification
+## Known weakness in the probe itself
 
-```
-from    : Turo <<EMAIL>>
-subject : Your earnings are on the way!
-
-label   : note: <boilerplate about weekly deposits>
-line    : <PROSE>
-line    : <NAME>-ching! <NAME> sent your earnings payment of <MONEY>.
-line    : <PROSE>
-```
-
-Carries an amount but **no reservation id**, so a payout cannot be attached to a
-trip from this email alone. Useful for the Money module as a total; not useful
-for trip sync.
-
-## Type 3 — booking confirmation (not yet captured)
-
-Known to exist: it arrives from `noreply@mail.turo.com` and the first run's
-query excluded it. This is the email the trip feed should really be built on,
-since a booking is the event that creates a trip — the message notification
-only carries the trip record incidentally, and only once a guest writes
-something.
-
-Shape to be filled in from the next probe run.
+Shapes over-split. "4Runner" starts with a digit, so the capitalised-word mask
+misses it, and `…your <NAME> 4Runner` is a different signature from
+`…your <NAME>` — the same email type counted twice. It did not hide anything
+here because both variants were logged, but the shape count is inflated and a
+model name is surviving a mask that is supposed to catch it.

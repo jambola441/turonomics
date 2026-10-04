@@ -342,3 +342,18 @@ def test_it_gives_up_rather_than_grinding_through_a_broken_mailbox(monkeypatch):
     client = _FakeClient(bodies, fail_at=set(range(40)), error="GET x failed (500): boom")
     assert _probe_with(client, monkeypatch) == []
     assert client.fetched < 40, "must stop once failures are clearly systemic"
+
+
+def test_a_model_name_starting_with_a_digit_is_masked():
+    """"4Runner" starts with a digit, so the capitalised-word pass missed it.
+    Beyond leaking a model name, it split one email type into two shapes —
+    "…your <NAME> 4Runner" and "…your <NAME>" signed differently — which
+    inflated the shape count on the real run."""
+    from turonomics_api.gmail.probe import signature
+
+    plain = shape_of(_message("Guest: X\n", sender="Turo <x@mail.turo.com>",
+                              subject="Jenna trip with your Toyota is booked!"))
+    with_model = shape_of(_message("Guest: X\n", sender="Turo <x@mail.turo.com>",
+                                   subject="Jenna trip with your Toyota 4Runner is booked!"))
+    assert "4Runner" not in with_model.subject
+    assert signature(plain) == signature(with_model), "same email type, one shape"

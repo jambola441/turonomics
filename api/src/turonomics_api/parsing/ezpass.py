@@ -17,8 +17,13 @@ Account Activity → Download) has the following columns:
     Amount       — dollar amount; NEGATIVE values are toll charges,
                    POSITIVE values are account payments/credits (skip these)
 
+Tag numbers in the examples below, and in ``examples/ezpass``, start 999 and
+are invented. A real one is account-identifying and this repository is
+public; the fleet's own tags live in the ``EZPASS_TAGS`` environment
+variable on the API service and nowhere in the source.
+
 Example row (transponder tag):
-    "33232151931"," 00414500433","NYSTA","15","19","2L","12/29/2025","05:13:32 PM","$-2.86"
+    "33232151931"," 99900000111","NYSTA","15","19","2L","12/29/2025","05:13:32 PM","$-2.86"
 
 Example row (license plate):
     "33237138399","NY LZA7293","MTAB&T","","RKB","31","12/31/2025","03:10:36 PM","$-9.11"

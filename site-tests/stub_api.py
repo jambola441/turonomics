@@ -1,8 +1,9 @@
-"""A fleet API with nothing behind it, for rendering the site in CI.
+"""The API with nothing behind it, for rendering the site in CI.
 
-The fleet view is a static page against a separate service, so the only way to
-exercise it without deploying is to serve it a believable payload. The shapes
-here follow the real ``/api/fleet`` response; the values are invented.
+Both pages are static files against a separate service, so the only way to
+exercise them without deploying is to serve a believable payload. The shapes
+here follow the real ``/api/fleet`` and ``/api/tolls`` responses; the values
+are invented.
 
 Deliberately includes the states that are easy to get wrong and impossible to
 notice in a screenshot of the happy path: a car on a trip, a car whose parking
@@ -131,6 +132,83 @@ SPOTS = {
 }
 
 
+# A transponder number that belongs to nothing. Written to look nothing like a
+# real one on purpose: an earlier fixture in this repo was committed as a "real
+# world example", and a later session read its tag number back out as fleet
+# data. A fixture should be impossible to mistake for the thing it stands in
+# for.
+STUB_TAG_A = "99900000001"
+STUB_TAG_B = "99900000002"
+
+
+def _toll(**over: object) -> dict:
+    row = {
+        "id": "dddd0000-0000-0000-0000-000000000000",
+        "occurred_at": _iso(days=-3),
+        "plaza": "RKB",
+        "amount_cents": 911,
+        "transponder_id": None,
+        "license_plate": None,
+        "vehicle_nickname": None,
+        "guest_name": None,
+        "trip_id": None,
+        "recovered_at": None,
+    }
+    row.update(over)
+    return row
+
+
+# Every case the page renders differently, because the happy path is the one
+# case that cannot go unnoticed:
+#   - billed to a guest
+#   - charged to one of ours with nobody in it
+#   - a tag nobody has bound (two, so the plural wording and the env-var line
+#     both get exercised)
+#   - a plate from outside the fleet
+#   - one already billed back, so the tick's undo path is reachable
+# The amounts are chosen to break float money: 201 cents is the $2.01 that
+# int(2.01 * 100) turns into 200, and 123456 needs a thousands separator.
+TOLLS = [
+    _toll(id="dddd0000-0000-0000-0000-00000000001a", plaza="CRZ", amount_cents=900,
+          license_plate="LEH9892", vehicle_nickname="Jimmy", guest_name="Michael",
+          trip_id="eeee0000-0000-0000-0000-00000000000a"),
+    _toll(id="dddd0000-0000-0000-0000-00000000002a", plaza="GWB", amount_cents=123456,
+          license_plate="LWH4685", vehicle_nickname="Jolene"),
+    _toll(id="dddd0000-0000-0000-0000-00000000003a", plaza="NYSTA 15 to 19",
+          amount_cents=201, transponder_id=STUB_TAG_A),
+    _toll(id="dddd0000-0000-0000-0000-00000000004a", plaza="LNT", amount_cents=1700,
+          transponder_id=STUB_TAG_A),
+    _toll(id="dddd0000-0000-0000-0000-00000000005a", plaza="BER", amount_cents=217,
+          transponder_id=STUB_TAG_B),
+    _toll(id="dddd0000-0000-0000-0000-00000000006a", plaza="HBT", amount_cents=1700,
+          license_plate="ABC1234"),
+    _toll(id="dddd0000-0000-0000-0000-00000000007a", plaza="WDG", amount_cents=150,
+          license_plate="LZA7293", vehicle_nickname="Jerry", guest_name="Dana",
+          trip_id="eeee0000-0000-0000-0000-00000000000b",
+          recovered_at=_iso(days=-1)),
+]
+
+
+def _tolls_payload() -> dict:
+    """Recomputed per request, so a tick changes what the next load reports.
+
+    A stub that serves a constant cannot tell a page that re-renders from the
+    response apart from one that re-renders from the tap, which is the bug the
+    smoke test is there to catch.
+    """
+    unknown = sorted(
+        {t["transponder_id"] for t in TOLLS
+         if t["vehicle_nickname"] is None and t["transponder_id"]}
+    )
+    return {
+        "tolls": TOLLS,
+        "total_cents": sum(t["amount_cents"] for t in TOLLS),
+        "unrecovered_cents": sum(t["amount_cents"] for t in TOLLS if not t["recovered_at"]),
+        "unattributed_cents": sum(t["amount_cents"] for t in TOLLS if not t["trip_id"]),
+        "unknown_tags": unknown,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
@@ -146,10 +224,40 @@ class Handler(BaseHTTPRequestHandler):
         self._send({})
 
     def do_GET(self) -> None:
-        self._send(SPOTS if "/spots" in self.path else FLEET)
+        if self.path.startswith("/api/tolls"):
+            self._send(_tolls_payload())
+        elif "/spots" in self.path:
+            self._send(SPOTS)
+        else:
+            self._send(FLEET)
 
     def do_POST(self) -> None:
-        self._send(FLEET["vehicles"][0])
+        path, _, query = self.path.partition("?")
+        if path.endswith("/recovered"):
+            toll_id = path.split("/")[-2]
+            undo = "undo=true" in query
+            for toll in TOLLS:
+                if toll["id"] == toll_id:
+                    toll["recovered_at"] = None if undo else NOW.isoformat()
+                    self._send(toll)
+                    return
+            self._send({})
+        elif path == "/api/tolls/import":
+            # Nothing is parsed: the upload path under test is the page's, and
+            # the parser has its own tests against real statement rows.
+            self._read_body()
+            self._send({"rows": 9, "imported": 7, "already_known": 2,
+                        "matched": 4, "unmatched": 3, "unknown_tags": [STUB_TAG_A, STUB_TAG_B]})
+        elif path == "/api/tolls/rematch":
+            self._send({"rows": 3, "imported": 0, "already_known": 0,
+                        "matched": 0, "unmatched": 3, "unknown_tags": []})
+        else:
+            self._send(FLEET["vehicles"][0])
+
+    def _read_body(self) -> None:
+        length = int(self.headers.get("Content-Length") or 0)
+        if length:
+            self.rfile.read(length)
 
     def log_message(self, *args: object) -> None:
         pass

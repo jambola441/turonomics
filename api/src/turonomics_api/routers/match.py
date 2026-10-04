@@ -25,7 +25,7 @@ async def match(
     - **turo_file**: CSV exported by the Turonomics Chrome extension.
     - **ezpass_file**: NY EZPass account activity CSV download.
     - **aliases**: JSON object mapping license plates to transponder IDs.
-      Example: `{"ABC1234": "00414500433"}`. Optional — omit or pass `{}`.
+      Example: `{"ABC1234": "99900000111"}`. Optional — omit or pass `{}`.
     """
     # Parse alias map
     try:

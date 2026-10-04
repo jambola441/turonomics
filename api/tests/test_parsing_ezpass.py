@@ -12,7 +12,7 @@ _HDR = "Lane Txn ID,Tag/Plate #,Agency,Entry Plaza,Exit Plaza,Class,Date,Exit Ti
 
 def row(
     txn: str = "10000001",
-    tag_plate: str = " 00414500433",
+    tag_plate: str = " 99900000111",
     agency: str = "NYSTA",
     entry: str = "15",
     exit_: str = "19",
@@ -26,13 +26,13 @@ def row(
 
 class TestTransponderRows:
     def test_numeric_tag_becomes_transponder(self) -> None:
-        tolls = parse_ezpass_csv(_HDR + row(tag_plate=" 00414500433"))
-        assert tolls[0].transponder_id == "00414500433"
+        tolls = parse_ezpass_csv(_HDR + row(tag_plate=" 99900000111"))
+        assert tolls[0].transponder_id == "99900000111"
         assert tolls[0].license_plate is None
 
     def test_leading_spaces_stripped_from_transponder(self) -> None:
-        tolls = parse_ezpass_csv(_HDR + row(tag_plate="   00414500433   "))
-        assert tolls[0].transponder_id == "00414500433"
+        tolls = parse_ezpass_csv(_HDR + row(tag_plate="   99900000111   "))
+        assert tolls[0].transponder_id == "99900000111"
 
     def test_transponder_timestamp(self) -> None:
         tolls = parse_ezpass_csv(_HDR + row(date="12/29/2025", time="05:13:32 PM"))
@@ -141,8 +141,8 @@ class TestRealWorldSample:
     SAMPLE = (
         "Lane Txn ID,Tag/Plate #,Agency,Entry Plaza,Exit Plaza,Class,Date,Exit Time,Amount\n"
         '"33237138399","NY LZA7293","MTAB&T","","RKB","31","12/31/2025","03:10:36 PM","$-9.11"\n'
-        '"33232151931"," 00414500433","NYSTA","15","19","2L","12/29/2025","05:13:32 PM","$-2.86"\n'
-        '"33229686477"," 00414500433","GSP","","BER","1","12/29/2025","03:08:32 PM","$-2.17"\n'
+        '"33232151931"," 99900000111","NYSTA","15","19","2L","12/29/2025","05:13:32 PM","$-2.86"\n'
+        '"33229686477"," 99900000111","GSP","","BER","1","12/29/2025","03:08:32 PM","$-2.17"\n'
         '"33237855141","NY LEH9892","CBDTP","","CRZ","1","12/29/2025","02:14:27 PM","$-9.00"\n'
         '""," ","","","PAYMENT","","12/29/2025","","$25.00"\n'
     )
@@ -162,6 +162,6 @@ class TestRealWorldSample:
     def test_transponder_row_parsed_correctly(self) -> None:
         tolls = parse_ezpass_csv(self.SAMPLE)
         nysta = next(t for t in tolls if t.plaza == "19")
-        assert nysta.transponder_id == "00414500433"
+        assert nysta.transponder_id == "99900000111"
         assert nysta.license_plate is None
         assert nysta.amount == 2.86

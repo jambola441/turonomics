@@ -125,12 +125,17 @@ def apply_listings(session: Session, listing_map: dict[str, str]) -> list[str]:
 
 
 def parse_tag_map(raw: str) -> dict[str, str]:
-    """``"Jerry=00414500433,Bubba=00414500987"`` -> ``{"jerry": "...", ...}``.
+    """``"<car>=<tag>,<car>=<tag>"`` -> ``{"<car>": "<tag>", ...}``.
 
     An EZPass statement bills a tag-read crossing against the tag and nothing
     else, so without this the common case of a toll cannot be attributed to a
     car at all. Which tag is in which vehicle is a fact only the operator has,
     the same shape of problem as which Turo listing is which Corolla.
+
+    No example pairs a real nickname with a number. One did, with a tag that
+    turned out to be a real one in the wrong car, and a later reader took the
+    docstring for a record of the fleet's bindings. The tags live in the
+    environment; the source should not look like it knows them.
     """
     out: dict[str, str] = {}
     for pair in raw.split(","):

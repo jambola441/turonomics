@@ -148,14 +148,14 @@ def test_a_tag_read_toll_matches_once_the_tag_is_bound(session, jerry):
     unattributable."""
     _trip(session, jerry, guest="Jenna",
           starts=NOW - timedelta(days=1), ends=NOW + timedelta(days=1))
-    statement = _csv(_row("3", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"))
+    statement = _csv(_row("3", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"))
 
     loose = import_tolls(session, statement)
     session.commit()
     assert loose.unmatched == 1
-    assert loose.unknown_tags == {"00414500433"}, "named, so it can be bound"
+    assert loose.unknown_tags == {"99900000111"}, "named, so it can be bound"
 
-    jerry.ezpass_tag = "00414500433"
+    jerry.ezpass_tag = "99900000111"
     session.commit()
     assert rematch_unattributed(session) == 1
     session.commit()
@@ -170,11 +170,11 @@ def test_rematching_is_needed_because_re_importing_would_not_help(session, jerry
     rematch the binding would appear to do nothing."""
     _trip(session, jerry, guest="Jenna",
           starts=NOW - timedelta(days=1), ends=NOW + timedelta(days=1))
-    statement = _csv(_row("4", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"))
+    statement = _csv(_row("4", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"))
     import_tolls(session, statement)
     session.commit()
 
-    jerry.ezpass_tag = "00414500433"
+    jerry.ezpass_tag = "99900000111"
     session.commit()
     again = import_tolls(session, statement)
     session.commit()
@@ -240,7 +240,7 @@ def test_uploading_a_statement_reports_what_it_did(session, jerry, api_client):
     session.commit()
     statement = _csv(
         _row("a1", "NY LZA7293", "10/04/2026", "11:10:36 AM", "-9.11"),
-        _row("a2", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
+        _row("a2", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
     )
     body = api_client.post(
         "/api/tolls/import",
@@ -249,7 +249,7 @@ def test_uploading_a_statement_reports_what_it_did(session, jerry, api_client):
     assert body["rows"] == 2
     assert body["matched"] == 1
     assert body["unmatched"] == 1
-    assert body["unknown_tags"] == ["00414500433"], "so the operator knows what to bind"
+    assert body["unknown_tags"] == ["99900000111"], "so the operator knows what to bind"
 
 
 def test_the_ledger_separates_what_is_owed_from_what_cannot_be_billed(
@@ -320,13 +320,13 @@ def test_rematch_after_binding_a_tag_reports_the_rescue(session, jerry, api_clie
         "/api/tolls/import",
         files={"statement": (
             "a.csv",
-            _csv(_row("d1", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19")),
+            _csv(_row("d1", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19")),
             "text/csv",
         )},
     )
     assert api_client.get("/api/tolls").json()["unattributed_cents"] == 286
 
-    jerry.ezpass_tag = "00414500433"
+    jerry.ezpass_tag = "99900000111"
     session.commit()
 
     assert api_client.post("/api/tolls/rematch").json()["matched"] == 1
@@ -364,8 +364,8 @@ def test_two_identical_looking_crossings_are_kept_apart_by_their_ids(session, je
     mode that makes a ledger disagree with the statement it came from.
     """
     both = _csv(
-        _row("90001", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
-        _row("90002", " 00414500433", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
+        _row("90001", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
+        _row("90002", " 99900000111", "10/04/2026", "11:13:32 AM", "-2.86", plaza="19"),
     )
     result = import_tolls(session, both)
     session.commit()

@@ -237,3 +237,47 @@ def test_parking_still_resolves_while_a_guest_has_the_car(session):
         )
     )
     assert parking is not None and parking.segment_side_id is not None
+
+
+def test_the_sync_reports_itself_even_when_nothing_lands(session, caplog):
+    """The first live run logged nothing at all, because the summary only fired
+    when a count was non-zero. "No trip mail this week" and "the parser
+    rejected every message" produced identical silence, and telling them apart
+    cost a deploy. The summary is unconditional now, and a run that parses
+    nothing says why the first message was skipped.
+    """
+    import logging
+
+    _parked_van_with_a_deadline(session)
+    with caplog.at_level(logging.INFO, logger="turonomics.ingest.mail"):
+        sync_trips_from_mail(
+            session,
+            client=FakeGmail([
+                ("Your earnings are on the way!", "Ka-ching! Turo sent your earnings."),
+                ("Turo: Start earning!", "Hi there, list your car."),
+            ]),
+            now=NOW,
+        )
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "2 message(s)" in logged, logged
+    assert "2 not a trip" in logged, logged
+    assert "nothing parsed" in logged, logged
+
+
+def test_the_skip_reason_names_the_kind_not_the_subject_text(session, caplog):
+    """A diagnostic that leaks the guest's name back into the log would undo
+    the probe's whole point."""
+    import logging
+
+    _parked_van_with_a_deadline(session)
+    with caplog.at_level(logging.INFO, logger="turonomics.ingest.mail"):
+        sync_trips_from_mail(
+            session,
+            client=FakeGmail([
+                ("Dana has sent you a message about your Transit", "no reservation here"),
+            ]),
+            now=NOW,
+        )
+    logged = "\n".join(record.getMessage() for record in caplog.records)
+    assert "message" in logged, logged
+    assert "Dana" not in logged, logged

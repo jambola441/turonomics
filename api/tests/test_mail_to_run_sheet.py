@@ -385,3 +385,107 @@ def test_without_the_markup_the_same_two_corollas_tie(session):
     )
     session.commit()
     assert (result.created, result.unmatched) == (0, 1)
+
+
+# ---------------------------------------------------------------------------
+# Backfill: a wider window, and the quota that comes with it
+# ---------------------------------------------------------------------------
+
+
+def test_the_limit_is_configurable_because_widening_the_query_alone_does_nothing(
+    monkeypatch,
+):
+    """The trap this exists to avoid.
+
+    Gmail returns the *newest* matches up to the cap. Widening the query to six
+    months while the cap stays at 40 re-reads the same forty messages and
+    reports success, so a backfill appears to run and changes nothing.
+    """
+    from turonomics_api.ingest.mail import DEFAULT_LIMIT, _limit_from_env
+
+    monkeypatch.delenv("TURO_MAIL_LIMIT", raising=False)
+    assert _limit_from_env() == DEFAULT_LIMIT
+    monkeypatch.setenv("TURO_MAIL_LIMIT", "600")
+    assert _limit_from_env() == 600
+
+
+def test_a_nonsense_limit_falls_back_rather_than_crashing_the_poll(monkeypatch):
+    """This runs inside the poll that keeps the fleet view current."""
+    from turonomics_api.ingest.mail import DEFAULT_LIMIT, _limit_from_env
+
+    monkeypatch.setenv("TURO_MAIL_LIMIT", "lots")
+    assert _limit_from_env() == DEFAULT_LIMIT
+
+
+def test_the_configured_limit_reaches_the_search(session, monkeypatch):
+    """A limit the search never sees is the same bug one layer down."""
+    seen: list[int] = []
+
+    class CountingGmail(FakeGmail):
+        def search(self, query: str, *, limit: int = 0) -> list[str]:
+            seen.append(limit)
+            return []
+
+    monkeypatch.setenv("TURO_MAIL_LIMIT", "250")
+    sync_trips_from_mail(session, client=CountingGmail([]), now=NOW)
+    assert seen == [250]
+
+
+class QuotaThenFine(FakeGmail):
+    """Refuses once with a quota error, then behaves.
+
+    Modelled on the real failure: Gmail bills per-minute units and answers 403
+    with "quota" in the message once a wide scan outruns them.
+    """
+
+    def __init__(self, messages, *, fail_on: int = 0):
+        super().__init__(messages)
+        self.fail_on = fail_on
+        self.attempts: dict[str, int] = {}
+
+    def message(self, message_id: str) -> dict:
+        self.attempts[message_id] = self.attempts.get(message_id, 0) + 1
+        if int(message_id) == self.fail_on and self.attempts[message_id] == 1:
+            from turonomics_api.gmail.client import GmailError
+
+            raise GmailError("403: Quota exceeded for quota metric 'Queries'")
+        return super().message(message_id)
+
+
+def test_a_quota_refusal_pauses_and_retries_the_same_message(session, monkeypatch):
+    """Skipping it would lose the trip for good: the sync only looks forward,
+    so nothing comes back for a message a backfill passed over."""
+    monkeypatch.setattr("turonomics_api.ingest.mail.QUOTA_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr("turonomics_api.ingest.mail.SECONDS_BETWEEN_FETCHES", 0.0)
+    session.add(Vehicle(nickname="Bubba", make="Ford", model="Transit", year=2024))
+    session.commit()
+
+    client = QuotaThenFine(
+        [("Dana's trip with your Ford Transit is booked!", BOOKING)], fail_on=0
+    )
+    result = sync_trips_from_mail(session, client=client, now=NOW)
+    session.commit()
+    assert client.attempts["0"] == 2, "the same message was retried, not skipped"
+    assert result.created == 1
+
+
+def test_a_run_stops_pausing_eventually(session, monkeypatch):
+    """A mailbox that refuses everything must not hold the poll open forever."""
+    from turonomics_api.gmail.client import GmailError
+
+    monkeypatch.setattr("turonomics_api.ingest.mail.QUOTA_BACKOFF_SECONDS", 0.0)
+    monkeypatch.setattr("turonomics_api.ingest.mail.SECONDS_BETWEEN_FETCHES", 0.0)
+    monkeypatch.setattr("turonomics_api.ingest.mail.MAX_QUOTA_PAUSES", 2)
+
+    calls: list[str] = []
+
+    class AlwaysQuota(FakeGmail):
+        def message(self, message_id: str) -> dict:
+            calls.append(message_id)
+            raise GmailError("403: Quota exceeded")
+
+    messages = [("Dana's trip with your Ford Transit is booked!", BOOKING)] * 5
+    result = sync_trips_from_mail(session, client=AlwaysQuota(messages), now=NOW)
+    # Two pauses, each costing a retry, then it stops pausing: 5 messages, 7 calls.
+    assert len(calls) == 7
+    assert result.created == 0

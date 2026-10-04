@@ -547,3 +547,70 @@ class Task(Base):
         Index("ix_task_open_due", "state", "due_by"),
         Index("ix_task_location", "location", postgresql_using="gist"),
     )
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+
+
+class PushSubscription(Base):
+    """One browser that has agreed to receive alerts.
+
+    The endpoint is the push service's URL for this browser and is the identity
+    of the subscription — a browser that re-subscribes gets a new endpoint, and
+    the old one starts returning 410 Gone. ``p256dh`` and ``auth`` are the keys
+    the message is encrypted to, so losing them means the subscription can
+    still be posted to but never read.
+
+    Note there is no user: this fleet has one operator, and inventing an owner
+    column that is always the same row would be scaffolding for a feature that
+    does not exist. A subscription is a device, and the operator's devices are
+    all of them.
+    """
+
+    __tablename__ = "push_subscription"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    endpoint: Mapped[str] = mapped_column(Text, unique=True)
+    p256dh: Mapped[str] = mapped_column(String(140))
+    auth: Mapped[str] = mapped_column(String(40))
+
+    # What subscribed, so a dead subscription can be recognised in a log
+    # without having to match endpoint strings by eye.
+    label: Mapped[str | None] = mapped_column(String(120))
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # Last accepted delivery, and consecutive failures since. A push service
+    # that returns 404 or 410 is saying the subscription is gone for good, so
+    # those delete the row; anything else is transient and only counted.
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    failures: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Notification(Base):
+    """An alert that has been sent, so it is not sent again every poll.
+
+    The poll runs every ten minutes and the condition that triggers an alert —
+    a move deadline inside the warning window — stays true for hours. Without a
+    record of what has gone out, "Jimmy must move by 9am" arrives eighteen
+    times, which trains the operator to ignore it.
+
+    ``dedupe_key`` is what makes two alerts the same alert. It is built from the
+    task and the window it fired in, so a second warning closer to the deadline
+    is deliberately a different key.
+    """
+
+    __tablename__ = "notification"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    dedupe_key: Mapped[str] = mapped_column(String(200), unique=True)
+    channel: Mapped[str] = mapped_column(String(20))
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str | None] = mapped_column(Text)
+    task_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("task.id", ondelete="SET NULL"))
+    sent_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # How many subscriptions accepted it. Zero with no error means nothing was
+    # subscribed, which is the state the app is in before anyone presses the
+    # button and is worth telling apart from a delivery failure.
+    delivered: Mapped[int] = mapped_column(Integer, default=0)

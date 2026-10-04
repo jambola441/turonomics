@@ -21,8 +21,20 @@ def fleet_timezone() -> ZoneInfo:
 
 
 def asp_alert_lead_minutes() -> list[int]:
-    raw = os.environ.get("ASP_ALERT_LEAD_MINUTES", "720,120,60,15")
-    return sorted((int(p) for p in raw.split(",") if p.strip()), reverse=True)
+    """How far ahead of a deadline to warn, longest first.
+
+    Two by default, each saying something different: twelve hours out is "move
+    it tonight, at a civilised hour", and one hour out is "go now". The earlier
+    default here was 720/120/60/15, which is four notifications per car per
+    cleaning night — sixteen across this fleet, which teaches you to swipe them
+    away. Fifteen minutes is also past useful: finding another legal spot in
+    this neighbourhood takes longer than that.
+
+    An alert for a deadline already passed is separate and always sent; see
+    ``notify.alerts``.
+    """
+    raw = os.environ.get("ASP_ALERT_LEAD_MINUTES", "720,60")
+    return sorted({int(p) for p in raw.split(",") if p.strip()}, reverse=True)
 
 
 # Thunderforest's dark themes are better suited to this than a generic basemap —
@@ -77,3 +89,46 @@ def map_tiles() -> dict[str, object]:
         "invert": invert_map(),
         "max_zoom": 22,
     }
+
+
+# ---------------------------------------------------------------------------
+# Alerts
+# ---------------------------------------------------------------------------
+
+DEFAULT_SITE_URL = "https://turonomics-site.onrender.com/fleet/"
+
+
+def site_url() -> str:
+    """Where a notification should send you when you tap it.
+
+    The run sheet is a static site on a different host from this API, so the
+    API cannot derive this from its own request. Note this is the *web* URL,
+    not the API URL — confusing the two is how the Gmail callback went wrong.
+    """
+    return os.environ.get("SITE_URL", "").strip() or DEFAULT_SITE_URL
+
+
+def vapid_private_key() -> str | None:
+    """The application server key, or ``None`` when push is not configured.
+
+    Absent is a supported state, not an error: the alert rules still run and
+    still log what they would have sent, which is how the timing gets checked
+    against a real fleet before any key exists. ``python -m turonomics_api.cli
+    vapid-keys`` prints a pair to set here.
+    """
+    return os.environ.get("VAPID_PRIVATE_KEY", "").strip() or None
+
+
+def vapid_subject() -> str:
+    """Contact of record for the push service, per RFC 8292.
+
+    A push service uses it to reach the operator of a misbehaving application
+    server. It must be a ``mailto:`` or ``https:`` URI; a bare address is
+    rejected, and some services reject it with no explanation.
+    """
+    raw = os.environ.get("VAPID_SUBJECT", "").strip()
+    if not raw:
+        return "mailto:alerts@turonomics.invalid"
+    if raw.startswith(("mailto:", "https://")):
+        return raw
+    return f"mailto:{raw}"

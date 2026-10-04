@@ -46,21 +46,34 @@ THUNDERFOREST_ATTRIBUTION = (
 )
 DEFAULT_THUNDERFOREST_STYLE = "transport-dark"
 
-# Themes that are already dark. Anything else gets inverted in CSS, which is
-# what makes a light basemap usable here — and would wreck an already-dark one.
-DARK_STYLES = frozenset({"transport-dark", "spinal-map"})
+
+def invert_map() -> bool:
+    """Whether to darken the basemap in CSS.
+
+    Off unless asked for. An earlier version derived this from the theme name —
+    inverting anything not on a list of known-dark styles — which meant picking
+    a light style silently got you a dark map, and the only way to see the
+    style you chose was to edit the code. A display preference should be a
+    preference, not an inference.
+    """
+    return os.environ.get("MAP_INVERT", "").strip().lower() in {"1", "true", "yes"}
 
 
 def map_tiles() -> dict[str, object]:
     """Which basemap the fleet view should draw, and whether to invert it."""
     key = os.environ.get("THUNDERFOREST_API_KEY", "").strip()
     if not key:
-        return {"url": OSM_TILES, "attribution": OSM_ATTRIBUTION, "invert": True, "max_zoom": 19}
+        return {
+            "url": OSM_TILES,
+            "attribution": OSM_ATTRIBUTION,
+            "invert": invert_map(),
+            "max_zoom": 19,
+        }
 
     style = os.environ.get("THUNDERFOREST_STYLE", DEFAULT_THUNDERFOREST_STYLE).strip()
     return {
         "url": THUNDERFOREST_TILES.format(style=style, key=key),
         "attribution": THUNDERFOREST_ATTRIBUTION,
-        "invert": style not in DARK_STYLES,
+        "invert": invert_map(),
         "max_zoom": 22,
     }

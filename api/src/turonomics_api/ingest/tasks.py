@@ -152,6 +152,16 @@ def refresh_move_task(
         )
         session.add(existing)
 
+    # A deadline that moved is a new obligation, even on the same row. This
+    # task is scoped to the parking session, but its due_by rolls forward to
+    # the next cleaning window once one passes — so a task ticked off for
+    # Monday would otherwise stay done through Thursday's sweep, and that car
+    # would silently never be warned about again while sitting in one spot.
+    if existing.state is TaskState.done and existing.due_by != window.starts_at:
+        existing.state = TaskState.open
+        existing.completed_at = None
+        existing.completed_by_id = None
+
     existing.due_by = window.starts_at
     existing.location = parking.location
     existing.location_label = where

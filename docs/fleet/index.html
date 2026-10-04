@@ -102,6 +102,24 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
        border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  .tasks{display:flex;flex-direction:column;gap:7px}
+  .task{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;border-radius:10px;
+        background:var(--surface2);border:1px solid var(--border);text-align:left;
+        width:100%;font:inherit;color:inherit;cursor:pointer;
+        transition:border-color .12s ease,opacity .15s ease}
+  .task:hover{border-color:var(--green)}
+  .task:disabled{opacity:.45;cursor:default}
+  .task .box{width:20px;height:20px;border-radius:6px;border:1.6px solid var(--border2);
+        flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center}
+  .task:hover .box{border-color:var(--green)}
+  .task .t-title{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
+  .task .t-meta{font-family:var(--mono);font-size:11px;color:var(--dim);margin-top:3px}
+  .task .t-due{font-weight:600}
+  .task.overdue .t-due{color:var(--red)}
+  .task.soon .t-due{color:var(--amber)}
+  .undo{align-self:flex-start;font:inherit;font-size:11.5px;color:var(--muted);
+        background:none;border:none;padding:4px 0;cursor:pointer;text-decoration:underline;
+        text-underline-offset:3px}
   .note-guest{display:flex;flex-direction:column;gap:7px;padding:11px 13px;border-radius:10px;
        background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--blue)}
   .note-guest .g-who{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
@@ -161,6 +179,10 @@
   })();
   var map, markers = {}, fleet = null, selectedId = null, tilesAdded = false;
   var pendingCar = new URLSearchParams(location.search).get("car");
+  // The task just ticked off, so an undo is offered for exactly as long as the
+  // card stays put. Not persisted: a mis-tap is noticed immediately or not at
+  // all, and a stale "undo" on tomorrow's screen is just confusing.
+  var lastDone = null;
 
   function initials(name) {
     var parts = String(name || "?").trim().split(/[\s·—-]+/).filter(Boolean);
@@ -442,10 +464,21 @@
         "</div>" +
         (v.plate ? '<div class="plate">' + esc(v.plate) + "</div>" : "") +
       "</div>" +
-      '<div class="stats">' + stats + "</div>" + guestNotesHtml(v) + note;
+      '<div class="stats">' + stats + "</div>" +
+      tasksHtml(v) +
+      (lastDone ? '<button class="undo" data-undo="' + esc(lastDone) + '">Undo that</button>' : "") +
+      guestNotesHtml(v) + note;
 
     Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
       el.addEventListener("click", function () { focusVehicle(el.dataset.id); });
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll("[data-task]"), function (el) {
+      el.addEventListener("click", function () { taskAction(el.dataset.task, "done", el); });
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll("[data-undo]"), function (el) {
+      el.addEventListener("click", function () { taskAction(el.dataset.undo, "undo", el); });
     });
 
     Array.prototype.forEach.call(body.querySelectorAll("[data-focus]"), function (el) {
@@ -457,6 +490,56 @@
         confirmSide(el.dataset.session, el.dataset.side, body);
       });
     });
+  }
+
+  // The run sheet's actual job: what has to happen to this car. Every module
+  // in the app emits Tasks and nothing else reaches here, so until now the
+  // whole abstraction's output was a number nobody rendered.
+  function tasksHtml(v) {
+    var tasks = v.tasks || [];
+    if (!tasks.length) return "";
+    return '<div class="tasks">' + tasks.map(function (t) {
+      var cls = "task", due = "";
+      if (t.due_by) {
+        var ms = new Date(t.due_by) - new Date();
+        cls += ms < 0 ? " overdue" : (ms < 3 * 3600 * 1000 ? " soon" : "");
+        due = '<span class="t-due">' + esc(until(t.due_by)) + "</span>";
+      }
+      var meta = [due, t.location_label ? esc(t.location_label) : "", t.detail ? esc(t.detail) : ""]
+        .filter(Boolean).join(" · ");
+      return '<button class="' + cls + '" data-task="' + esc(t.id) + '">' +
+               '<div class="box"></div>' +
+               '<div style="flex-grow:1;min-width:0">' +
+                 '<div class="t-title">' + esc(t.title) + "</div>" +
+                 (meta ? '<div class="t-meta">' + meta + "</div>" : "") +
+               "</div>" +
+             "</button>";
+    }).join("") + "</div>";
+  }
+
+  // Posting from the card and re-rendering from the response, rather than
+  // waiting for the sixty-second refresh: a tick that does nothing visible for
+  // a minute reads as a tick that did not work, and gets tapped again.
+  function taskAction(id, action, el) {
+    el.disabled = true;
+    fetch(API + "/api/tasks/" + encodeURIComponent(id) + "/" + action, { method: "POST" })
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (updated) {
+        fleet.vehicles = fleet.vehicles.map(function (x) {
+          return x.id === updated.id ? updated : x;
+        });
+        lastDone = action === "done" ? id : null;
+        render();
+      })
+      .catch(function (e) {
+        el.disabled = false;
+        var err = document.getElementById("err");
+        err.hidden = false;
+        err.textContent = "Could not update that task: " + e.message;
+      });
   }
 
   // What the guest actually wrote, above the question it usually answers.

@@ -68,6 +68,17 @@ class ParkingState(BaseModel):
     options: list[SideOption] = []
 
 
+class TaskItem(BaseModel):
+    """One thing the operator has to do."""
+
+    id: uuid.UUID
+    kind: str
+    title: str
+    detail: str | None = None
+    due_by: datetime | None = None
+    location_label: str | None = None
+
+
 class GuestNote(BaseModel):
     """A message a guest sent about this car."""
 
@@ -92,6 +103,10 @@ class VehicleState(BaseModel):
     trip_ends_at: datetime | None = None
     parking: ParkingState | None = None
     open_task_count: int = 0
+    # The open ones themselves, soonest first. The count alone was the whole
+    # output of the abstraction every other module feeds — a car could have
+    # three things to do and no way to find out what they were.
+    tasks: list[TaskItem] = []
     # Newest first, and only a couple: this sits beside the "which side of the
     # street?" prompt, where the useful thing is the note that answers it, not
     # a thread.
@@ -152,6 +167,33 @@ GUEST_NOTE_LIMIT = 2
 # make a stale "parked on the north side" look current next to a fresh parking
 # session, which is exactly the wrong thing to be confidently wrong about.
 GUEST_NOTE_WINDOW = timedelta(days=3)
+
+
+def _open_tasks(session: Session, vehicle_id: uuid.UUID) -> list[TaskItem]:
+    """This vehicle's open work, soonest deadline first.
+
+    Suppressed tasks are left out rather than greyed: a car a guest is driving
+    is not the operator's to move, and showing the obligation anyway is how a
+    run sheet stops being a list of things that are actually true.
+    """
+    rows = session.scalars(
+        select(Task)
+        .where(Task.vehicle_id == vehicle_id, Task.state == TaskState.open)
+        # Nulls last: a task with a deadline outranks one without, and Postgres
+        # sorts NULL first on ASC unless told otherwise.
+        .order_by(Task.due_by.asc().nullslast(), Task.created_at.asc())
+    ).all()
+    return [
+        TaskItem(
+            id=t.id,
+            kind=str(t.kind),
+            title=t.title,
+            detail=t.detail,
+            due_by=t.due_by,
+            location_label=t.location_label,
+        )
+        for t in rows
+    ]
 
 
 def _guest_notes(session: Session, vehicle_id: uuid.UUID) -> list[GuestNote]:
@@ -273,6 +315,7 @@ def get_fleet(session: DbSession) -> FleetResponse:
             trip_ends_at=trip.ends_at if trip else None,
             parking=_parking_state(session, vehicle),
             open_task_count=int(open_tasks),
+            tasks=_open_tasks(session, vehicle.id),
             guest_notes=_guest_notes(session, vehicle.id),
         ))
 
@@ -321,3 +364,55 @@ def confirm_parking_side(
         if v.id == vehicle.id:
             return v
     raise HTTPException(500, "vehicle vanished mid-request")
+
+
+def _vehicle_after(session: Session, vehicle_id: uuid.UUID) -> VehicleState:
+    """The car's whole state, so the client re-renders from one round trip."""
+    for v in get_fleet(session).vehicles:
+        if v.id == vehicle_id:
+            return v
+    raise HTTPException(500, "vehicle vanished mid-request")
+
+
+@router.post("/tasks/{task_id}/done", response_model=VehicleState)
+def complete_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
+    """Tick a task off.
+
+    Idempotent: ticking an already-done task is success, not a 409. The button
+    is on a phone and the network is the network — a double tap must not be an
+    error the operator has to think about.
+
+    Note that a street-cleaning task reopens by itself when its deadline rolls
+    to the next sweep, because that is a new obligation rather than the same
+    one. See ``refresh_move_task``.
+    """
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "no task with that id")
+    if task.state is not TaskState.done:
+        task.state = TaskState.done
+        task.completed_at = datetime.now(UTC)
+        session.commit()
+    return _vehicle_after(session, task.vehicle_id)
+
+
+@router.post("/tasks/{task_id}/undo", response_model=VehicleState)
+def reopen_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
+    """Put a task back, for the tap that was meant for the one below it.
+
+    Only reopens something that was done. A cancelled task is one a module
+    retired because it stopped being true — a move task for a spot the car has
+    left — and resurrecting that from the UI would put a lie back on the run
+    sheet.
+    """
+    task = session.get(Task, task_id)
+    if task is None:
+        raise HTTPException(404, "no task with that id")
+    if task.state is TaskState.cancelled:
+        raise HTTPException(409, "that task was retired because it stopped applying")
+    if task.state is not TaskState.open:
+        task.state = TaskState.open
+        task.completed_at = None
+        task.completed_by_id = None
+        session.commit()
+    return _vehicle_after(session, task.vehicle_id)

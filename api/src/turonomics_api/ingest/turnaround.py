@@ -207,16 +207,36 @@ def refresh_turnaround_tasks(
     # Fuel only when the car can actually answer the question.
     fuel = _latest_fuel(session, vehicle.id) if vehicle.reports_fuel_level else None
     needs_fuel = fuel is not None and fuel < FUEL_THRESHOLD_PERCENT
-    if needs_fuel and _upsert(
-        session,
-        vehicle=vehicle,
-        trip=trip,
-        kind=TaskKind.fuel,
-        title=f"Fuel {vehicle.nickname}",
-        detail=f"tank at {fuel:.0f}% — {when}",
-        due_by=due_by,
-    ):
-        result.created += 1
+    if needs_fuel:
+        if _upsert(
+            session,
+            vehicle=vehicle,
+            trip=trip,
+            kind=TaskKind.fuel,
+            title=f"Fuel {vehicle.nickname}",
+            detail=f"tank at {fuel:.0f}% — {when}",
+            due_by=due_by,
+        ):
+            result.created += 1
+    elif fuel is not None:
+        # The tank came back up, so somebody filled it. Marked done rather
+        # than left standing: this task said "tank at 26%" beside a gauge
+        # reading 93% for an hour, because creating it was conditional and
+        # retiring it was not. Done rather than cancelled, because the
+        # obligation was discharged — the fuel went in — not withdrawn.
+        for task in session.scalars(
+            select(Task).where(
+                Task.source_kind == SOURCE_KIND,
+                Task.source_id == trip.id,
+                Task.kind == TaskKind.fuel,
+                Task.state == TaskState.open,
+            )
+        ).all():
+            task.state = TaskState.done
+            task.completed_at = now
+            task.detail = f"tank back up to {fuel:.0f}%"
+            result.closed += 1
+            session.flush()
 
     if result.created or result.closed:
         log.info("%s: %s", vehicle.nickname, result.summary())

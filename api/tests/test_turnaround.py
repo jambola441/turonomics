@@ -213,3 +213,90 @@ def test_a_car_still_out_with_a_guest_gets_no_prep_work_yet(session):
           state=TripState.active)
     _fuel(session, van, 10.0)
     assert refresh_turnaround_tasks(session, vehicle=van, now=NOW).created == 0
+
+
+# ---------------------------------------------------------------------------
+# A fuel task that outlives the empty tank
+# ---------------------------------------------------------------------------
+
+
+def test_filling_the_tank_retires_the_fuel_task(session):
+    """Found on the live fleet the hour the run sheet first showed tasks.
+
+    A car came back from a trip with a quarter tank, the task was created,
+    somebody filled her, and the task sat there reading "tank at 26%" beside a
+    gauge showing 93%. Creating it was conditional on the fuel level; retiring
+    it was not conditional on anything, because nothing retired it at all.
+    """
+    van = _van(session)
+    _trip(session, van, starts=NOW - timedelta(days=2), ends=NOW - timedelta(hours=1))
+    _fuel(session, van, 26.0, at=NOW - timedelta(minutes=30))
+
+    refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+    fuel_task = session.scalar(select(Task).where(Task.kind == TaskKind.fuel))
+    assert fuel_task.state is TaskState.open
+    assert "26%" in fuel_task.detail
+
+    _fuel(session, van, 93.0, at=NOW - timedelta(minutes=5))
+    result = refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+
+    session.refresh(fuel_task)
+    assert fuel_task.state is TaskState.done, "the obligation was discharged"
+    assert fuel_task.completed_at is not None
+    assert "93%" in fuel_task.detail, "and the detail stops lying about the level"
+    assert result.closed >= 1
+
+
+def test_a_tank_still_low_keeps_its_task_open(session):
+    """The other half. Retiring on every poll would make the task useless."""
+    van = _van(session)
+    _trip(session, van, starts=NOW - timedelta(days=2), ends=NOW - timedelta(hours=1))
+    _fuel(session, van, 26.0, at=NOW - timedelta(minutes=30))
+    refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+
+    _fuel(session, van, 31.0, at=NOW - timedelta(minutes=5))
+    refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+    assert session.scalar(select(Task).where(Task.kind == TaskKind.fuel)).state is TaskState.open
+
+
+def test_a_full_tank_on_a_car_that_cannot_report_closes_nothing(session):
+    """The retire path must not invent a task to close on a car whose fuel
+    level is an unanswerable question."""
+    van = _van(session, reports_fuel=False)
+    _trip(session, van, starts=NOW - timedelta(days=2), ends=NOW - timedelta(hours=1))
+    _fuel(session, van, 93.0, at=NOW - timedelta(minutes=5))
+    result = refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+    assert session.scalars(select(Task).where(Task.kind == TaskKind.fuel)).all() == []
+    assert result.closed == 0
+
+
+def test_a_car_that_stops_reporting_fuel_does_not_crash_the_poll(session):
+    """The reachable edge the ``fuel is not None`` guard exists for.
+
+    ``reports_fuel_level`` is a column, not a constant — a device swap or a
+    capability refresh can turn it off on a car that already has an open fuel
+    task. Without the guard the retire path formats ``None`` as a percentage
+    and takes the whole poll down with it, which is a steep price for tidying
+    up a task nobody can answer any more.
+    """
+    van = _van(session, reports_fuel=True)
+    _trip(session, van, starts=NOW - timedelta(days=2), ends=NOW - timedelta(hours=1))
+    _fuel(session, van, 26.0, at=NOW - timedelta(minutes=30))
+    refresh_turnaround_tasks(session, vehicle=van, now=NOW)
+    session.flush()
+    task = session.scalar(select(Task).where(Task.kind == TaskKind.fuel))
+    assert task.state is TaskState.open
+
+    van.reports_fuel_level = False
+    session.flush()
+
+    refresh_turnaround_tasks(session, vehicle=van, now=NOW)  # must not raise
+    session.flush()
+    session.refresh(task)
+    assert task.state is TaskState.open, "left alone rather than closed on a guess"
+    assert "26%" in task.detail, "and not rewritten with a level nobody reported"

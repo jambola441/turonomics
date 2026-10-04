@@ -8,7 +8,7 @@ keeps the client from having to know how parked position is derived.
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import (
+    GuestMessage,
     ParkingSession,
     StreetSegmentSide,
     Task,
@@ -67,6 +68,14 @@ class ParkingState(BaseModel):
     options: list[SideOption] = []
 
 
+class GuestNote(BaseModel):
+    """A message a guest sent about this car."""
+
+    received_at: datetime
+    guest_name: str | None = None
+    body: str
+
+
 class VehicleState(BaseModel):
     id: uuid.UUID
     nickname: str
@@ -83,6 +92,10 @@ class VehicleState(BaseModel):
     trip_ends_at: datetime | None = None
     parking: ParkingState | None = None
     open_task_count: int = 0
+    # Newest first, and only a couple: this sits beside the "which side of the
+    # street?" prompt, where the useful thing is the note that answers it, not
+    # a thread.
+    guest_notes: list[GuestNote] = []
 
 
 class FleetResponse(BaseModel):
@@ -129,6 +142,31 @@ def _lat_lon(session: Session, table: str, row_id: uuid.UUID) -> tuple[float, fl
         {"id": str(row_id)},
     ).first()
     return (float(row.lat), float(row.lon)) if row else None
+
+
+# Two, newest first. This is context for a decision, not an inbox — a third
+# note from last week pushes the one that matters off the screen.
+GUEST_NOTE_LIMIT = 2
+
+# A note older than this is not about where the car is now. Keeping it would
+# make a stale "parked on the north side" look current next to a fresh parking
+# session, which is exactly the wrong thing to be confidently wrong about.
+GUEST_NOTE_WINDOW = timedelta(days=3)
+
+
+def _guest_notes(session: Session, vehicle_id: uuid.UUID) -> list[GuestNote]:
+    rows = session.scalars(
+        select(GuestMessage)
+        .where(
+            GuestMessage.vehicle_id == vehicle_id,
+            GuestMessage.received_at >= datetime.now(UTC) - GUEST_NOTE_WINDOW,
+        )
+        .order_by(GuestMessage.received_at.desc())
+        .limit(GUEST_NOTE_LIMIT)
+    ).all()
+    return [
+        GuestNote(received_at=r.received_at, guest_name=r.guest_name, body=r.body) for r in rows
+    ]
 
 
 def _parking_state(session: Session, vehicle: Vehicle) -> ParkingState | None:
@@ -235,6 +273,7 @@ def get_fleet(session: DbSession) -> FleetResponse:
             trip_ends_at=trip.ends_at if trip else None,
             parking=_parking_state(session, vehicle),
             open_task_count=int(open_tasks),
+            guest_notes=_guest_notes(session, vehicle.id),
         ))
 
     return FleetResponse(

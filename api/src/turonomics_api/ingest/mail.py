@@ -23,7 +23,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from turonomics_api.db.models import Trip, Vehicle
+from turonomics_api.db.models import GuestMessage, Trip, Vehicle
 from turonomics_api.gmail.client import GmailClient, GmailError
 from turonomics_api.gmail.parse import TRIP_BEARING, ParseError, classify, parse_email
 from turonomics_api.gmail.probe import (
@@ -61,6 +61,44 @@ def _header(payload: dict[str, Any], name: str) -> str:
         if item.get("name", "").lower() == name.lower():
             return str(item.get("value", ""))
     return ""
+
+
+def _store_message(
+    session: Session,
+    *,
+    gmail_message_id: str,
+    vehicle_id: uuid.UUID,
+    trip_id: uuid.UUID | None,
+    guest_name: str | None,
+    body: str,
+    received_at: datetime,
+) -> None:
+    """Record a guest's note once, however often its email is re-read.
+
+    The sync re-reads the same seven-day window every ten minutes, so this is
+    an upsert on the Gmail id rather than an insert. The body is updated too:
+    the parser is still being corrected against real mail, and a note stored by
+    an older version should improve rather than be frozen.
+    """
+    existing = session.scalar(
+        select(GuestMessage).where(GuestMessage.gmail_message_id == gmail_message_id)
+    )
+    if existing is not None:
+        existing.body = body
+        existing.vehicle_id = vehicle_id
+        if trip_id is not None:
+            existing.trip_id = trip_id
+        return
+    session.add(
+        GuestMessage(
+            gmail_message_id=gmail_message_id,
+            vehicle_id=vehicle_id,
+            trip_id=trip_id,
+            guest_name=guest_name,
+            body=body,
+            received_at=received_at,
+        )
+    )
 
 
 def _limit_from_env() -> int:
@@ -145,6 +183,7 @@ def sync_trips_from_mail(
 
     touched: set[uuid.UUID] = set()
     scanned = 0
+    messages = 0
     not_a_trip = 0
     unreadable = 0
     first_skipped: str | None = None
@@ -202,6 +241,18 @@ def sync_trips_from_mail(
             result.updated += 1
         touched.add(trip.vehicle_id)
 
+        if parsed.guest_message:
+            _store_message(
+                session,
+                gmail_message_id=message_id,
+                vehicle_id=trip.vehicle_id,
+                trip_id=trip.id,
+                guest_name=parsed.guest_name,
+                body=parsed.guest_message,
+                received_at=_received_at(message, now),
+            )
+            messages += 1
+
     # A new or cancelled trip changes whether a street-cleaning alert applies
     # and whether there is prep to do, so the affected vehicles' tasks are
     # refreshed in the same cycle.
@@ -217,10 +268,12 @@ def sync_trips_from_mail(
     # whether the mailbox was empty of trips or the parser was rejecting all of
     # them.
     log.info(
-        "mail sync: %d message(s) for %r — %s; %d not a trip, %d unreadable",
+        "mail sync: %d message(s) for %r — %s; %d guest note(s), "
+        "%d not a trip, %d unreadable",
         scanned,
         query,
         result.summary(),
+        messages,
         not_a_trip,
         unreadable,
     )

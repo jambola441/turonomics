@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import Trip, Vehicle
 from turonomics_api.gmail.client import GmailClient, GmailError
-from turonomics_api.gmail.parse import ParseError, parse_email
+from turonomics_api.gmail.parse import ParseError, classify, parse_email
 from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text
 from turonomics_api.ingest.tasks import refresh_move_task
 from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
@@ -79,6 +79,10 @@ def sync_trips_from_mail(
         return result
 
     touched: set[uuid.UUID] = set()
+    scanned = 0
+    not_a_trip = 0
+    unreadable = 0
+    first_skipped: str | None = None
     for index, message_id in enumerate(ids):
         if index:
             time.sleep(SECONDS_BETWEEN_FETCHES)
@@ -86,7 +90,9 @@ def sync_trips_from_mail(
             message = gmail.message(message_id)
         except GmailError as exc:
             log.warning("skipping a message: %s", exc)
+            unreadable += 1
             continue
+        scanned += 1
 
         payload = message.get("payload") or {}
         try:
@@ -96,9 +102,15 @@ def sync_trips_from_mail(
                 received_at=_received_at(message, now),
                 fleet_timezone=str(fleet_timezone()),
             )
-        except ParseError:
-            # Most Turo mail is not a trip — payouts, marketing, inspections.
-            # Not worth a log line each; the counts below say what landed.
+        except ParseError as exc:
+            # Most Turo mail genuinely is not a trip — payouts, marketing,
+            # inspections — so this is not per-message worthy. But the *reason*
+            # for the first one is, because "every message failed to parse" and
+            # "there was no trip mail this week" produce identical counts
+            # otherwise, and that ambiguity cost a deploy to notice.
+            not_a_trip += 1
+            if first_skipped is None:
+                first_skipped = f"{classify(_header(payload, 'Subject'))}: {exc}"
             continue
 
         before = session.scalar(
@@ -123,6 +135,21 @@ def sync_trips_from_mail(
             refresh_move_task(session, vehicle=vehicle, now=now)
             refresh_turnaround_tasks(session, vehicle=vehicle, now=now)
 
-    if result.created or result.updated or result.unmatched:
-        log.info("mail sync: %s", result.summary())
+    # Logged unconditionally. A sync that reports nothing when it found
+    # nothing is indistinguishable from one that did not run, and the first
+    # live run of this module was exactly that: silence, with no way to tell
+    # whether the mailbox was empty of trips or the parser was rejecting all of
+    # them.
+    log.info(
+        "mail sync: %d message(s) for %r — %s; %d not a trip, %d unreadable",
+        scanned,
+        query,
+        result.summary(),
+        not_a_trip,
+        unreadable,
+    )
+    if first_skipped and not (result.created or result.updated):
+        # Nothing landed, so the first rejection is the most useful clue there
+        # is. Only the classification and the reason — no subject text.
+        log.info("mail sync: nothing parsed; first skip was %s", first_skipped)
     return result

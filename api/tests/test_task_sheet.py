@@ -177,7 +177,7 @@ def test_a_move_task_reopens_when_the_deadline_rolls_to_the_next_sweep(session, 
     obligation. Ticked off for Monday and left done, this car would sit in one
     spot and never be warned again.
     """
-    _parked_with_cleaning(session, car, days=[0, 3])  # Monday and Thursday
+    _parked_with_cleaning(session, car, days=[1, 4])  # ISO: Monday and Thursday
     first = refresh_move_task(session, vehicle=car, now=NOW)
     session.commit()
     monday = first.due_by
@@ -199,7 +199,7 @@ def test_a_move_task_reopens_when_the_deadline_rolls_to_the_next_sweep(session, 
 def test_a_done_move_task_stays_done_while_its_deadline_has_not_moved(session, car):
     """The other half. Re-opening on every poll would make "done" meaningless
     and put the task straight back on the sheet."""
-    _parked_with_cleaning(session, car, days=[0, 3])
+    _parked_with_cleaning(session, car, days=[1, 4])
     task = refresh_move_task(session, vehicle=car, now=NOW)
     session.commit()
     task.state = TaskState.done

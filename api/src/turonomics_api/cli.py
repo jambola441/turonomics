@@ -177,7 +177,34 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_set.set_defaults(func=cmd_set)
 
+    sub.add_parser(
+        "vapid-keys", help="generate a keypair for push alerts"
+    ).set_defaults(func=cmd_vapid_keys)
+
     return parser
+
+
+def cmd_vapid_keys(args: argparse.Namespace) -> int:
+    """Print a VAPID keypair to configure push alerts with.
+
+    Here rather than in a README because the alternative is finding a web page
+    that generates a private key for you, which is a bad habit to teach. Only
+    the private key is configuration; the public one is printed so it can be
+    recognised, and the server derives it anyway.
+
+    The keypair is the application server's identity and must not be rotated
+    casually: a browser's subscription is bound to the public key that created
+    it, so a new key silently invalidates every subscribed device.
+    """
+    from turonomics_api.notify.vapid import generate_private_key, load_private_key, public_key_of
+
+    private = generate_private_key()
+    print("Set this on the API service:")
+    print(f"  VAPID_PRIVATE_KEY={private}")
+    print("  VAPID_SUBJECT=mailto:you@example.com   # a real address you read")
+    print()
+    print(f"Public key (derived, no need to set): {public_key_of(load_private_key(private))}")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

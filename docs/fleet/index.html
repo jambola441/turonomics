@@ -8,6 +8,13 @@
      work with ?api=http://127.0.0.1:8000 -->
 <meta name="turonomics-api" content="https://turonomics.onrender.com">
 <title>Turonomics — Fleet</title>
+<link rel="manifest" href="manifest.webmanifest">
+<!-- iOS will not deliver a web push notification to a site opened in Safari;
+     it only does so once the site has been added to the home screen, and it
+     uses this icon rather than the manifest's when it is. -->
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <style>
@@ -95,6 +102,12 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
        border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  .bell{font:inherit;font-size:11.5px;color:var(--muted);cursor:pointer;
+        display:flex;align-items:center;gap:6px;min-height:32px;padding:5px 10px;
+        border-radius:8px;border:1px solid var(--border);background:var(--surface2)}
+  .bell:hover{border-color:var(--border2);color:var(--text)}
+  .bell[data-state="on"]{color:var(--green);border-color:#2b4a3c}
+  .bell:disabled{opacity:.55;cursor:default}
   @media(min-width:900px){.sheet{max-height:40vh}}
 </style>
 </head>
@@ -102,7 +115,10 @@
   <header>
     <div class="row">
       <h1>Fleet</h1>
-      <div class="stamp" id="stamp">loading…</div>
+      <div class="row" style="gap:10px">
+        <button type="button" class="bell" id="alerts" hidden></button>
+        <div class="stamp" id="stamp">loading…</div>
+      </div>
     </div>
     <div class="legend">
       <div><span class="dot" style="background:var(--red)"></span>Move soon</div>
@@ -138,6 +154,7 @@
     return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
   })();
   var map, markers = {}, fleet = null, selectedId = null, tilesAdded = false;
+  var pendingCar = new URLSearchParams(location.search).get("car");
 
   function initials(name) {
     var parts = String(name || "?").trim().split(/[\s·—-]+/).filter(Boolean);
@@ -488,12 +505,149 @@
         fleet = data;
         addTiles(data.map_tiles);
         render();
+        // A notification names the car it is about. Applied once, after the
+        // first load that knows about it, and then forgotten — re-centring on
+        // every sixty-second refresh would fight the operator for the map.
+        if (pendingCar) {
+          var known = fleet.vehicles.some(function (v) { return v.id === pendingCar; });
+          if (known) focusVehicle(pendingCar);
+          pendingCar = null;
+        }
       })
       .catch(function (e) {
         var el = document.getElementById("err");
         el.hidden = false;
         el.textContent = "Could not reach the API at " + (API || location.origin) + " — " + e.message;
       });
+  }
+
+  // ---- Alerts ------------------------------------------------------------
+  // Web push, so a street-cleaning deadline reaches the operator with the tab
+  // closed. The button is the whole UI: a browser will only grant notification
+  // permission in response to a gesture, so there is no enabling this quietly.
+
+  var swReg = null;
+
+  function urlB64ToUint8(value) {
+    var padded = value.replace(/-/g, "+").replace(/_/g, "/");
+    while (padded.length % 4) padded += "=";
+    var raw = atob(padded);
+    var out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i += 1) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+
+  function pushSupported() {
+    return "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+  }
+
+  function installedToHomeScreen() {
+    return window.navigator.standalone === true ||
+      (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  }
+
+  function isApple() {
+    return /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  }
+
+  function setBell(state, label, disabled) {
+    var btn = document.getElementById("alerts");
+    btn.hidden = false;
+    btn.dataset.state = state;
+    btn.disabled = !!disabled;
+    btn.textContent = (state === "on" ? "\u25cf " : "\u25cb ") + label;
+  }
+
+  function initAlerts() {
+    if (!pushSupported()) {
+      // iOS delivers web push only to a site added to the home screen, and
+      // hides PushManager everywhere else — so on an iPhone this is not a
+      // broken browser, it is a missing step, and saying which one is the
+      // difference between the feature working and the operator giving up.
+      if (isApple() && !installedToHomeScreen()) {
+        setBell("info", "Share \u2192 Add to Home Screen for alerts", true);
+      }
+      return;
+    }
+    setBell("off", "Checking\u2026", true);
+    navigator.serviceWorker.register("sw.js")
+      .then(function (reg) {
+        swReg = reg;
+        return reg.pushManager.getSubscription();
+      })
+      .then(function (sub) {
+        if (sub) { setBell("on", "Alerts on", false); return; }
+        setBell("off", Notification.permission === "denied" ? "Alerts blocked" : "Enable alerts",
+                Notification.permission === "denied");
+      })
+      .catch(function (e) {
+        setBell("off", "Alerts unavailable", true);
+        console.warn("service worker registration failed", e);
+      });
+    document.getElementById("alerts").addEventListener("click", toggleAlerts);
+  }
+
+  function toggleAlerts() {
+    if (document.getElementById("alerts").dataset.state === "on") return disableAlerts();
+    setBell("off", "Enabling\u2026", true);
+    Notification.requestPermission()
+      .then(function (permission) {
+        if (permission !== "granted") {
+          setBell("off", permission === "denied" ? "Alerts blocked" : "Enable alerts",
+                  permission === "denied");
+          return null;
+        }
+        return fetch(API + "/api/push/key").then(function (r) { return r.json(); });
+      })
+      .then(function (cfg) {
+        if (!cfg) return null;
+        if (!cfg.configured) {
+          // The server has no VAPID key. Said plainly rather than left as a
+          // button that does nothing: this is a thing to go and configure.
+          setBell("off", "Alerts not set up on the server", true);
+          return null;
+        }
+        return swReg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlB64ToUint8(cfg.public_key)
+        });
+      })
+      .then(function (sub) {
+        if (!sub) return null;
+        return fetch(API + "/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sub.toJSON())
+        }).then(function (r) {
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          setBell("on", "Alerts on", false);
+        });
+      })
+      .catch(function (e) {
+        setBell("off", "Enable alerts", false);
+        var el = document.getElementById("err");
+        el.hidden = false;
+        el.textContent = "Could not enable alerts — " + e.message;
+      });
+  }
+
+  function disableAlerts() {
+    setBell("on", "Turning off\u2026", true);
+    swReg.pushManager.getSubscription()
+      .then(function (sub) {
+        if (!sub) return null;
+        // Told to the server first. Unsubscribing locally first and then
+        // failing to reach the API would leave a row that can never be
+        // delivered to and nothing to delete it by.
+        return fetch(API + "/api/push/unsubscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(sub.toJSON())
+        }).then(function () { return sub.unsubscribe(); });
+      })
+      .then(function () { setBell("off", "Enable alerts", false); })
+      .catch(function () { setBell("on", "Alerts on", false); });
   }
 
   // Data first. The fleet list must render whether or not the map library
@@ -553,6 +707,8 @@
     });
     layer.addTo(map);
   }
+
+  initAlerts();
 
   // Telemetry only changes when a car moves, so this is a gentle refresh, not a poll.
   setInterval(load, 60000);

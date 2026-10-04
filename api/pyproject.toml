@@ -21,6 +21,13 @@ dependencies = [
     "alembic>=1.13.0",
     "psycopg[binary]>=3.2.0",
     "httpx>=0.27.0",
+    # Web push is encrypted to the browser's own keys (RFC 8291) and signed
+    # with an application server key (RFC 8292). ``pywebpush`` would be the
+    # usual way to get both; it depends on ``http-ece``, whose sdist no longer
+    # builds against current setuptools. So this depends on the primitives
+    # directly and ``notify/ece.py`` does the derivation, checked against the
+    # RFC's own worked example.
+    "cryptography>=41.0.0",
 ]
 
 [project.optional-dependencies]

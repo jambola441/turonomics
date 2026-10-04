@@ -240,3 +240,45 @@ def test_structural_lines_survive_the_prose_filter():
     joined = "\n".join(shape.lines)
     assert "Reservation ID #<NUM>" in joined
     assert "booked by <NAME>" in joined
+
+
+# ---------------------------------------------------------------------------
+# Why the first run missed the booking emails
+# ---------------------------------------------------------------------------
+
+
+def test_two_messages_of_the_same_kind_report_as_one_shape():
+    """The first run logged every message and so had to cap at twelve, which
+    hid the email type that mattered. Deduplicating is what makes a wide scan
+    cheap enough to actually find every kind."""
+    from turonomics_api.gmail.probe import signature
+
+    a = shape_of(_message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@mail.turo.com>",
+                          subject="Jenna has sent you a message about your Transit"))
+    b = shape_of(_message(
+        REAL_MESSAGE_NOTIFICATION.replace("Jenna", "Marcus").replace("$284.00", "$512.40"),
+        sender="Turo <x@mail.turo.com>",
+        subject="Marcus has sent you a message about your Transit",
+    ))
+    assert signature(a) == signature(b), "different guests, same kind of email"
+
+
+def test_a_different_kind_of_email_is_a_different_shape():
+    payout = "Ka-ching! Turo sent your earnings payment of $284.00.\nNote: we deposit weekly.\n"
+    a = shape_of(_message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@mail.turo.com>",
+                          subject="Jenna has sent you a message about your Transit"))
+    b = shape_of(_message(payout, sender="Turo <x@mail.turo.com>",
+                          subject="Your earnings are on the way!"))
+    from turonomics_api.gmail.probe import signature
+
+    assert signature(a) != signature(b)
+
+
+def test_the_default_query_matches_turos_sending_subdomain():
+    """The miss that started this: booking mail comes from mail.turo.com, and
+    'from:turo.com' did not match it, so the first run reported that no booking
+    email existed."""
+    from turonomics_api.gmail.probe import DEFAULT_QUERY
+
+    assert "from:turo.com" not in DEFAULT_QUERY, "an apex-only filter misses mail.turo.com"
+    assert "from:turo" in DEFAULT_QUERY

@@ -37,10 +37,18 @@ from turonomics_api.gmail.client import GmailClient, GmailError
 
 log = logging.getLogger("turonomics.gmail.probe")
 
-# Broad on purpose: better to see every notification type once and narrow the
-# real query later than to miss the one carrying the trip id.
-DEFAULT_QUERY = "from:turo.com newer_than:180d"
-DEFAULT_LIMIT = 12
+# ``from:turo``, not ``from:turo.com``. Turo sends booking mail from
+# noreply@mail.turo.com, and Gmail did not match that subdomain against the
+# apex domain — so the first run excluded every booking email and reported
+# that none existed. A bare token matches any turo domain.
+DEFAULT_QUERY = "from:turo newer_than:365d"
+
+# High, because shapes are deduplicated before logging: a year of mail collapses
+# to a handful of distinct shapes, so scanning widely costs little. The first
+# run capped at 12 and logged "12 message(s) match", which read like a total and
+# was really the cap being hit — the booking emails were simply older than the
+# twelve newest.
+DEFAULT_LIMIT = 150
 
 # Words that are structure rather than content, so they survive masking. Losing
 # these would hide the labels the parser has to match on.
@@ -225,24 +233,54 @@ def shape_of(message: dict[str, Any]) -> Shape:
     return shape
 
 
+def signature(shape: Shape) -> tuple[str, tuple[str, ...]]:
+    """What makes two emails the same kind of email.
+
+    The subject template plus the set of labels. Values differ between
+    messages; the shape does not, which is the whole point.
+    """
+    return (shape.subject, tuple(entry.split(":", 1)[0] for entry in shape.labels))
+
+
 def probe(
     session: Session, *, query: str = DEFAULT_QUERY, limit: int = DEFAULT_LIMIT
 ) -> list[Shape]:
-    """Log the shape of recent Turo mail. Never raises."""
+    """Log the distinct shapes of recent Turo mail. Never raises.
+
+    Deduplicated, because the question is "which kinds of email are there" and
+    not "what arrived". Logging every message buried the answer and made a wide
+    scan too noisy to run, which is how the first attempt ended up capped at
+    twelve and missing the type that mattered.
+    """
     shapes: list[Shape] = []
     try:
         client = GmailClient(session)
         ids = client.search(query, limit=limit)
-        log.info("probe: %d message(s) match %r", len(ids), query)
+        if len(ids) >= limit:
+            log.warning(
+                "probe: hit the cap of %d for %r — there are probably more, "
+                "raise GMAIL_PROBE_LIMIT or narrow the query",
+                limit,
+                query,
+            )
+        log.info("probe: fetched %d message(s) for %r (cap %d)", len(ids), query, limit)
+
+        seen: dict[tuple[str, tuple[str, ...]], tuple[Shape, int]] = {}
         for message_id in ids:
             shape = shape_of(client.message(message_id))
-            shapes.append(shape)
-            log.info("---- message ----")
-            log.info("  from    : %s", shape.sender)
-            log.info("  subject : %s", shape.subject)
-            for label in shape.labels:
+            key = signature(shape)
+            first, count = seen.get(key, (shape, 0))
+            seen[key] = (first, count + 1)
+
+        log.info("probe: %d distinct shape(s)", len(seen))
+        for first, count in sorted(seen.values(), key=lambda pair: -pair[1]):
+            shapes.append(first)
+            log.info("---- shape (%d message(s)) ----", count)
+            log.info("  from    : %s", first.sender)
+            log.info("  subject : %s", first.subject)
+            for label in first.labels:
                 log.info("  label   : %s", label)
-            for line in shape.lines:
+            for line in first.lines:
                 log.info("  line    : %s", line)
     except GmailError as exc:
         log.warning("probe failed: %s", exc)

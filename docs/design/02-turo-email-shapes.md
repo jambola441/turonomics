@@ -1,7 +1,16 @@
 # Turo notification email shapes
 
 Observed by running the probe (`GMAIL_PROBE=true`) against the real mailbox on
-2026-10-03. 12 messages matched `from:turo.com newer_than:180d`.
+2026-10-03, with `from:turo.com newer_than:180d` capped at the 12 newest.
+
+**That first run was wrong twice, and this file is incomplete because of it.**
+Turo sends booking mail from `noreply@mail.turo.com`, and Gmail did not match
+that subdomain against `turo.com` — so every booking email was excluded. The cap
+compounded it: the log said "12 message(s) match", which was the cap being hit
+rather than a total. The query is now `from:turo` and shapes are deduplicated
+before logging, so a year of mail can be scanned without drowning the output.
+
+Re-run the probe and extend this file with the booking shape.
 
 Every value is a type token. This file is the input the email parser is built
 and tested against, the same way the sign parser was built against 3,012 real
@@ -67,10 +76,12 @@ Carries an amount but **no reservation id**, so a payout cannot be attached to a
 trip from this email alone. Useful for the Money module as a total; not useful
 for trip sync.
 
-## Not yet observed
+## Type 3 — booking confirmation (not yet captured)
 
-No booking-confirmation or trip-start/trip-end reminder email appeared in the
-last 180 days of this mailbox, which is surprising. Either they are filtered or
-archived elsewhere, they are not sent to this address, or the Gmail query missed
-them. Worth re-running the probe with a wider query before assuming the
-message-notification email is the only ingress.
+Known to exist: it arrives from `noreply@mail.turo.com` and the first run's
+query excluded it. This is the email the trip feed should really be built on,
+since a booking is the event that creates a trip — the message notification
+only carries the trip record incidentally, and only once a guest writes
+something.
+
+Shape to be filled in from the next probe run.

@@ -272,3 +272,144 @@ def test_the_bbox_can_be_overridden(session, monkeypatch, counted_fetch, boots_a
     monkeypatch.setenv("BOOTSTRAP_SIGNS_BBOX", "1, 2,3 ,4")
     run_sign_bootstrap()
     assert counted_fetch == [(1, 2, 3, 4)]
+
+
+# ---------------------------------------------------------------------------
+# Binding Turo listings from configuration
+# ---------------------------------------------------------------------------
+
+
+def test_a_listing_map_takes_ids_or_whole_urls():
+    """You have the URL in your hand when you are looking at the listing."""
+    from turonomics_api.bootstrap import parse_listing_map
+
+    assert parse_listing_map("Jerry=3382060,Jolene=3218625") == {
+        "jerry": "3382060",
+        "jolene": "3218625",
+    }
+    assert parse_listing_map("Jerry=https://turo.com/your-car/3382060/") == {"jerry": "3382060"}
+    assert parse_listing_map(
+        "Jerry=https://turo.com/us/en/car-rental/united-states/brooklyn-ny/"
+        "toyota/corolla/3382060?utm=x"
+    ) == {"jerry": "3382060"}
+
+
+def test_a_listing_map_ignores_anything_that_is_not_an_id():
+    """A typo in an environment variable must not become a binding."""
+    from turonomics_api.bootstrap import parse_listing_map
+
+    assert parse_listing_map("Jerry=notanumber") == {}
+    assert parse_listing_map("Jerry") == {}
+    assert parse_listing_map("") == {}
+
+
+def test_binding_attaches_a_listing_to_the_named_car(session):
+    from turonomics_api.bootstrap import apply_listings
+
+    session.add_all(
+        [
+            Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025),
+            Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025),
+        ]
+    )
+    session.flush()
+    changed = apply_listings(session, {"jerry": "3382060", "jolene": "3218625"})
+    session.flush()
+    assert sorted(changed) == ["Jerry=3382060", "Jolene=3218625"]
+    rows = {v.nickname: v.turo_listing_id for v in session.scalars(select(Vehicle))}
+    assert rows == {"Jerry": "3382060", "Jolene": "3218625"}
+
+
+def test_binding_is_idempotent(session):
+    """It runs on every deploy. Re-reporting a binding that was already there
+    would make the log say something changed when nothing did."""
+    from turonomics_api.bootstrap import apply_listings
+
+    car = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025)
+    session.add(car)
+    session.flush()
+    assert apply_listings(session, {"jerry": "3382060"}) == ["Jerry=3382060"]
+    session.flush()
+    assert apply_listings(session, {"jerry": "3382060"}) == []
+
+
+def test_two_cars_cannot_claim_one_listing(session):
+    """The unique index would reject it — with a stack trace at boot, which is
+    a bad trade for a convenience. Refused and logged instead."""
+    from turonomics_api.bootstrap import apply_listings
+
+    session.add_all(
+        [
+            Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025),
+            Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025),
+        ]
+    )
+    session.flush()
+    changed = apply_listings(session, {"jerry": "3382060", "jolene": "3382060"})
+    session.flush()
+    assert changed == ["Jerry=3382060"]
+    rows = {v.nickname: v.turo_listing_id for v in session.scalars(select(Vehicle))}
+    assert rows == {"Jerry": "3382060", "Jolene": None}
+
+
+def test_an_existing_binding_is_not_overwritten_by_a_deploy(session):
+    """Rebinding moves every future trip for that listing onto a different car.
+    That is deliberate enough to want a human at a shell, not an env var."""
+    from turonomics_api.bootstrap import apply_listings
+
+    car = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025)
+    car.turo_listing_id = "1111111"
+    session.add(car)
+    session.flush()
+    assert apply_listings(session, {"jerry": "3382060"}) == []
+    session.flush()
+    assert session.scalars(select(Vehicle)).one().turo_listing_id == "1111111"
+
+
+def test_run_bootstrap_applies_turo_listings(
+    session, monkeypatch, boots_against_test_db
+) -> None:
+    """The wiring, not just the function.
+
+    ``apply_listings`` can be perfect and the binding still never happen, which
+    is exactly the bug this project shipped one module earlier: the mail sync
+    passed the markup to the parser and nothing checked that it did, so setting
+    it to None left every test green and the feature dead.
+    """
+    session.add_all(
+        [
+            Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025),
+            Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025),
+        ]
+    )
+    session.commit()
+
+    monkeypatch.setenv("BOOTSTRAP_FLEET", "true")
+    monkeypatch.setenv("TURO_LISTINGS", "Jerry=3382060,Jolene=3218625")
+    # No Bouncie credentials: the sync raises, is caught, and the rest of the
+    # bootstrap still has to run. That is the behaviour on a real deploy when
+    # the Bouncie token has lapsed, so it is the right shape for this test.
+    for name in ("BOUNCIE_CLIENT_ID", "BOUNCIE_CLIENT_SECRET", "BOUNCIE_AUTH_CODE"):
+        monkeypatch.delenv(name, raising=False)
+
+    run_bootstrap()
+
+    session.expire_all()
+    bound = {v.nickname: v.turo_listing_id for v in session.scalars(select(Vehicle))}
+    assert bound == {"Jerry": "3382060", "Jolene": "3218625"}
+
+
+def test_a_correct_binding_is_silent_on_the_next_deploy(session, caplog) -> None:
+    """Idempotent *and* quiet. Falling through to the "already has a listing"
+    branch would log a refusal for every correctly-bound car on every boot,
+    which reads like a problem and trains you to ignore the log.
+    """
+    from turonomics_api.bootstrap import apply_listings
+
+    car = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025)
+    car.turo_listing_id = "3382060"
+    session.add(car)
+    session.flush()
+    with caplog.at_level("INFO", logger="turonomics.bootstrap"):
+        assert apply_listings(session, {"jerry": "3382060"}) == []
+    assert "already has listing" not in caplog.text

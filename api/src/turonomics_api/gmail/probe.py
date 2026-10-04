@@ -28,6 +28,7 @@ from __future__ import annotations
 import base64
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -49,6 +50,13 @@ DEFAULT_QUERY = "from:turo newer_than:365d"
 # was really the cap being hit — the booking emails were simply older than the
 # twelve newest.
 DEFAULT_LIMIT = 150
+
+# Gmail bills per-minute "query cost" units per user, and fetching messages as
+# fast as httpx allows tripped it after about twenty-five. Pacing at five a
+# second keeps a wide scan comfortably inside the limit, and costs half a minute
+# on a run that happens once.
+SECONDS_BETWEEN_FETCHES = 0.2
+QUOTA_BACKOFF_SECONDS = 20.0
 
 # Words that are structure rather than content, so they survive masking. Losing
 # these would hide the labels the parser has to match on.
@@ -265,23 +273,55 @@ def probe(
             )
         log.info("probe: fetched %d message(s) for %r (cap %d)", len(ids), query, limit)
 
-        seen: dict[tuple[str, tuple[str, ...]], tuple[Shape, int]] = {}
-        for message_id in ids:
-            shape = shape_of(client.message(message_id))
-            key = signature(shape)
-            first, count = seen.get(key, (shape, 0))
-            seen[key] = (first, count + 1)
+        seen: dict[tuple[str, tuple[str, ...]], int] = {}
+        failures = 0
+        for index, message_id in enumerate(ids):
+            if index:
+                time.sleep(SECONDS_BETWEEN_FETCHES)
+            try:
+                message = client.message(message_id)
+            except GmailError as exc:
+                # One unreadable message must not end the scan. The first
+                # version wrapped the whole loop, so a single quota error threw
+                # away everything already gathered — and because shapes were
+                # only logged at the end, the twenty-five messages that had
+                # succeeded were lost with it.
+                failures += 1
+                if "quota" in str(exc).lower() and failures == 1:
+                    log.warning("quota hit after %d message(s); backing off", index)
+                    time.sleep(QUOTA_BACKOFF_SECONDS)
+                    continue
+                log.warning("skipping a message: %s", exc)
+                if failures > 5:
+                    log.warning("giving up after %d failures; reporting what was read", failures)
+                    break
+                continue
 
-        log.info("probe: %d distinct shape(s)", len(seen))
-        for first, count in sorted(seen.values(), key=lambda pair: -pair[1]):
-            shapes.append(first)
-            log.info("---- shape (%d message(s)) ----", count)
-            log.info("  from    : %s", first.sender)
-            log.info("  subject : %s", first.subject)
-            for label in first.labels:
+            shape = shape_of(message)
+            key = signature(shape)
+            if key in seen:
+                seen[key] += 1
+                continue
+            seen[key] = 1
+            # Logged on discovery rather than at the end, so a run that dies
+            # part way still tells you what it found.
+            log.info("---- shape %d ----", len(seen))
+            log.info("  from    : %s", shape.sender)
+            log.info("  subject : %s", shape.subject)
+            for label in shape.labels:
                 log.info("  label   : %s", label)
-            for line in first.lines:
+            for line in shape.lines:
                 log.info("  line    : %s", line)
+            shapes.append(shape)
+
+        log.info(
+            "probe: %d distinct shape(s) from %d message(s), %d unreadable",
+            len(seen),
+            len(ids) - failures,
+            failures,
+        )
+        for (subject, _labels), count in sorted(seen.items(), key=lambda kv: -kv[1]):
+            log.info("  %-3d message(s): %s", count, subject or "(no subject)")
     except GmailError as exc:
         log.warning("probe failed: %s", exc)
     except Exception as exc:  # noqa: BLE001 - diagnostics must not break boot

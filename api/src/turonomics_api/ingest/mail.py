@@ -1,0 +1,125 @@
+"""Read Turo mail on the poll and turn it into trips.
+
+Runs alongside the Bouncie sync rather than on its own schedule: a trip and the
+car's position are read in the same cycle, so the run sheet never shows a car
+as free while the mail that says otherwise waits for a different timer.
+
+Only recent mail is scanned. Turo sends a notification for every state change,
+so a trip's current state is always in the last few days of mail — there is no
+need to re-read a year of it on every poll, and re-reading it would spend the
+Gmail quota for nothing.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+import uuid
+from datetime import UTC, datetime
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from turonomics_api.db.models import Trip, Vehicle
+from turonomics_api.gmail.client import GmailClient, GmailError
+from turonomics_api.gmail.parse import ParseError, parse_email
+from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text
+from turonomics_api.ingest.tasks import refresh_move_task
+from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
+from turonomics_api.settings import fleet_timezone
+
+log = logging.getLogger("turonomics.ingest.mail")
+
+DEFAULT_QUERY = "from:turo newer_than:7d"
+DEFAULT_LIMIT = 40
+
+
+def _header(payload: dict[str, Any], name: str) -> str:
+    for item in payload.get("headers") or []:
+        if item.get("name", "").lower() == name.lower():
+            return str(item.get("value", ""))
+    return ""
+
+
+def _received_at(payload: dict[str, Any], fallback: datetime) -> datetime:
+    """When Gmail says the message arrived, used to resolve years on labels."""
+    raw = payload.get("internalDate")
+    if raw:
+        try:
+            return datetime.fromtimestamp(int(raw) / 1000, tz=UTC)
+        except (ValueError, OSError):
+            pass
+    return fallback
+
+
+def sync_trips_from_mail(
+    session: Session,
+    *,
+    client: GmailClient | None = None,
+    query: str | None = None,
+    limit: int | None = None,
+    now: datetime | None = None,
+) -> TripSyncResult:
+    """Scan recent Turo mail and upsert the trips it describes. Never raises."""
+    now = now or datetime.now(UTC)
+    result = TripSyncResult()
+    query = query or os.environ.get("TURO_MAIL_QUERY", "").strip() or DEFAULT_QUERY
+    limit = limit or DEFAULT_LIMIT
+
+    try:
+        gmail = client or GmailClient(session)
+        ids = gmail.search(query, limit=limit)
+    except GmailError as exc:
+        # Not connected, or revoked. The fleet view still works off Bouncie, so
+        # this is a degraded poll rather than a failed one.
+        log.warning("skipping mail sync: %s", exc)
+        return result
+
+    touched: set[uuid.UUID] = set()
+    for index, message_id in enumerate(ids):
+        if index:
+            time.sleep(SECONDS_BETWEEN_FETCHES)
+        try:
+            message = gmail.message(message_id)
+        except GmailError as exc:
+            log.warning("skipping a message: %s", exc)
+            continue
+
+        payload = message.get("payload") or {}
+        try:
+            parsed = parse_email(
+                subject=_header(payload, "Subject"),
+                body=plain_text(payload),
+                received_at=_received_at(message, now),
+                fleet_timezone=str(fleet_timezone()),
+            )
+        except ParseError:
+            # Most Turo mail is not a trip — payouts, marketing, inspections.
+            # Not worth a log line each; the counts below say what landed.
+            continue
+
+        before = session.scalar(
+            select(Trip.id).where(Trip.turo_trip_id == parsed.reservation_id)
+        )
+        trip = apply_parsed_trip(session, parsed, now=now)
+        if trip is None:
+            result.unmatched += 1
+            continue
+        if before is None:
+            result.created += 1
+        else:
+            result.updated += 1
+        touched.add(trip.vehicle_id)
+
+    # A new or cancelled trip changes whether a street-cleaning alert applies,
+    # so the affected vehicles' tasks are refreshed in the same cycle.
+    for vehicle_id in touched:
+        vehicle = session.get(Vehicle, vehicle_id)
+        if vehicle is not None:
+            refresh_move_task(session, vehicle=vehicle, now=now)
+
+    if result.created or result.updated or result.unmatched:
+        log.info("mail sync: %s", result.summary())
+    return result

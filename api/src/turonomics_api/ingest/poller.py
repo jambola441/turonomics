@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.bouncie.sync import SyncResult, sync_vehicles
+from turonomics_api.ingest.mail import sync_trips_from_mail
 
 log = logging.getLogger("turonomics.poller")
 
@@ -38,6 +40,10 @@ def poll_once(session: Session, *, client: BouncieClient | None = None) -> SyncR
     result = sync_vehicles(session, client or BouncieClient(session), create_missing=True)
     if result.created:
         log.info("adopted %d new device(s) from the Bouncie account", result.created)
+    # Trips in the same cycle as positions. Reading them on a separate timer
+    # would let the run sheet show a car as free while the mail saying a guest
+    # has it waits for a different clock.
+    sync_trips_from_mail(session, now=datetime.now(UTC))
     session.commit()
     return result
 

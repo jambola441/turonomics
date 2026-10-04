@@ -89,6 +89,7 @@ _DATE = re.compile(
     r"|\b(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.?\s+\d{1,2}\b",
     re.IGNORECASE,
 )
+_MODEL = re.compile(r"\b\d+[A-Za-z][\w-]*\b")
 _PLATE = re.compile(r"\b[A-Z]{2,3}[- ]?\d{3,4}\b")
 _NUM = re.compile(r"\b\d[\d,]{2,}\b")
 _CAPS = re.compile(r"\b[A-Z][a-zA-Z'’]+\b")
@@ -116,6 +117,7 @@ def mask(text: str) -> str:
         ("date", _DATE),
         ("time", _TIME),
         ("plate", _PLATE),
+        ("name", _MODEL),
         ("num", _NUM),
     )
     out = text

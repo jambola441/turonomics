@@ -28,6 +28,7 @@ from turonomics_api.gmail.parse import ParseError, parse_email
 from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text
 from turonomics_api.ingest.tasks import refresh_move_task
 from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
+from turonomics_api.ingest.turnaround import refresh_turnaround_tasks
 from turonomics_api.settings import fleet_timezone
 
 log = logging.getLogger("turonomics.ingest.mail")
@@ -113,12 +114,14 @@ def sync_trips_from_mail(
             result.updated += 1
         touched.add(trip.vehicle_id)
 
-    # A new or cancelled trip changes whether a street-cleaning alert applies,
-    # so the affected vehicles' tasks are refreshed in the same cycle.
+    # A new or cancelled trip changes whether a street-cleaning alert applies
+    # and whether there is prep to do, so the affected vehicles' tasks are
+    # refreshed in the same cycle.
     for vehicle_id in touched:
         vehicle = session.get(Vehicle, vehicle_id)
         if vehicle is not None:
             refresh_move_task(session, vehicle=vehicle, now=now)
+            refresh_turnaround_tasks(session, vehicle=vehicle, now=now)
 
     if result.created or result.updated or result.unmatched:
         log.info("mail sync: %s", result.summary())

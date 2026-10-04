@@ -20,13 +20,20 @@ assumed, and it works with no browser open, which the extension never could.
 authenticated Turo session, so every action taken *in reply* to one of these
 emails goes through it:
 
-| Email tells you | Acting on it needs the extension |
+| Email tells you | How to act on it |
 |---|---|
-| A guest sent a message | Replying to them |
-| A guest requested a change | Approving or declining it |
-| A guest's licence is unconfirmed | Confirming it |
-| A trip needs cancelling from your side | Cancelling it |
-| Earnings look wrong for a listing | Changing price or availability |
+| A guest sent a message | **Reply to the email** — it reaches the guest |
+| A guest requested a change | Extension: approving or declining it |
+| A guest's licence is unconfirmed | Extension: confirming it |
+| A trip needs cancelling from your side | Extension: cancelling it |
+| Earnings look wrong for a listing | Extension: price or availability |
+
+**Guest messaging is the exception, and it is the one that matters most.**
+Replying to a message notification reaches the guest, so the whole
+conversation — in and out — runs over mail. That is the feature the operator
+named first, and it needs no browser and no extension. Everything else in the
+table is an approval or a setting, which is deliberate, occasional, and done at
+a keyboard where a browser is open anyway.
 
 So the two halves are complements, not alternatives: email is how the app
 learns there is something to do, and the extension is how the operator does it.

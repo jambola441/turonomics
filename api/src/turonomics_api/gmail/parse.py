@@ -132,6 +132,10 @@ class ParsedTrip:
     ends_at: datetime
     state: TripState
     vehicle_text: str | None
+    # The guest's own words, on a message notification only. Stored and shown
+    # rather than masked: the operator reading what their guest actually wrote,
+    # beside the car it is about, is why this exists.
+    guest_message: str | None
     # Turo's listing id, from the link behind the car's photo. Present on every
     # trip-bearing email type; None when the message was plain text or linked
     # more than one car. This is what resolves two cars of the same model.
@@ -141,6 +145,56 @@ class ParsedTrip:
     year_was_explicit: bool
     # The zone the naive email times were read in — an assumption, recorded.
     assumed_timezone: str
+
+
+# "Jenna has sent you a message about your Transit." — the line the guest's own
+# words follow. Captured from the body rather than the subject because the
+# subject is truncated on long names.
+_MESSAGE_HEADER = re.compile(
+    r"^(?P<guest>.+?) has sent you a message about your\b.*$", re.IGNORECASE | re.MULTILINE
+)
+
+# What ends the quoted message. In every observed example the guest's words are
+# followed by "Reply https://turo.com/...", and every label in the email comes
+# after that — so a URL is the delimiter, and the labels never need to be one.
+#
+# Matching labels too would be stricter and worse: a guest writing "Note: the
+# tank is full" would have their message cut at the first word. Truncating the
+# person's actual words to be tidy is the wrong trade.
+_MESSAGE_END = re.compile(r"https?://|^Reservation ID #", re.IGNORECASE)
+
+# Long enough for anything a guest types into a phone, short enough that a
+# malformed parse cannot put a whole email body in the database.
+MAX_MESSAGE_CHARS = 2000
+
+
+def guest_message(body: str) -> tuple[str | None, str | None]:
+    """The guest's own words from a message notification, and who sent them.
+
+    Returns ``(None, None)`` for every other kind of email. The text is kept
+    verbatim — this is the one place in the mail pipeline that stores a guest's
+    prose rather than masking it, because showing it to the operator beside the
+    car it is about is the entire point. The probe's masking exists so that
+    *logs* never carry it; this is the operator's own app showing the operator
+    their own mail.
+    """
+    body = body.replace("\r\n", "\n").replace("\r", "\n")
+    header = _MESSAGE_HEADER.search(body)
+    if header is None:
+        return None, None
+
+    kept: list[str] = []
+    for line in body[header.end() :].split("\n")[1:]:
+        if _MESSAGE_END.search(line.strip()):
+            break
+        kept.append(line.rstrip())
+
+    # Leading and trailing blank lines are layout; blank lines in the middle are
+    # the guest's own paragraph breaks and are kept.
+    text = "\n".join(kept).strip()
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    guest = (header.group("guest") or "").strip() or None
+    return (text[:MAX_MESSAGE_CHARS] or None), guest
 
 
 def classify(subject: str) -> str:
@@ -294,6 +348,7 @@ def parse_email(
         ends_at=ends_at,
         state=STATE_FOR_KIND[kind],
         vehicle_text=vehicle_text,
+        guest_message=guest_message(body)[0] if kind == MESSAGE else None,
         turo_listing_id=listing_id(html) if html else None,
         earnings_cents=(
             int(round(float(earnings.group(1).replace(",", "")) * 100)) if earnings else None

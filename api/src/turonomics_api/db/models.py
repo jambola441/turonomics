@@ -618,3 +618,35 @@ class Notification(Base):
     # subscribed, which is the state the app is in before anyone presses the
     # button and is worth telling apart from a delivery failure.
     delivered: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class GuestMessage(Base):
+    """What a guest actually wrote, kept against the car it is about.
+
+    The only place in this app that stores a guest's prose. Everything else in
+    the mail pipeline masks it — the probe exists specifically so that no
+    guest's words reach a retained log. This is the opposite case and the
+    reason is the same one: the operator confirming which side of the street a
+    car is on is acting on what the guest told them, so the message belongs
+    next to that decision rather than in another tab.
+
+    Keyed on the Gmail message id. The sync re-reads the same window every ten
+    minutes, so without it the same message is stored on every poll.
+    """
+
+    __tablename__ = "guest_message"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"))
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"))
+
+    gmail_message_id: Mapped[str] = mapped_column(String(128), unique=True)
+    guest_name: Mapped[str | None] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text)
+
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    vehicle: Mapped[Vehicle] = relationship()
+
+    __table_args__ = (Index("ix_guest_message_vehicle_time", "vehicle_id", "received_at"),)

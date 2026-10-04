@@ -102,6 +102,12 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
        border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  .note-guest{display:flex;flex-direction:column;gap:7px;padding:11px 13px;border-radius:10px;
+       background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--blue)}
+  .note-guest .g-who{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
+       text-transform:uppercase;color:var(--dim)}
+  .note-guest .g-body{font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
+  .notes{display:flex;flex-direction:column;gap:8px}
   .bell{font:inherit;font-size:11.5px;color:var(--muted);cursor:pointer;
         display:flex;align-items:center;gap:6px;min-height:32px;padding:5px 10px;
         border-radius:8px;border:1px solid var(--border);background:var(--surface2)}
@@ -436,7 +442,7 @@
         "</div>" +
         (v.plate ? '<div class="plate">' + esc(v.plate) + "</div>" : "") +
       "</div>" +
-      '<div class="stats">' + stats + "</div>" + note;
+      '<div class="stats">' + stats + "</div>" + guestNotesHtml(v) + note;
 
     Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
       el.addEventListener("click", function () { focusVehicle(el.dataset.id); });
@@ -451,6 +457,22 @@
         confirmSide(el.dataset.session, el.dataset.side, body);
       });
     });
+  }
+
+  // What the guest actually wrote, above the question it usually answers.
+  // Deliberately verbatim and not summarised: the operator is deciding which
+  // side of a street a car is on, and a paraphrase of "I left it across from
+  // the school" is worth nothing.
+  function guestNotesHtml(v) {
+    var notes = v.guest_notes || [];
+    if (!notes.length) return "";
+    return '<div class="notes">' + notes.map(function (n) {
+      var who = (n.guest_name ? esc(n.guest_name) : "Guest") + " \u00b7 " + esc(relative(n.received_at));
+      return '<div class="note-guest">' +
+               '<div class="g-who">' + who + "</div>" +
+               '<div class="g-body">' + esc(n.body) + "</div>" +
+             "</div>";
+    }).join("") + "</div>";
   }
 
   function stat(k, val, colour) {

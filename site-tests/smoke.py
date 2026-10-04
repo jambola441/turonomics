@@ -104,7 +104,16 @@ def main() -> int:
             if page.locator(".where-btn").count():
                 page.locator(".where-btn").click()
                 page.wait_for_timeout(600)
-                check("spot suggestions render", page.locator(".spot").count() == 2)
+                check("spot suggestions render", page.locator(".spot").count() == 3)
+                check(
+                    "two blocks of one street are told apart by their cross streets",
+                    page.locator(".spot .s-between").count() == 3
+                    # text_content, not inner_text: the cross streets are
+                    # styled lowercase, and inner_text returns what the CSS
+                    # renders rather than what the markup says. The first
+                    # version of this check failed on a page that was correct.
+                    and "PLAZA STREET" in (page.locator(".spots").text_content() or ""),
+                )
                 check(
                     "the 'no space guarantee' caveat is shown",
                     page.locator(".spots .caveat").count() >= 1,

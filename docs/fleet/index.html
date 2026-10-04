@@ -113,6 +113,8 @@
   .spot{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;
         background:var(--surface);border:1px solid var(--border2)}
   .spot .s-name{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
+  .spot .s-between{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;
+       text-transform:lowercase}
   .spot .s-free{font-family:var(--mono);font-size:11.5px;color:var(--green);margin-top:3px}
   .spot .s-far{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
   .tasks{display:flex;flex-direction:column;gap:7px}
@@ -541,9 +543,14 @@
       var free = s.next_cleaning
         ? "next swept " + esc(until(s.next_cleaning))
         : "no cleaning on file for this block";
+      // The cross streets, because NYC splits a street into a segment per
+      // block and two of them can be the same name, side and distance to the
+      // metre. Without this they read as a duplicate; with it they are two
+      // adjacent stretches of kerb, which is more parking rather than less.
       return '<div class="spot">' +
                '<div style="flex-grow:1;min-width:0">' +
                  '<div class="s-name">' + esc(s.street_name) + " " + esc(s.side) + "</div>" +
+                 (s.between ? '<div class="s-between">' + esc(s.between) + "</div>" : "") +
                  '<div class="s-free">' + free + "</div>" +
                "</div>" +
                '<div class="s-far">' + Math.round(s.distance_m) + " m</div>" +

@@ -147,10 +147,38 @@ everything else goes: digit runs, hashes, plates, and the base64 payload the
 click tracker wraps the real link in — those encode the recipient's own address
 often enough that keeping any segment would defeat the point of the module.
 
-**Next, once a real run has reported the shape:** store it as
-`Vehicle.turo_vehicle_id` and match on it exactly, falling back to the fuzzy
-word scoring only when a message carries no vehicle link. That turns the
-two-Corolla tie from unresolvable into resolved. It is deliberately not built
-yet — the format here is what a real email looks like in theory, and this
-parser has twice been written against a guessed format and twice rejected every
-message in the mailbox.
+### The real format, from a probe run on 2026-10-04
+
+```
+link : img[<NAME>] -> https://turo.com/us/en/car-rental/united-states/brooklyn-ny/toyota/corolla/<NUM>
+link : img[<NAME>] -> https://turo.com/us/en/suv-rental/united-states/brooklyn-ny/toyota/<ID>/<NUM>
+link : extend the snooze -> https://turo.com/your-car/<NUM>
+```
+
+The trailing number is the listing id. The body-type segment varies with the
+car (`car-rental`, `suv-rental`), and the four segments between it and the id
+are country, city, make and model. `4runner` masks to `<ID>` because it starts
+with a digit, which is the same quirk that made the capitalised-word mask miss
+"4Runner" in subject lines.
+
+**All five trip-bearing email types carry it** — booked, changed, cancelled,
+upcoming, and message notifications — so matching on it is a complete fix
+rather than a partial one. Earnings, invoices, licence reminders and marketing
+do not, and do not need to.
+
+Matched by *shape*, not by "the last number in a turo.com link": the same
+emails carry `/drivers/<id>` for the guest's profile and `/reservation/<id>`
+for the trip. Both are numeric. Taking the wrong one would attach every trip in
+the mailbox to a single imaginary vehicle.
+
+The id is stored on `Vehicle.turo_listing_id`, which existed in the initial
+schema and had never been used. A car whose model is unique in the fleet binds
+itself on the first email it appears in; two cars of one model cannot, and have
+to be bound once by hand:
+
+```sh
+python -m turonomics_api.cli set Jerry --turo-listing 12345678
+```
+
+The log names the unclaimed listing id when it hits a tie, so there is
+something to act on rather than just a complaint.

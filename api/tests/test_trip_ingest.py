@@ -182,3 +182,74 @@ def test_a_trip_on_a_matched_car_suppresses_nothing_it_should_not(session):
     assert trip.vehicle_id == cars["Bubba"].id
     assert trip.starts_at < trip.ends_at
     assert trip.ends_at - trip.starts_at == timedelta(days=3, hours=6)
+
+
+# ---------------------------------------------------------------------------
+# Two Corollas, end to end
+# ---------------------------------------------------------------------------
+
+
+def _corolla_email(listing: str, reservation: str, guest: str) -> tuple[str, str, str]:
+    """A booking email for one of two identical Corollas, text and markup."""
+    body = (
+        f"Ka-ching! {guest}'s trip with your Toyota Corolla is booked from "
+        "Oct 5, 2026, 10:00 AM to Oct 8, 2026, 4:00 PM.\n\n"
+        "Trip start: Oct 5 10:00 AM\n"
+        "Trip end: Oct 8 4:00 PM\n"
+        "You earn: $284.00\n\n"
+        "Toyota Corolla 2025\n"
+        f"booked by {guest}\n"
+        f"Reservation ID #{reservation}\n"
+    )
+    url = f"https://turo.com/us/en/car-rental/united-states/brooklyn-ny/toyota/corolla/{listing}"
+    html = f'<html><body><a href="{url}"><img alt="Toyota Corolla"></a></body></html>'
+    return f"{guest}'s trip with your Toyota Corolla is booked!", body, html
+
+
+def test_two_identical_corollas_land_on_the_right_cars(session):
+    """The bug this was built for. Two cars, same make, model and year; two
+    trips, same free text. Before the listing id both were dropped, and on the
+    live mailbox that was 20 of every 40 messages.
+    """
+    jerry = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025)
+    jolene = Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025)
+    jerry.turo_listing_id = "11111111"
+    jolene.turo_listing_id = "22222222"
+    session.add_all([jerry, jolene])
+    session.commit()
+
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    for listing, reservation, guest in (
+        ("11111111", "900001", "Dana"),
+        ("22222222", "900002", "Marcus"),
+    ):
+        subject, body, html = _corolla_email(listing, reservation, guest)
+        parsed = parse_email(
+            subject=subject, body=body, received_at=now, html=html
+        )
+        assert apply_parsed_trip(session, parsed, now=now) is not None
+    session.commit()
+
+    by_guest = {
+        trip.guest_name: trip.vehicle.nickname
+        for trip in session.scalars(select(Trip)).all()
+    }
+    assert by_guest == {"Dana": "Jerry", "Marcus": "Jolene"}
+
+
+def test_without_the_link_both_corolla_trips_are_still_refused(session):
+    """The old behaviour, kept deliberately. A plain-text email about one of two
+    identical cars has not said which, and guessing would attach a guest's trip
+    — and a street-cleaning deadline — to the wrong vehicle."""
+    session.add_all(
+        [
+            Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025),
+            Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025),
+        ]
+    )
+    session.commit()
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    subject, body, _ = _corolla_email("11111111", "900003", "Dana")
+    parsed = parse_email(subject=subject, body=body, received_at=now)
+    assert apply_parsed_trip(session, parsed, now=now) is None
+    assert session.scalars(select(Trip)).all() == []

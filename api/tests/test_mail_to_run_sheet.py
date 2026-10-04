@@ -281,3 +281,107 @@ def test_the_skip_reason_names_the_kind_not_the_subject_text(session, caplog):
     logged = "\n".join(record.getMessage() for record in caplog.records)
     assert "message" in logged, logged
     assert "Dana" not in logged, logged
+
+
+# ---------------------------------------------------------------------------
+# The markup has to survive the trip from Gmail to the matcher
+# ---------------------------------------------------------------------------
+
+
+class FakeGmailHtml(FakeGmail):
+    """A multipart message, the way Turo actually sends.
+
+    The plain FakeGmail above serves text/plain, which is enough for parsing but
+    says nothing about whether the markup reaches the matcher. It does not: the
+    first version of this feature extracted the listing id correctly and then
+    passed ``html=None`` from the sync, and every test still passed.
+    """
+
+    def message(self, message_id: str) -> dict:
+        subject, body = self.messages[int(message_id)]
+        listing = "33333333" if "Corolla" in body else "44444444"
+        href = (
+            "https://turo.com/us/en/car-rental/united-states/brooklyn-ny/"
+            f"toyota/corolla/{listing}"
+        )
+        html = f'<html><body><a href="{href}"><img alt="car"></a></body></html>'
+        return {
+            "internalDate": str(int(NOW.timestamp() * 1000)),
+            "payload": {
+                "mimeType": "multipart/alternative",
+                "headers": [{"name": "Subject", "value": subject}],
+                "parts": [
+                    {
+                        "mimeType": "text/plain",
+                        "body": {
+                            "data": base64.urlsafe_b64encode(body.encode())
+                            .decode()
+                            .rstrip("=")
+                        },
+                    },
+                    {
+                        "mimeType": "text/html",
+                        "body": {
+                            "data": base64.urlsafe_b64encode(html.encode())
+                            .decode()
+                            .rstrip("=")
+                        },
+                    },
+                ],
+            },
+        }
+
+
+COROLLA_BOOKING = """\
+Ka-ching! Dana's trip with your Toyota Corolla is booked from Oct 1, 2026, 2:00 PM \
+to Oct 8, 2026, 4:00 PM.
+You earn: $284.00
+Toyota Corolla 2025
+booked by Dana
+Reservation ID #77001
+"""
+
+
+def test_the_sync_carries_the_markup_through_to_the_match(session):
+    """End to end over the real sync, with two identical Corollas.
+
+    Only the bound listing can resolve this. If the sync drops the markup —
+    which it silently did in the first draft — both cars tie on "Toyota Corolla
+    2025" and the trip is refused.
+    """
+    jerry = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025)
+    jolene = Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025)
+    jerry.turo_listing_id = "33333333"
+    jolene.turo_listing_id = "99999999"
+    session.add_all([jerry, jolene])
+    session.commit()
+
+    result = sync_trips_from_mail(
+        session,
+        client=FakeGmailHtml([("Dana's trip with your Toyota Corolla is booked!",
+                               COROLLA_BOOKING)]),
+        now=NOW,
+    )
+    session.commit()
+    assert (result.created, result.unmatched) == (1, 0)
+    trip = session.scalars(select(Trip)).one()
+    assert trip.vehicle.nickname == "Jerry"
+
+
+def test_without_the_markup_the_same_two_corollas_tie(session):
+    """The control. Same cars, same email, text only — refused, as it should be."""
+    session.add_all(
+        [
+            Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2025),
+            Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025),
+        ]
+    )
+    session.commit()
+    result = sync_trips_from_mail(
+        session,
+        client=FakeGmail([("Dana's trip with your Toyota Corolla is booked!",
+                           COROLLA_BOOKING)]),
+        now=NOW,
+    )
+    session.commit()
+    assert (result.created, result.unmatched) == (0, 1)

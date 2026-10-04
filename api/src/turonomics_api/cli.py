@@ -125,9 +125,29 @@ def cmd_set(args: argparse.Namespace) -> int:
             vehicle.nickname = args.nickname
         if args.large_spot is not None:
             vehicle.needs_large_spot = args.large_spot
+        if args.turo_listing:
+            listing = args.turo_listing.strip().rstrip("/").rsplit("/", 1)[-1]
+            if not listing.isdigit():
+                print(f"not a Turo listing id: {args.turo_listing!r}")
+                return 1
+            taken = session.scalar(
+                select(Vehicle).where(
+                    Vehicle.turo_listing_id == listing, Vehicle.id != vehicle.id
+                )
+            )
+            if taken is not None:
+                # Refused rather than moved. A listing claimed by two cars is
+                # how a guest's trip ends up attached to the wrong vehicle, and
+                # the unique index would reject it anyway — with a stack trace
+                # instead of a sentence.
+                print(f"listing {listing} already belongs to {taken.nickname}")
+                return 1
+            vehicle.turo_listing_id = listing
         session.flush()
         print(
-            f"{vehicle.nickname}: nickname={vehicle.nickname} large-spot={vehicle.needs_large_spot}"
+            f"{vehicle.nickname}: nickname={vehicle.nickname} "
+            f"large-spot={vehicle.needs_large_spot} "
+            f"turo-listing={vehicle.turo_listing_id or '-'}"
         )
     return 0
 
@@ -169,6 +189,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_set = sub.add_parser("set", help="edit vehicle attributes")
     p_set.add_argument("vehicle")
     p_set.add_argument("--nickname")
+    p_set.add_argument(
+        "--turo-listing",
+        help=(
+            "Turo's listing id for this car, or the full listing URL — the "
+            "number at the end of turo.com/.../toyota/corolla/12345678. Binding "
+            "it makes every future email for that car match exactly instead of "
+            "by name, which is the only way to tell two cars of one model apart."
+        ),
+    )
     p_set.add_argument(
         "--large-spot",
         dest="large_spot",

@@ -198,7 +198,11 @@ class Vehicle(Base):
     vin: Mapped[str | None] = mapped_column(String(17), unique=True)
 
     bouncie_imei: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
-    turo_listing_id: Mapped[str | None] = mapped_column(String(40))
+    # Turo's own id for the listing, read from the link behind the car's photo
+    # in its notification emails. Unique, because two fleet cars claiming one
+    # listing is a data error that would silently attach a guest's trip to the
+    # wrong vehicle — and a street-cleaning alert rides on that.
+    turo_listing_id: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
 
     # What Bouncie calls this vehicle, so device-sourced rows can be matched
     # back to a registry row by something a human recognises.

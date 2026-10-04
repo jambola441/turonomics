@@ -118,3 +118,39 @@ misses it, and `…your <NAME> 4Runner` is a different signature from
 `…your <NAME>` — the same email type counted twice. It did not hide anything
 here because both variants were logged, but the shape count is inflated and a
 model name is surviving a mask that is supposed to catch it.
+
+## Links: the identifier the body does not carry
+
+The body says `Toyota Corolla 2021` and nothing else, which is why matching a
+trip to a vehicle is fuzzy — and why two Corollas on the same fleet tie, which
+`match_vehicle()` resolves by refusing to guess. Turo does carry an
+unambiguous identifier, but it is in a link rather than the text: the car's
+photo in the email is wrapped in an anchor whose href points at the vehicle's
+own page.
+
+`plain_text()` de-tags the HTML, so every href was discarded before the parser
+ever saw one. The probe now reads links from the markup instead and reports them
+as `descriptor -> shape`:
+
+```
+link    : img[<NAME>] -> https://turo.com/us/en/vehicle-detail/<NUM>
+link    : Reply to <NAME> -> https://turo.com/trips/<NUM>/messages
+```
+
+The descriptor says what the reader clicks — `img` for the photo — because the
+shape alone does not distinguish the vehicle link from the half-dozen others
+pointing at the same host.
+
+A URL is the one value the probe does not erase whole. The route is the useful
+part; the id in it is not. So the host and lowercase route words stay and
+everything else goes: digit runs, hashes, plates, and the base64 payload the
+click tracker wraps the real link in — those encode the recipient's own address
+often enough that keeping any segment would defeat the point of the module.
+
+**Next, once a real run has reported the shape:** store it as
+`Vehicle.turo_vehicle_id` and match on it exactly, falling back to the fuzzy
+word scoring only when a message carries no vehicle link. That turns the
+two-Corolla tie from unresolvable into resolved. It is deliberately not built
+yet — the format here is what a real email looks like in theory, and this
+parser has twice been written against a guessed format and twice rejected every
+message in the mailbox.

@@ -12,7 +12,13 @@ from __future__ import annotations
 import base64
 
 from turonomics_api.gmail.client import GmailError
-from turonomics_api.gmail.probe import mask, plain_text, shape_of
+from turonomics_api.gmail.probe import (
+    link_shapes,
+    mask,
+    plain_text,
+    shape_of,
+    url_shape,
+)
 
 # A realistic booking notification. Invented, but shaped like the real thing and
 # seeded with every kind of value that must not come out the other side.
@@ -54,8 +60,13 @@ SECRETS = (
     "10:00",
     "6:30",
     "support@turo.com",
-    "turo.com/trips",
 )
+
+# A URL is the one value the probe does not erase whole, because the route is
+# where the vehicle id lives and that is the only thing that tells two identical
+# Corollas apart. So "turo.com/trips" is expected in the output and the id in it
+# is not; these are the pieces of a link that must still never survive.
+LINK_SECRETS = ("48812934", "12345", "9876", "aHR0c", "dana", "whitfield", "%40")
 
 
 def _message(body: str, *, sender: str, subject: str) -> dict:
@@ -74,7 +85,9 @@ def _message(body: str, *, sender: str, subject: str) -> dict:
 
 
 def _rendered(shape) -> str:
-    return "\n".join([shape.sender, shape.subject, *shape.labels, *shape.lines])
+    return "\n".join(
+        [shape.sender, shape.subject, *shape.labels, *shape.lines, *shape.links]
+    )
 
 
 def test_no_value_from_a_real_looking_email_survives():
@@ -151,6 +164,108 @@ def test_masking_is_idempotent():
     mangle the tokens it already wrote."""
     once = mask(BODY)
     assert mask(once) == once
+
+
+def test_mask_shapes_a_url_it_finds_itself():
+    """shape_of() pre-shapes the URLs on a body line, so mask() doing it too
+    looks redundant — until mask() is handed a subject, a sender, or an image's
+    alt text. A tracker's base64 payload is all lowercase-and-caps with no word
+    boundary the other passes recognise, so without this it survives whole."""
+    masked = mask("your car https://click.mail.turo.com/f/a/aHR0cHM6Ly90dXJvLmNvbQ/view")
+    assert masked == "your car https://click.mail.turo.com/f/a/<ID>/view"
+
+
+def test_a_links_route_survives_but_not_its_ids():
+    """The route says where to look; the id is still a value.
+
+    Flattening a URL to ``<URL>`` was safe and told a parser nothing. This is
+    the trade: host and lowercase route words stay, everything else goes.
+    """
+    assert (
+        url_shape("https://turo.com/us/en/vehicle-detail/1289443")
+        == "https://turo.com/us/en/vehicle-detail/<NUM>"
+    )
+    assert (
+        url_shape("https://turo.com/trips/48812934/messages")
+        == "https://turo.com/trips/<NUM>/messages"
+    )
+
+
+def test_a_click_tracker_keeps_nothing_it_wraps():
+    """Turo's mail goes through a click tracker whose path is a base64 payload,
+    and those encode the recipient's own address often enough that keeping any
+    segment of one would defeat the point of this module."""
+    shaped = url_shape(
+        "https://click.mail.turo.com/f/a/aHR0cHM6Ly90dXJvLmNvbS90cmlwcw==/AAQRxQA~/"
+        "abc123def4567890abcdef12/vehicle-detail/998?utm_source=braze&e=dana%40ex.com"
+    )
+    assert shaped == (
+        "https://click.mail.turo.com/f/a/<ID>/<ID>/<HASH>/vehicle-detail/<NUM>"
+        "?utm_source=<VALUE>&e=<VALUE>"
+    )
+    for secret in LINK_SECRETS:
+        assert secret not in shaped.lower(), f"{secret!r} survived in {shaped}"
+
+
+def test_a_scheme_that_is_not_http_keeps_only_its_scheme():
+    """mailto: is an address and tel: is a phone number. Neither has a route."""
+    assert url_shape("mailto:dana.whitfield@example.com") == "mailto:<ID>"
+    assert url_shape("tel:+17185550142") == "tel:<ID>"
+
+
+def test_the_link_behind_the_car_photo_is_reported_with_its_shape():
+    """The point of all this. Turo hangs the vehicle link off the car's photo,
+    so the descriptor has to say "img" or there is no telling that link from the
+    half-dozen others pointing at the same host."""
+    found = link_shapes(
+        '<a href="https://turo.com/us/en/vehicle-detail/1289443">'
+        '<img alt="Toyota 4Runner" src="https://img.turo.com/a/b.jpg"></a>'
+        "<a href=https://turo.com/trips/48812934/messages>Reply to Dana</a>"
+        '<a href="https://turo.com/us/en/vehicle-detail/1289443">see your car</a>'
+    )
+    assert found == [
+        "img[<NAME>] -> https://turo.com/us/en/vehicle-detail/<NUM>",
+        "Reply to <NAME> -> https://turo.com/trips/<NUM>/messages",
+        "see your car -> https://turo.com/us/en/vehicle-detail/<NUM>",
+    ]
+
+
+def test_links_come_from_the_markup_not_the_de_tagged_text():
+    """plain_text() throws the hrefs away, which is exactly where the id is."""
+    html = (
+        '<html><body><p>Guest: Dana</p>'
+        '<a href="https://turo.com/us/en/vehicle-detail/1289443">'
+        '<img alt="Corolla" src="x.jpg"></a></body></html>'
+    )
+    encoded = base64.urlsafe_b64encode(html.encode()).decode().rstrip("=")
+    msg = {
+        "payload": {
+            "mimeType": "multipart/alternative",
+            "headers": [{"name": "From", "value": "Turo <x@turo.com>"}],
+            "parts": [{"mimeType": "text/html", "body": {"data": encoded}}],
+        }
+    }
+    assert "vehicle-detail" not in plain_text(msg["payload"])
+    shape = shape_of(msg)
+    assert shape.links == ["img[<NAME>] -> https://turo.com/us/en/vehicle-detail/<NUM>"]
+    rendered = _rendered(shape)
+    assert "Dana" not in rendered and "1289443" not in rendered
+
+
+def test_a_link_in_prose_keeps_the_line_readable_as_structure():
+    """A shaped URL holds no values, so a line carrying one is not prose. The
+    first version counted the route words as somebody's sentence and replaced
+    the whole line — link included — with <PROSE Nw>."""
+    shape = shape_of(
+        _message(
+            "Dana wants your car https://turo.com/us/en/vehicle-detail/1289443\n",
+            sender="Turo <x@turo.com>",
+            subject="Trip booked",
+        )
+    )
+    assert shape.lines == [
+        "<NAME> wants your car https://turo.com/us/en/vehicle-detail/<NUM>"
+    ]
 
 
 def test_a_run_of_names_collapses():

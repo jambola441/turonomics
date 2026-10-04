@@ -21,16 +21,30 @@ it stays true even as the values change.
 Masking is deliberately over-eager: a capitalised word that is not part of
 Turo's own vocabulary is treated as a name. Losing a label to over-masking
 costs a round trip; leaking a guest's name into a log cannot be undone.
+
+Links are the exception to "replace the whole value". A URL flattened to
+``<URL>`` hides the one thing a parser wants from it — Turo puts a vehicle's id
+in the path of the link behind its photo, and that id is the only unambiguous
+way to tell two identical Corollas apart. So a URL keeps its host and its
+lowercase route words and loses everything else, giving
+
+    https://turo.com/us/en/vehicle-detail/<NUM>
+
+which says where the id lives without saying what it is. Anything that is not a
+plain lowercase word — a digit run, a hash, a base64 blob, an address with an
+``@`` — is still a value and still goes.
 """
 
 from __future__ import annotations
 
 import base64
+import html as html_module
 import logging
 import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from sqlalchemy.orm import Session
 
@@ -93,51 +107,167 @@ _MODEL = re.compile(r"\b\d+[A-Za-z][\w-]*\b")
 _PLATE = re.compile(r"\b[A-Z]{2,3}[- ]?\d{3,4}\b")
 _NUM = re.compile(r"\b\d[\d,]{2,}\b")
 _CAPS = re.compile(r"\b[A-Z][a-zA-Z'’]+\b")
-# No '/' in a label: "Message Dana at https://..." would otherwise read as
-# label "message dana at https" with the URL as its value, and the value
-# would reach the masker already stripped of its scheme — so the URL regex
-# would miss it and the link would survive. Keep URLs on the line path.
-_TOKEN = re.compile(r"<[A-Z]+(?: \\d+w)?>")
+_TOKEN = re.compile(r"<[A-Z]+(?: \d+w)?>")
+# A stash marker: lowercase letters only, so that no later pass — not the
+# model-number pass, not the capitalised-word pass — can see a value inside it.
+_STASH = re.compile("\x00([a-z]+)\x00")
 _LABEL = re.compile(r"^\s*([A-Za-z][A-Za-z \t'’&-]{1,40}?)\s*:\s*(.*)$")
+# A shaped URL still has "https:" in it, so "Message Dana at https://…" reads
+# as a label ending in "https" whose value is the rest of the link. Harmless,
+# but it files a sentence under a label that does not exist and buries the real
+# ones. Matched on the label's last word, not the whole of it.
+_NOT_A_LABEL = frozenset({"http", "https", "mailto", "tel"})
+
+_ANCHOR = re.compile(r"(?is)<a\b([^>]*)>(.*?)</a>")
+
+
+def _attr(name: str) -> re.Pattern[str]:
+    """Match one HTML attribute, quoted either way or not at all."""
+    return re.compile(
+        rf"""(?is)\b{name}\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s">]+))""",
+    )
+
+
+_HREF = _attr("href")
+_ALT = _attr("alt")
+
+# A path segment survives only if it is a plain lowercase route word. That rules
+# out plates (LEH9892), ids (48812934), hashes, and the base64 blobs click
+# trackers carry — those encode the recipient's own address often enough that
+# keeping any of them would defeat the point of this module.
+_SAFE_SEGMENT = re.compile(r"^[a-z][a-z-]{0,23}$")
+_SAFE_KEY = re.compile(r"^[A-Za-z_][\w.-]{0,23}$")
+_HEXISH = re.compile(r"^[0-9a-fA-F]{16,}$")
+
+# Enough to see which links an email carries without the footer's worth of
+# marketing and unsubscribe URLs drowning it.
+MAX_LINKS = 20
+
+
+def _stash_index(number: int) -> str:
+    """A number written in letters, so a stash marker holds no digits."""
+    return "".join(chr(ord("a") + int(digit)) for digit in str(number))
+
+
+def _stash_number(letters: str) -> int:
+    return int("".join(str(ord(char) - ord("a")) for char in letters))
+
+
+def _stashed(value: str) -> bool:
+    return bool(_STASH.fullmatch(value))
+
+
+def _opaque(value: str) -> str:
+    """Name the kind of a thing that is not a route word, without saying it."""
+    if _stashed(value) or _TOKEN.fullmatch(value):
+        # Already masked, from a second pass over logged output. Re-typing it
+        # would turn <NUM> into <ID>, so a shape would change every time it was
+        # re-read — and a shape you cannot quote back is not much of a record.
+        return value
+    if "@" in value:
+        return "<EMAIL>"
+    if value.isdigit():
+        return "<NUM>"
+    if _HEXISH.match(value):
+        return "<HASH>"
+    return "<ID>"
+
+
+def url_shape(url: str) -> str:
+    """A URL with its identifiers replaced and its route words kept.
+
+    The route is the useful part: it says that a vehicle id lives at
+    ``/us/en/vehicle-detail/<NUM>`` and a trip id at ``/trips/<NUM>/messages``.
+    Everything that is not a plain lowercase word is a value — ids, hashes, the
+    base64 payload a click tracker wraps the real link in — and goes.
+
+    A scheme that is not http(s) keeps only its scheme: ``mailto:`` carries an
+    address and ``tel:`` a phone number, so neither keeps anything else.
+    """
+    try:
+        parts = urlsplit(html_module.unescape(url.strip()).rstrip(").,;\"'"))
+    except ValueError:
+        return "<URL>"
+    scheme = (parts.scheme or "https").lower()
+    if scheme not in {"http", "https"}:
+        return f"{scheme}:<ID>"
+    host = (parts.hostname or "").lower()
+    if not host:
+        return "<URL>"
+    segments = [
+        segment if _SAFE_SEGMENT.match(segment) else _opaque(segment)
+        for segment in parts.path.split("/")
+        if segment
+    ]
+    out = f"{scheme}://{host}"
+    if segments:
+        out += "/" + "/".join(segments)
+    if parts.query:
+        # Keys are structure — ``utm_source``, ``reservationId`` — and name what
+        # the link takes. Values never are.
+        keys = [pair.split("=", 1)[0] for pair in parts.query.split("&") if pair]
+        shaped = [key if _SAFE_KEY.match(key) else "<ID>" for key in keys]
+        out += "?" + "&".join(f"{key}=<VALUE>" for key in dict.fromkeys(shaped))
+    if parts.fragment:
+        out += "#<VALUE>"
+    return out
 
 
 def mask(text: str) -> str:
     """Replace values with type tokens, keeping structural words.
 
-    Substitutions go to lowercase sentinels first and become ``<TOKEN>`` only at
-    the end. Writing ``<DATE>`` directly would hand the capitalised-word pass a
-    capitalised word to eat, turning every typed value back into ``<NAME>`` —
-    which is both useless to a parser and not stable under a second pass. Logs
-    get re-read, so stability matters.
+    Each finished token is parked in a stash and replaced by a marker of plain
+    lowercase letters, then put back at the end. Writing ``<DATE>`` into the
+    text would hand the capitalised-word pass a capitalised word to eat, turning
+    every typed value back into ``<NAME>``; a marker with a digit in it gets
+    eaten by the model-number pass instead. Both actually happened. Logs get
+    re-read and shapes get quoted back, so masking has to be a fixed point.
     """
-    kinds = (
-        ("url", _URL),
-        ("email", _EMAIL),
-        ("money", _MONEY),
-        ("date", _DATE),
-        ("time", _TIME),
-        ("plate", _PLATE),
-        ("name", _MODEL),
-        ("num", _NUM),
-    )
-    out = text
-    # Tokens already present (a second pass over logged output) become
-    # sentinels too, so they are not re-masked.
-    for kind, _ in (*kinds, ("name", None), ("empty", None)):
-        out = out.replace(f"<{kind.upper()}>", f"\x00{kind}\x00")
-    for kind, pattern in kinds:
-        assert pattern is not None
-        out = pattern.sub(f"\x00{kind}\x00", out)
+    stash: list[str] = []
+
+    def unstash(text: str) -> str:
+        return _STASH.sub(lambda m: stash[_stash_number(m.group(1))], text)
+
+    def keep(token: str) -> str:
+        # Resolved before it is stored, because a shaped URL can be built around
+        # markers already in the text ("/trips/\x00b\x00/") and re.sub does not
+        # rescan what it substitutes — so a nested marker would reach the output
+        # verbatim. Earlier entries are already resolved, so this terminates.
+        stash.append(unstash(token))
+        return f"\x00{_stash_index(len(stash) - 1)}\x00"
+
+    # Tokens already in the text come first, so a second pass leaves them be.
+    out = _TOKEN.sub(lambda m: keep(m.group(0)), text)
+    # Then URLs, by shape rather than by token, and whole: the route words a
+    # shape keeps must not then be read as prose, nor its ids typed twice.
+    out = _URL.sub(lambda m: keep(url_shape(m.group(0))), out)
+    def typed(kind: str, pattern: re.Pattern[str], text: str) -> str:
+        # A named function rather than a lambda with a default argument, which
+        # is the usual way to bind the loop variable and which mypy cannot infer
+        # the type of under --strict.
+        return pattern.sub(lambda _match: keep(f"<{kind}>"), text)
+
+    for kind, pattern in (
+        ("EMAIL", _EMAIL),
+        ("MONEY", _MONEY),
+        ("DATE", _DATE),
+        ("TIME", _TIME),
+        ("PLATE", _PLATE),
+        ("NAME", _MODEL),
+        ("NUM", _NUM),
+    ):
+        out = typed(kind, pattern, out)
 
     def _word(m: re.Match[str]) -> str:
         word = m.group(0)
-        return word if word.lower() in VOCABULARY else "\x00name\x00"
+        return word if word.lower() in VOCABULARY else keep("<NAME>")
 
     out = _CAPS.sub(_word, out)
-    for kind, _ in (*kinds, ("name", None), ("empty", None)):
-        out = out.replace(f"\x00{kind}\x00", f"<{kind.upper()}>")
-    # A run of the same token says no more than one of it, and reads worse.
-    out = re.sub(r"(<[A-Z]+>)(?:[\s,.;:/|-]*\1)+", r"\1", out)
+    out = unstash(out)
+    # A run of the same token says no more than one of it, and reads worse. No
+    # '/' in the separators: it would collapse "/<ID>/<ID>" in a URL shape to
+    # one segment, which is the part of the shape worth having.
+    out = re.sub(r"(<[A-Z]+>)(?:[\s,.;:|-]*\1)+", r"\1", out)
     return re.sub(r"[ \t]{2,}", " ", out).strip()
 
 
@@ -152,9 +282,13 @@ MAX_FREE_WORDS = 2
 
 
 def _is_structure(masked: str) -> bool:
+    # URL shapes are discounted along with tokens: a shape is route words and
+    # type tokens by construction, so it holds no prose to count. Counting it
+    # made every line carrying a link read as somebody's sentence.
+    bare = _TOKEN.sub(" ", _URL.sub(" ", masked))
     free = [
         word
-        for word in re.findall(r"[A-Za-z][\w'’-]*", _TOKEN.sub(" ", masked))
+        for word in re.findall(r"[A-Za-z][\w'’-]*", bare)
         if word.lower() not in VOCABULARY
     ]
     return len(free) <= MAX_FREE_WORDS
@@ -182,6 +316,7 @@ class Shape:
     subject: str = ""
     labels: list[str] = field(default_factory=list)
     lines: list[str] = field(default_factory=list)
+    links: list[str] = field(default_factory=list)
 
 
 def _header(payload: dict[str, Any], name: str) -> str:
@@ -217,6 +352,60 @@ def plain_text(payload: dict[str, Any]) -> str:
     return ""
 
 
+def html_of(payload: dict[str, Any]) -> str:
+    """The text/html part, raw.
+
+    :func:`plain_text` de-tags HTML, which throws the hrefs away — and the href
+    is where the vehicle id is. So the links are read from the markup instead.
+    """
+    if payload.get("mimeType", "") == "text/html":
+        body = (payload.get("body") or {}).get("data")
+        if body:
+            return _decode(body)
+    for part in payload.get("parts") or []:
+        found = html_of(part)
+        if found:
+            return found
+    return ""
+
+
+def _anchor_text(inner: str) -> str:
+    """What the reader clicks: an image, or the masked words of the link.
+
+    Named because the shape alone does not say which link is which. Turo hangs
+    the vehicle link off the car's photo, so ``img`` versus text is how you tell
+    that link from the half-dozen others pointing at the same route.
+    """
+    if re.search(r"(?i)<img\b", inner):
+        found = _ALT.search(inner)
+        alt = next((group for group in (found.groups() if found else ()) if group), "")
+        return f"img[{mask(html_module.unescape(alt))}]" if alt.strip() else "img"
+    text = mask(html_module.unescape(re.sub(r"<[^>]+>", " ", inner)))
+    if not text:
+        return "(empty)"
+    if not _is_structure(text):
+        return f"<PROSE {len(text.split())}w>"
+    return text[:60]
+
+
+def link_shapes(html: str) -> list[str]:
+    """``descriptor -> url shape`` for each distinct link in an HTML body.
+
+    Deduplicated, because a marketing footer repeats the same two links a dozen
+    times and the question is which *kinds* of link an email carries.
+    """
+    found: list[str] = []
+    for attrs, inner in _ANCHOR.findall(html):
+        match = _HREF.search(attrs)
+        if not match:
+            continue
+        href = next((group for group in match.groups() if group), "")
+        if not href.strip():
+            continue
+        found.append(f"{_anchor_text(inner)} -> {url_shape(href)}")
+    return list(dict.fromkeys(found))[:MAX_LINKS]
+
+
 def shape_of(message: dict[str, Any]) -> Shape:
     payload = message.get("payload") or {}
     shape = Shape(
@@ -229,10 +418,12 @@ def shape_of(message: dict[str, Any]) -> Shape:
         # "//turo.com/..." as its value, and a value that has already lost its
         # scheme no longer looks like a URL to the masker — so the link
         # survived. Masking is idempotent, so doing this early is free.
-        line = _URL.sub("<URL>", raw.strip())
+        line = _URL.sub(lambda m: url_shape(m.group(0)), raw.strip())
         if not line:
             continue
         matched = _LABEL.match(line)
+        if matched and matched.group(1).split()[-1].lower() in _NOT_A_LABEL:
+            matched = None
         if matched:
             shape.labels.append(
                 f"{_label_text(matched.group(1))}: {mask(matched.group(2)) or '<EMPTY>'}"
@@ -240,6 +431,7 @@ def shape_of(message: dict[str, Any]) -> Shape:
         elif len(shape.lines) < 12:
             masked = mask(line)
             shape.lines.append(masked if _is_structure(masked) else f"<PROSE {len(masked.split())}w>")
+    shape.links = link_shapes(html_of(payload))
     return shape
 
 
@@ -314,6 +506,8 @@ def probe(
                 log.info("  label   : %s", label)
             for line in shape.lines:
                 log.info("  line    : %s", line)
+            for link in shape.links:
+                log.info("  link    : %s", link)
             shapes.append(shape)
 
         log.info(

@@ -180,5 +180,16 @@ to be bound once by hand:
 python -m turonomics_api.cli set Jerry --turo-listing 12345678
 ```
 
+Where there is no shell — production, where the database is correctly closed
+to the outside — the same binding is configuration:
+
+```
+TURO_LISTINGS=Jerry=3382060,Jolene=3218625
+```
+
+Applied at boot, idempotent, and it will not rebind a car that already has a
+listing or let two cars claim one. A full listing URL works in place of the id,
+because that is what you have in your hand when you are looking at the page.
+
 The log names the unclaimed listing id when it hits a tie, so there is
 something to act on rather than just a complaint.

@@ -53,6 +53,77 @@ def parse_plate_map(raw: str) -> dict[str, str]:
     return out
 
 
+def parse_listing_map(raw: str) -> dict[str, str]:
+    """``"Jerry=3382060,Jolene=3218625"`` -> ``{"jerry": "3382060", ...}``.
+
+    Exists because two cars of one model cannot be told apart by anything in a
+    Turo email except the listing id, and the one fact that resolves it — which
+    listing is which car — lives only in the operator's head. The CLI can set it
+    where there is a shell; in production there is not, and the database is
+    correctly closed to the outside, so configuration is the way in.
+
+    A full listing URL is accepted as well as a bare id, because that is what
+    you have in your hand when you are looking at the listing.
+    """
+    out: dict[str, str] = {}
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        name, _, listing = pair.partition("=")
+        name = name.strip()
+        listing = listing.strip().rstrip("/").rsplit("/", 1)[-1].split("?")[0]
+        if name and listing.isdigit():
+            out[name.lower()] = listing
+    return out
+
+
+def apply_listings(session: Session, listing_map: dict[str, str]) -> list[str]:
+    """Bind Turo listing ids to vehicles by nickname. Returns what changed."""
+    changed: list[str] = []
+    if not listing_map:
+        return changed
+
+    by_listing = {
+        vehicle.turo_listing_id: vehicle
+        for vehicle in session.scalars(select(Vehicle))
+        if vehicle.turo_listing_id
+    }
+    for vehicle in session.scalars(select(Vehicle)):
+        for name in filter(None, (vehicle.nickname, vehicle.bouncie_nickname)):
+            listing = listing_map.get(name.lower())
+            if listing is None:
+                continue
+            if vehicle.turo_listing_id == listing:
+                break
+            holder = by_listing.get(listing)
+            if holder is not None and holder.id != vehicle.id:
+                # Two cars cannot share a listing — the unique index would
+                # reject it, and a deploy that dies on a typo in an environment
+                # variable is a bad trade for a convenience.
+                log.warning(
+                    "listing %s already belongs to %s — not binding it to %s",
+                    listing,
+                    holder.nickname,
+                    vehicle.nickname,
+                )
+                break
+            if vehicle.turo_listing_id is not None:
+                # Rebinding moves every future trip for that listing onto a
+                # different car. Deliberate enough to want a human at a shell.
+                log.info(
+                    "%s already has listing %s — leaving it",
+                    vehicle.nickname,
+                    vehicle.turo_listing_id,
+                )
+                break
+            vehicle.turo_listing_id = listing
+            by_listing[listing] = vehicle
+            changed.append(f"{vehicle.nickname}={listing}")
+            break
+    return changed
+
+
 def apply_plates(session: Session, plate_map: dict[str, str]) -> list[str]:
     """Attach plates to vehicles by nickname. Returns what changed."""
     changed: list[str] = []
@@ -180,6 +251,12 @@ def run_bootstrap() -> int:
             changed = apply_plates(session, parse_plate_map(os.environ.get("BOOTSTRAP_PLATES", "")))
             if changed:
                 log.info("plates set: %s", ", ".join(changed))
+
+            bound = apply_listings(
+                session, parse_listing_map(os.environ.get("TURO_LISTINGS", ""))
+            )
+            if bound:
+                log.info("turo listings bound: %s", ", ".join(bound))
 
             after = session.scalar(select(func.count()).select_from(Vehicle)) or 0
             log.info("fleet: %d vehicles (was %d)", after, before)

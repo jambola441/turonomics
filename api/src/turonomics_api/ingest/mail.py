@@ -168,4 +168,6 @@ def sync_trips_from_mail(
                 log.info("    label : %s", label)
             for line in getattr(first_shape, "lines", []):
                 log.info("    line  : %s", line)
+            for link in getattr(first_shape, "links", []):
+                log.info("    link  : %s", link)
     return result

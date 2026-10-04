@@ -241,6 +241,12 @@ def mask(text: str) -> str:
     # Then URLs, by shape rather than by token, and whole: the route words a
     # shape keeps must not then be read as prose, nor its ids typed twice.
     out = _URL.sub(lambda m: keep(url_shape(m.group(0))), out)
+    def typed(kind: str, pattern: re.Pattern[str], text: str) -> str:
+        # A named function rather than a lambda with a default argument, which
+        # is the usual way to bind the loop variable and which mypy cannot infer
+        # the type of under --strict.
+        return pattern.sub(lambda _match: keep(f"<{kind}>"), text)
+
     for kind, pattern in (
         ("EMAIL", _EMAIL),
         ("MONEY", _MONEY),
@@ -250,7 +256,7 @@ def mask(text: str) -> str:
         ("NAME", _MODEL),
         ("NUM", _NUM),
     ):
-        out = pattern.sub(lambda _m, kind=kind: keep(f"<{kind}>"), out)
+        out = typed(kind, pattern, out)
 
     def _word(m: re.Match[str]) -> str:
         word = m.group(0)

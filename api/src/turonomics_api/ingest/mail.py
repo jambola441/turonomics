@@ -24,8 +24,8 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import Trip, Vehicle
 from turonomics_api.gmail.client import GmailClient, GmailError
-from turonomics_api.gmail.parse import ParseError, classify, parse_email
-from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text
+from turonomics_api.gmail.parse import TRIP_BEARING, ParseError, classify, parse_email
+from turonomics_api.gmail.probe import SECONDS_BETWEEN_FETCHES, plain_text, shape_of
 from turonomics_api.ingest.tasks import refresh_move_task
 from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
 from turonomics_api.ingest.turnaround import refresh_turnaround_tasks
@@ -83,6 +83,7 @@ def sync_trips_from_mail(
     not_a_trip = 0
     unreadable = 0
     first_skipped: str | None = None
+    first_shape: object | None = None
     for index, message_id in enumerate(ids):
         if index:
             time.sleep(SECONDS_BETWEEN_FETCHES)
@@ -110,7 +111,14 @@ def sync_trips_from_mail(
             # otherwise, and that ambiguity cost a deploy to notice.
             not_a_trip += 1
             if first_skipped is None:
-                first_skipped = f"{classify(_header(payload, 'Subject'))}: {exc}"
+                kind = classify(_header(payload, "Subject"))
+                first_skipped = f"{kind}: {exc}"
+                # Keep the masked shape of the first trip-classified message
+                # that would not parse. The first round of this guessed at why
+                # dates were missing and guessed wrong; the shape is the
+                # evidence, and masking is what makes it safe to log.
+                if kind in TRIP_BEARING:
+                    first_shape = shape_of(message)
             continue
 
         before = session.scalar(
@@ -152,4 +160,12 @@ def sync_trips_from_mail(
         # Nothing landed, so the first rejection is the most useful clue there
         # is. Only the classification and the reason — no subject text.
         log.info("mail sync: nothing parsed; first skip was %s", first_skipped)
+        if first_shape is not None:
+            # Values are type tokens, same as the probe. A shape in the log is
+            # what turns the next fix from a guess into a correction.
+            log.info("mail sync: shape of that message —")
+            for label in getattr(first_shape, "labels", []):
+                log.info("    label : %s", label)
+            for line in getattr(first_shape, "lines", []):
+                log.info("    line  : %s", line)
     return result

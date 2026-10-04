@@ -113,11 +113,20 @@ SPOTS = {
     "radius_m": 400.0,
     "spots": [
         {"segment_side_id": "aaaaaaaa-0000-0000-0000-000000000001",
-         "street_name": "ST MARKS AVENUE", "side": "south", "between": None,
-         "distance_m": 212.4, "next_cleaning": _iso(days=3), "fits_van": True},
+         "street_name": "ST MARKS AVENUE", "side": "south",
+         "distance_m": 212.4, "next_cleaning": _iso(days=3), "fits_van": True,
+         "between": "6 AVENUE to 7 AVENUE"},
         {"segment_side_id": "aaaaaaaa-0000-0000-0000-000000000002",
-         "street_name": "BERGEN STREET", "side": "north", "between": None,
-         "distance_m": 98.1, "next_cleaning": _iso(days=1), "fits_van": None},
+         "street_name": "LINCOLN PLACE", "side": "north",
+         "between": "8 AVENUE to 7 AVENUE",
+         "distance_m": 391.0, "next_cleaning": _iso(days=3), "fits_van": None},
+        # Same street, same side, one metre apart — a separate block, not a
+        # duplicate. NYC splits a street into a segment per block and the only
+        # thing telling these apart is the cross streets.
+        {"segment_side_id": "aaaaaaaa-0000-0000-0000-000000000003",
+         "street_name": "LINCOLN PLACE", "side": "north",
+         "between": "PLAZA STREET to 8 AVENUE",
+         "distance_m": 392.0, "next_cleaning": _iso(days=3), "fits_van": None},
     ],
 }
 

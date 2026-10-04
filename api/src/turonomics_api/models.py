@@ -21,6 +21,11 @@ class TuroTrip(BaseModel):
 
 
 class EZPassToll(BaseModel):
+    # EZPass's own id for the crossing. Carried through so a statement can be
+    # imported twice without counting a toll twice — the only natural key the
+    # CSV offers, and reconciliation that inflates on re-upload is worse than
+    # no reconciliation at all.
+    txn_id: str | None = None
     timestamp: datetime
     plaza: str
     amount: float

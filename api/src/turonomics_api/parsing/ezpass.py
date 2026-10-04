@@ -46,6 +46,11 @@ _COL_MAP: dict[str, list[str]] = {
     "tag_plate":   ["tag/plate_#", "tag/plate", "tag_plate_#", "tag_plate",
                     "tag_plate_number", "transponder/plate"],
     "amount":      ["amount", "debit", "charge", "fee"],
+    # Optional: EZPass's own id for the crossing. Not used for matching — the
+    # docstring above is right about that — but it is the only natural key the
+    # CSV offers, so importing a statement twice can be made to count a toll
+    # once. Absent from some exports, hence not in `required` below.
+    "txn_id":      ["lane_txn_id", "txn_id", "transaction_id", "lane_transaction_id"],
 }
 
 _PAYMENT_MARKERS = {"payment", "pay", "credit", "replenishment"}
@@ -177,6 +182,11 @@ def parse_ezpass_csv(content: str | bytes) -> list[EZPassToll]:
 
             tolls.append(
                 EZPassToll(
+                    txn_id=(
+                        (row.get(headers["txn_id"]) or "").strip() or None
+                        if "txn_id" in headers
+                        else None
+                    ),
                     timestamp=timestamp,
                     plaza=plaza,
                     amount=amount,

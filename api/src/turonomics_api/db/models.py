@@ -204,6 +204,12 @@ class Vehicle(Base):
     # wrong vehicle — and a street-cleaning alert rides on that.
     turo_listing_id: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
 
+    # The EZPass transponder in this car. A tag-read toll names the tag and
+    # nothing else, so without this the common case of a toll — the tag worked
+    # — cannot be attributed to a vehicle at all. Plate-read rows (the tag
+    # failed, so they billed the plate) match without it.
+    ezpass_tag: Mapped[str | None] = mapped_column(String(40), unique=True, index=True)
+
     # What Bouncie calls this vehicle, so device-sourced rows can be matched
     # back to a registry row by something a human recognises.
     bouncie_nickname: Mapped[str | None] = mapped_column(String(60))
@@ -650,3 +656,53 @@ class GuestMessage(Base):
     vehicle: Mapped[Vehicle] = relationship()
 
     __table_args__ = (Index("ix_guest_message_vehicle_time", "vehicle_id", "received_at"),)
+
+
+class Toll(Base):
+    """One EZPass crossing, and who was driving when it happened.
+
+    Stored rather than computed per upload, because the question is not "what
+    does this statement say" but "what have I not billed back yet" — which only
+    has an answer if last month's statement is still around.
+
+    A toll with no ``vehicle_id`` is not a failure to be hidden. It is either a
+    crossing by a car that is not in this fleet, or a tag nobody has bound to a
+    vehicle yet, and both are things the operator can act on once they can see
+    them.
+    """
+
+    __tablename__ = "toll"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+
+    # EZPass's own transaction id where the export has one, and a hash of the
+    # crossing where it does not. Unique either way, because re-importing a
+    # statement must not double what it says is owed.
+    fingerprint: Mapped[str] = mapped_column(String(80), unique=True)
+
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    plaza: Mapped[str] = mapped_column(String(60))
+    # Integer cents. A reconciliation total built out of floats is a total that
+    # disagrees with itself by a penny and cannot be trusted to the dollar.
+    amount_cents: Mapped[int] = mapped_column(Integer)
+
+    # Exactly as the statement billed it: a tag number or a plate, never both.
+    transponder_id: Mapped[str | None] = mapped_column(String(40), index=True)
+    license_plate: Mapped[str | None] = mapped_column(String(16), index=True)
+
+    vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("vehicle.id", ondelete="SET NULL")
+    )
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"))
+
+    # Set when the operator has billed it back. Nullable rather than a boolean
+    # so the sheet can say when, not just whether.
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    imported_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    vehicle: Mapped[Vehicle | None] = relationship()
+    trip: Mapped[Trip | None] = relationship()
+
+    __table_args__ = (Index("ix_toll_unrecovered", "recovered_at", "occurred_at"),)

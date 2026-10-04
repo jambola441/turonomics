@@ -28,7 +28,7 @@ from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.base import session_scope
 from turonomics_api.db.models import StreetSegmentSide, Vehicle
-from turonomics_api.gmail.probe import DEFAULT_QUERY, probe
+from turonomics_api.gmail.probe import DEFAULT_LIMIT, DEFAULT_QUERY, probe
 from turonomics_api.plates import normalize_plate
 
 log = logging.getLogger("turonomics.bootstrap")
@@ -142,9 +142,11 @@ def run_gmail_probe() -> int:
         return 0
     try:
         with session_scope() as session:
+            raw_limit = os.environ.get("GMAIL_PROBE_LIMIT", "").strip()
             shapes = probe(
                 session,
                 query=os.environ.get("GMAIL_PROBE_QUERY", "").strip() or DEFAULT_QUERY,
+                limit=int(raw_limit) if raw_limit.isdigit() else DEFAULT_LIMIT,
             )
             return len(shapes)
     except Exception as exc:  # noqa: BLE001 - a diagnostic must not break boot

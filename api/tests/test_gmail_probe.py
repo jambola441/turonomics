@@ -155,3 +155,130 @@ def test_masking_is_idempotent():
 def test_a_run_of_names_collapses():
     """'<NAME> <NAME> <NAME> <NAME>' is noise, not shape."""
     assert mask("Dana Whitfield Smith Jones booked") == "<NAME> booked"
+
+
+# ---------------------------------------------------------------------------
+# Leaks the first version shipped, found by running it against the real mailbox
+# ---------------------------------------------------------------------------
+
+# Verbatim shapes the probe reported, with the two leaks restored so the tests
+# fail if either comes back. Turo puts the guest's name inside the label and the
+# guest's own words in the body, neither of which the invented sample above had.
+REAL_MESSAGE_NOTIFICATION = """\
+Jenna has sent you a message about your Transit.
+
+all good, is that the address you want it back at on Tuesday?
+
+Reply https://turo.com/trips/12345/messages
+
+Trip start: Oct 5 10:00 AM
+Trip end: Oct 8 4:00 PM
+You earn: $284.00
+Mileage included: 600 miles
+View Jenna's profile: https://turo.com/drivers/9876
+Send Jenna a message: https://turo.com/trips/12345/messages
+
+Ford Transit 2024
+booked by Jenna
+Jenna Alvarez
+(917) 555-0188
+Reservation ID #12345
+"""
+
+
+def test_a_name_inside_a_label_does_not_leak():
+    """The first leak. Only the value was masked, so "View Jenna's profile:"
+    put a guest's first name in the log — lowercased, which helped nothing.
+    """
+    shape = shape_of(
+        _message(
+            REAL_MESSAGE_NOTIFICATION,
+            sender="Turo <noreply@turo.com>",
+            subject="Jenna has sent you a message about your Transit",
+        )
+    )
+    rendered = _rendered(shape).lower()
+    assert "jenna" not in rendered, f"a name leaked via a label:\n{_rendered(shape)}"
+    assert "alvarez" not in rendered
+
+
+def test_the_guests_own_words_do_not_leak():
+    """The second leak. Masking capitalised words left lowercase prose intact,
+    and in a message notification the prose is the message."""
+    shape = shape_of(
+        _message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@turo.com>", subject="Message")
+    )
+    rendered = _rendered(shape)
+    for phrase in ("address you want it back at", "all good"):
+        assert phrase not in rendered, f"guest message text leaked: {phrase!r}"
+    assert any("<PROSE" in line for line in shape.lines), "prose should be reported as prose"
+
+
+def test_masking_the_label_keeps_it_recognisable():
+    """A label masked into uselessness is safe and worthless; the parser has to
+    be able to tell these fields apart."""
+    shape = shape_of(
+        _message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@turo.com>", subject="Message")
+    )
+    labels = {entry.split(":", 1)[0] for entry in shape.labels}
+    assert "trip start" in labels
+    assert "trip end" in labels
+    assert "you earn" in labels
+    assert "mileage included" in labels
+    # The two interpolated-name labels survive as distinguishable shapes: the
+    # name is gone but "view ... profile" and "send ... a message" are not.
+    assert "view <NAME> profile" in labels
+    assert "send <NAME> a message" in labels
+
+
+def test_structural_lines_survive_the_prose_filter():
+    """A line with a token in it is structure and must be kept — the
+    reservation id and the vehicle line are how a trip gets identified."""
+    shape = shape_of(
+        _message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@turo.com>", subject="Message")
+    )
+    joined = "\n".join(shape.lines)
+    assert "Reservation ID #<NUM>" in joined
+    assert "booked by <NAME>" in joined
+
+
+# ---------------------------------------------------------------------------
+# Why the first run missed the booking emails
+# ---------------------------------------------------------------------------
+
+
+def test_two_messages_of_the_same_kind_report_as_one_shape():
+    """The first run logged every message and so had to cap at twelve, which
+    hid the email type that mattered. Deduplicating is what makes a wide scan
+    cheap enough to actually find every kind."""
+    from turonomics_api.gmail.probe import signature
+
+    a = shape_of(_message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@mail.turo.com>",
+                          subject="Jenna has sent you a message about your Transit"))
+    b = shape_of(_message(
+        REAL_MESSAGE_NOTIFICATION.replace("Jenna", "Marcus").replace("$284.00", "$512.40"),
+        sender="Turo <x@mail.turo.com>",
+        subject="Marcus has sent you a message about your Transit",
+    ))
+    assert signature(a) == signature(b), "different guests, same kind of email"
+
+
+def test_a_different_kind_of_email_is_a_different_shape():
+    payout = "Ka-ching! Turo sent your earnings payment of $284.00.\nNote: we deposit weekly.\n"
+    a = shape_of(_message(REAL_MESSAGE_NOTIFICATION, sender="Turo <x@mail.turo.com>",
+                          subject="Jenna has sent you a message about your Transit"))
+    b = shape_of(_message(payout, sender="Turo <x@mail.turo.com>",
+                          subject="Your earnings are on the way!"))
+    from turonomics_api.gmail.probe import signature
+
+    assert signature(a) != signature(b)
+
+
+def test_the_default_query_matches_turos_sending_subdomain():
+    """The miss that started this: booking mail comes from mail.turo.com, and
+    'from:turo.com' did not match it, so the first run reported that no booking
+    email existed."""
+    from turonomics_api.gmail.probe import DEFAULT_QUERY
+
+    assert "from:turo.com" not in DEFAULT_QUERY, "an apex-only filter misses mail.turo.com"
+    assert "from:turo" in DEFAULT_QUERY

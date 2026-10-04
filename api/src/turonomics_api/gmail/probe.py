@@ -37,10 +37,18 @@ from turonomics_api.gmail.client import GmailClient, GmailError
 
 log = logging.getLogger("turonomics.gmail.probe")
 
-# Broad on purpose: better to see every notification type once and narrow the
-# real query later than to miss the one carrying the trip id.
-DEFAULT_QUERY = "from:turo.com newer_than:180d"
-DEFAULT_LIMIT = 12
+# ``from:turo``, not ``from:turo.com``. Turo sends booking mail from
+# noreply@mail.turo.com, and Gmail did not match that subdomain against the
+# apex domain — so the first run excluded every booking email and reported
+# that none existed. A bare token matches any turo domain.
+DEFAULT_QUERY = "from:turo newer_than:365d"
+
+# High, because shapes are deduplicated before logging: a year of mail collapses
+# to a handful of distinct shapes, so scanning widely costs little. The first
+# run capped at 12 and logged "12 message(s) match", which read like a total and
+# was really the cap being hit — the booking emails were simply older than the
+# twelve newest.
+DEFAULT_LIMIT = 150
 
 # Words that are structure rather than content, so they survive masking. Losing
 # these would hide the labels the parser has to match on.
@@ -56,6 +64,9 @@ VOCABULARY = frozenset(
     is are was were has have will reminder reminders upcoming today tomorrow
     location address delivery airport day days hour hours am pm
     id number no ref reference code
+    view send reply earn earns earned mileage included miles note
+    profile deposit payment business week once per within three days
+    by about your has have question questions answers common concerns
     """.split()  # noqa: SIM905
 )
 
@@ -77,6 +88,7 @@ _CAPS = re.compile(r"\b[A-Z][a-zA-Z'’]+\b")
 # label "message dana at https" with the URL as its value, and the value
 # would reach the masker already stripped of its scheme — so the URL regex
 # would miss it and the link would survive. Keep URLs on the line path.
+_TOKEN = re.compile(r"<[A-Z]+(?: \\d+w)?>")
 _LABEL = re.compile(r"^\s*([A-Za-z][A-Za-z \t'’&-]{1,40}?)\s*:\s*(.*)$")
 
 
@@ -117,6 +129,39 @@ def mask(text: str) -> str:
     # A run of the same token says no more than one of it, and reads worse.
     out = re.sub(r"(<[A-Z]+>)(?:[\s,.;:/|-]*\1)+", r"\1", out)
     return re.sub(r"[ \t]{2,}", " ", out).strip()
+
+
+# More than a couple of words that are neither a token nor part of Turo's own
+# vocabulary means the line is somebody's sentence rather than structure. The
+# first version only asked whether a line contained *any* token, which let
+# "all good, is that the address you want it back at on <NAME>?" through — the
+# token came from masking "Tuesday", and the guest's message rode along with it.
+# In a message notification the prose is the message, so this has to be the
+# default rather than the exception.
+MAX_FREE_WORDS = 2
+
+
+def _is_structure(masked: str) -> bool:
+    free = [
+        word
+        for word in re.findall(r"[A-Za-z][\w'’-]*", _TOKEN.sub(" ", masked))
+        if word.lower() not in VOCABULARY
+    ]
+    return len(free) <= MAX_FREE_WORDS
+
+
+def _label_text(raw: str) -> str:
+    """A label, masked and lowered, with its tokens left intact.
+
+    Masking only the value was not enough: Turo writes "View Jenna's profile:",
+    so the guest's name *is* part of the label. Lowercasing it did not help, and
+    a first name in a retained log is exactly what this module exists to avoid.
+    """
+    masked = mask(raw.strip())
+    lowered = masked.lower()
+    for token in _TOKEN.findall(masked):
+        lowered = lowered.replace(token.lower(), token)
+    return lowered
 
 
 @dataclass
@@ -179,31 +224,63 @@ def shape_of(message: dict[str, Any]) -> Shape:
             continue
         matched = _LABEL.match(line)
         if matched:
-            label = matched.group(1).strip().lower()
-            shape.labels.append(f"{label}: {mask(matched.group(2)) or '<EMPTY>'}")
+            shape.labels.append(
+                f"{_label_text(matched.group(1))}: {mask(matched.group(2)) or '<EMPTY>'}"
+            )
         elif len(shape.lines) < 12:
-            shape.lines.append(mask(line))
+            masked = mask(line)
+            shape.lines.append(masked if _is_structure(masked) else f"<PROSE {len(masked.split())}w>")
     return shape
+
+
+def signature(shape: Shape) -> tuple[str, tuple[str, ...]]:
+    """What makes two emails the same kind of email.
+
+    The subject template plus the set of labels. Values differ between
+    messages; the shape does not, which is the whole point.
+    """
+    return (shape.subject, tuple(entry.split(":", 1)[0] for entry in shape.labels))
 
 
 def probe(
     session: Session, *, query: str = DEFAULT_QUERY, limit: int = DEFAULT_LIMIT
 ) -> list[Shape]:
-    """Log the shape of recent Turo mail. Never raises."""
+    """Log the distinct shapes of recent Turo mail. Never raises.
+
+    Deduplicated, because the question is "which kinds of email are there" and
+    not "what arrived". Logging every message buried the answer and made a wide
+    scan too noisy to run, which is how the first attempt ended up capped at
+    twelve and missing the type that mattered.
+    """
     shapes: list[Shape] = []
     try:
         client = GmailClient(session)
         ids = client.search(query, limit=limit)
-        log.info("probe: %d message(s) match %r", len(ids), query)
+        if len(ids) >= limit:
+            log.warning(
+                "probe: hit the cap of %d for %r — there are probably more, "
+                "raise GMAIL_PROBE_LIMIT or narrow the query",
+                limit,
+                query,
+            )
+        log.info("probe: fetched %d message(s) for %r (cap %d)", len(ids), query, limit)
+
+        seen: dict[tuple[str, tuple[str, ...]], tuple[Shape, int]] = {}
         for message_id in ids:
             shape = shape_of(client.message(message_id))
-            shapes.append(shape)
-            log.info("---- message ----")
-            log.info("  from    : %s", shape.sender)
-            log.info("  subject : %s", shape.subject)
-            for label in shape.labels:
+            key = signature(shape)
+            first, count = seen.get(key, (shape, 0))
+            seen[key] = (first, count + 1)
+
+        log.info("probe: %d distinct shape(s)", len(seen))
+        for first, count in sorted(seen.values(), key=lambda pair: -pair[1]):
+            shapes.append(first)
+            log.info("---- shape (%d message(s)) ----", count)
+            log.info("  from    : %s", first.sender)
+            log.info("  subject : %s", first.subject)
+            for label in first.labels:
                 log.info("  label   : %s", label)
-            for line in shape.lines:
+            for line in first.lines:
                 log.info("  line    : %s", line)
     except GmailError as exc:
         log.warning("probe failed: %s", exc)

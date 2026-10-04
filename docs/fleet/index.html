@@ -102,6 +102,19 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
        border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  .where-btn{align-self:flex-start;font:inherit;font-size:12px;font-weight:600;color:var(--green);
+       background:none;border:1px solid #2b4a3c;border-radius:8px;padding:7px 12px;cursor:pointer}
+  .where-btn:hover{background:#15241d}
+  .where-btn:disabled{opacity:.5;cursor:default}
+  .spots{display:flex;flex-direction:column;gap:7px}
+  .spots h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
+       text-transform:uppercase;color:var(--green);font-weight:600;padding:2px}
+  .spots .caveat{font-size:11.5px;color:var(--dim);line-height:1.45;padding:0 2px}
+  .spot{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;
+        background:var(--surface);border:1px solid var(--border2)}
+  .spot .s-name{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
+  .spot .s-free{font-family:var(--mono);font-size:11.5px;color:var(--green);margin-top:3px}
+  .spot .s-far{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
   .tasks{display:flex;flex-direction:column;gap:7px}
   .task{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;border-radius:10px;
         background:var(--surface2);border:1px solid var(--border);text-align:left;
@@ -466,11 +479,22 @@
       "</div>" +
       '<div class="stats">' + stats + "</div>" +
       tasksHtml(v) +
+      (hasMoveTask(v) && !spotsFor[v.id]
+        ? '<button class="where-btn" data-spots="' + esc(v.id) + '">Where to?</button>'
+        : "") +
+      spotsHtml(v) +
       (lastDone ? '<button class="undo" data-undo="' + esc(lastDone) + '">Undo that</button>' : "") +
       guestNotesHtml(v) + note;
 
     Array.prototype.forEach.call(body.querySelectorAll(".chip"), function (el) {
       el.addEventListener("click", function () { focusVehicle(el.dataset.id); });
+    });
+
+    Array.prototype.forEach.call(body.querySelectorAll("[data-spots]"), function (el) {
+      el.addEventListener("click", function () {
+        var target = fleet.vehicles.filter(function (x) { return x.id === el.dataset.spots; })[0];
+        if (target) loadSpots(target, el);
+      });
     });
 
     Array.prototype.forEach.call(body.querySelectorAll("[data-task]"), function (el) {
@@ -490,6 +514,67 @@
         confirmSide(el.dataset.session, el.dataset.side, body);
       });
     });
+  }
+
+  // Where to put it. The deadline is the easy half; the operator's actual
+  // problem at 8am is which block is not swept tomorrow.
+  //
+  // Fetched on demand rather than with the fleet, because it is a spatial
+  // query per car and it is only wanted at the moment somebody is about to
+  // drive one somewhere.
+  var spotsFor = {};
+
+  function spotsHtml(v) {
+    var found = spotsFor[v.id];
+    if (!found) return "";
+    if (!found.length) {
+      return '<div class="spots"><h2>Where to move it</h2><div class="caveat">' +
+             "No block within walking distance " +
+             "has street-cleaning rules on file, so there is nothing to recommend. " +
+             "That is missing data, not an empty street.</div></div>";
+    }
+    return '<div class="spots"><h2>Where to move it</h2>' + found.map(function (s) {
+      // until() returns three shapes — "in 45 min", "in 3h 20m", and
+      // "Thu 10:06 AM" — so the prefix has to read correctly in front of all
+      // of them. "next swept" does; "clear until … from now" produced
+      // "clear until Thu 10:06 AM from now".
+      var free = s.next_cleaning
+        ? "next swept " + esc(until(s.next_cleaning))
+        : "no cleaning on file for this block";
+      return '<div class="spot">' +
+               '<div style="flex-grow:1;min-width:0">' +
+                 '<div class="s-name">' + esc(s.street_name) + " " + esc(s.side) + "</div>" +
+                 '<div class="s-free">' + free + "</div>" +
+               "</div>" +
+               '<div class="s-far">' + Math.round(s.distance_m) + " m</div>" +
+             "</div>";
+    }).join("") +
+    // Said every time, not once. The app knows the sweeping schedule and
+    // nothing whatsoever about whether there is room at the kerb, and a list
+    // that looks like parking advice will be read as parking advice.
+    '<div class="caveat">Ranked by how long each block stays clear. ' +
+    "Whether there is actually a space is not something this can see.</div></div>";
+  }
+
+  function loadSpots(v, el) {
+    el.disabled = true;
+    el.textContent = "Looking\u2026";
+    fetch(API + "/api/vehicles/" + encodeURIComponent(v.id) + "/spots")
+      .then(function (r) {
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (body) {
+        spotsFor[v.id] = body.spots || [];
+        render();
+      })
+      .catch(function (e) {
+        el.disabled = false;
+        el.textContent = "Where to?";
+        var err = document.getElementById("err");
+        err.hidden = false;
+        err.textContent = "Could not look for spots: " + e.message;
+      });
   }
 
   // The run sheet's actual job: what has to happen to this car. Every module
@@ -556,6 +641,10 @@
                '<div class="g-body">' + esc(n.body) + "</div>" +
              "</div>";
     }).join("") + "</div>";
+  }
+
+  function hasMoveTask(v) {
+    return (v.tasks || []).some(function (t) { return t.kind === "asp_move"; });
   }
 
   function stat(k, val, colour) {

@@ -34,10 +34,10 @@
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:#101317}
   .leaflet-container{background:#101317;font-family:inherit}
-  /* Darken the basemap itself, not the map. The filter is on the tile pane
-     alone so vehicle markers, the deadline ring and the controls keep their
-     real colours — inverting the whole container would turn the red
-     must-move marker cyan, which is worse than a light map. */
+  /* Off unless MAP_INVERT is set. When it is on, the filter goes on the tile
+     pane alone so vehicle markers, the deadline ring and the controls keep
+     their real colours — inverting the whole container would turn the red
+     must-move marker cyan. */
   body.invert-tiles .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   /* Leaflet's controls ship light and glare against a dark map. */
   .leaflet-control-attribution{
@@ -520,7 +520,6 @@
       // One failure is a dropped request; several is the provider refusing.
       if (failures !== 4 || url.indexOf("openstreetmap.org") !== -1) return;
       map.removeLayer(layer);
-      document.body.classList.add("invert-tiles");
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors — basemap key rejected",
         maxZoom: 19,

@@ -15,10 +15,10 @@ from turonomics_api.settings import map_tiles
 
 def test_without_a_key_it_falls_back_to_tiles_that_need_no_account(monkeypatch):
     monkeypatch.delenv("THUNDERFOREST_API_KEY", raising=False)
+    monkeypatch.delenv("MAP_INVERT", raising=False)
     cfg = map_tiles()
     assert "openstreetmap.org" in cfg["url"]
     assert "apikey" not in cfg["url"]
-    assert cfg["invert"] is True, "OSM's basemap is light, so the UI inverts it"
 
 
 def test_a_key_switches_to_thunderforest(monkeypatch):
@@ -29,22 +29,32 @@ def test_a_key_switches_to_thunderforest(monkeypatch):
     assert "transport-dark" in cfg["url"]
 
 
-def test_an_already_dark_theme_is_not_inverted(monkeypatch):
-    """Inverting a dark basemap would turn it light — the opposite of the
-    point, and the bug a single hard-coded filter would have caused."""
+def test_the_style_is_shown_as_chosen_rather_than_second_guessed(monkeypatch):
+    """An earlier version inverted anything not on a list of known-dark theme
+    names, so choosing a light style silently got you a dark map and the only
+    way to see what you picked was to edit the code. A display preference
+    should be a preference, not an inference."""
+    monkeypatch.delenv("MAP_INVERT", raising=False)
     monkeypatch.setenv("THUNDERFOREST_API_KEY", "abc123")
-    monkeypatch.setenv("THUNDERFOREST_STYLE", "transport-dark")
-    assert map_tiles()["invert"] is False
-    monkeypatch.setenv("THUNDERFOREST_STYLE", "spinal-map")
-    assert map_tiles()["invert"] is False
+    for style in ("landscape", "atlas", "transport-dark", "spinal-map"):
+        monkeypatch.setenv("THUNDERFOREST_STYLE", style)
+        cfg = map_tiles()
+        assert style in str(cfg["url"])
+        assert cfg["invert"] is False, f"{style} should render as published"
 
 
-def test_a_light_theme_is_inverted(monkeypatch):
+def test_inversion_is_available_when_asked_for(monkeypatch):
+    """Still the only way to get a dark map out of the keyless default."""
+    monkeypatch.delenv("THUNDERFOREST_API_KEY", raising=False)
+    monkeypatch.setenv("MAP_INVERT", "true")
+    assert map_tiles()["invert"] is True
+
+
+def test_inversion_applies_to_thunderforest_too(monkeypatch):
     monkeypatch.setenv("THUNDERFOREST_API_KEY", "abc123")
     monkeypatch.setenv("THUNDERFOREST_STYLE", "landscape")
-    cfg = map_tiles()
-    assert "landscape" in cfg["url"]
-    assert cfg["invert"] is True
+    monkeypatch.setenv("MAP_INVERT", "1")
+    assert map_tiles()["invert"] is True
 
 
 def test_leaflet_placeholders_survive_the_key_interpolation(monkeypatch):
@@ -56,7 +66,7 @@ def test_leaflet_placeholders_survive_the_key_interpolation(monkeypatch):
     assert "{z}" in url and "{x}" in url and "{y}" in url
 
 
-def test_the_key_is_not_logged_or_returned_anywhere_else(monkeypatch):
+def test_the_key_is_not_returned_anywhere_but_the_url(monkeypatch):
     """It reaches the browser by necessity — any map key does — but it should
     appear in the tile URL and nowhere else in the payload."""
     monkeypatch.setenv("THUNDERFOREST_API_KEY", "secret-key-value")

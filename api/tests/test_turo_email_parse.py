@@ -264,3 +264,82 @@ def test_the_guest_and_vehicle_survive_indentation_too():
                        body=INDENTED, received_at=RECEIVED)
     assert trip.guest_name == "Dana"
     assert trip.vehicle_text == "Ford Transit 2024"
+
+
+# ---------------------------------------------------------------------------
+# What the live mailbox actually sends
+# ---------------------------------------------------------------------------
+#
+# Taken verbatim from the diagnostic the sync logged after rejecting all 40
+# messages a second time:
+#
+#   unparseable label date: '10/2/26 8:00 AM\r'
+#
+# Three things in one string that the hand-typed fixture had none of: a numeric
+# two-digit-year date, a narrow no-break space before the meridiem, and a
+# trailing carriage return from CRLF line endings.
+
+LIVE_LABELS = (
+    "Dana has sent you a message about your Transit.\r\n"
+    "\r\n"
+    "  Trip start: 10/2/26 8:00 AM\r\n"
+    "  Trip end: 10/5/26 6:30 PM\r\n"
+    "  You earn: $284.00\r\n"
+    "  Mileage included: 600 miles\r\n"
+    "\r\n"
+    "  Ford Transit 2024\r\n"
+    "  booked by Dana\r\n"
+    "  Reservation ID #12345\r\n"
+)
+
+
+def test_the_format_the_live_mailbox_actually_uses():
+    trip = parse_email(
+        subject="Dana has sent you a message about your Transit",
+        body=LIVE_LABELS,
+        received_at=datetime(2026, 10, 4, 12, 0, tzinfo=UTC),
+    )
+    assert trip.reservation_id == "12345"
+    assert trip.starts_at == datetime(2026, 10, 2, 8, 0, tzinfo=ET)
+    assert trip.ends_at == datetime(2026, 10, 5, 18, 30, tzinfo=ET)
+    assert trip.guest_name == "Dana"
+    assert trip.vehicle_text == "Ford Transit 2024"
+
+
+def test_a_numeric_label_date_states_its_own_year(parse_now=None):
+    """This changes an assumption the parser was built on. The labels were
+    thought to carry no year, which is why the prose range mattered so much —
+    but "10/2/26" states it, so a message notification needs no inference at
+    all, and the December-rollover guess never has to run."""
+    trip = parse_email(
+        subject="Dana has sent you a message about your Transit",
+        body=LIVE_LABELS,
+        received_at=datetime(2026, 12, 30, 12, 0, tzinfo=UTC),
+    )
+    assert trip.year_was_explicit is True
+    assert trip.starts_at.year == 2026, "a stated year beats one deduced from arrival"
+
+
+@pytest.mark.parametrize(
+    "stamp",
+    [
+        "10/2/26 8:00 AM",
+        "10/2/2026 8:00 AM",
+        "10/2/26 8 AM",
+        "Oct 2, 2026 8:00 AM",
+    ],
+)
+def test_year_bearing_label_formats(stamp):
+    body = LIVE_LABELS.replace("10/2/26 8:00 AM", stamp)
+    trip = parse_email(subject="Dana has sent you a message about your Transit",
+                       body=body, received_at=datetime(2026, 10, 4, tzinfo=UTC))
+    assert trip.starts_at.date() == datetime(2026, 10, 2).date(), stamp
+
+
+def test_a_trailing_carriage_return_does_not_defeat_the_parse():
+    """"$" in multiline mode matches before the \\n, not before the \\r, so the
+    captured value keeps it — which strptime rejects."""
+    body = LIVE_LABELS.replace("\r\n", "\n").replace("8:00 AM", "8:00 AM\r")
+    trip = parse_email(subject="Dana has sent you a message about your Transit",
+                       body=body, received_at=datetime(2026, 10, 4, tzinfo=UTC))
+    assert trip.starts_at == datetime(2026, 10, 2, 8, 0, tzinfo=ET)

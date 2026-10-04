@@ -27,6 +27,7 @@ from turonomics_api.db.models import (
     Vehicle,
 )
 from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
+from turonomics_api.ingest.spots import DEFAULT_RADIUS_M, suggest_spots
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
 from turonomics_api.settings import fleet_timezone, map_tiles
 
@@ -416,3 +417,94 @@ def reopen_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
         task.completed_by_id = None
         session.commit()
     return _vehicle_after(session, task.vehicle_id)
+
+
+class SpotSuggestion(BaseModel):
+    """A block worth moving to.
+
+    ``next_cleaning`` is the only thing this is confident about. There is no
+    field for whether a space is free because the app cannot see the kerb, and
+    inventing one would be the most useful lie it could tell.
+    """
+
+    segment_side_id: uuid.UUID
+    street_name: str
+    side: str
+    between: str | None = None
+    distance_m: float
+    next_cleaning: datetime | None = None
+    fits_van: bool | None = None
+
+
+class SpotsResponse(BaseModel):
+    vehicle_id: uuid.UUID
+    searched_from: Position
+    radius_m: float
+    spots: list[SpotSuggestion]
+
+
+@router.get("/vehicles/{vehicle_id}/spots", response_model=SpotsResponse)
+def suggest_parking(
+    vehicle_id: uuid.UUID,
+    session: DbSession,
+    radius_m: float = DEFAULT_RADIUS_M,
+) -> SpotsResponse:
+    """Where to move this car, ranked by how long it could then be forgotten.
+
+    A separate call rather than part of the fleet payload: it is a spatial
+    query per vehicle, and it is only wanted at the moment somebody is about to
+    drive the car somewhere. Running it for four cars on every sixty-second
+    refresh would cost the database real work to answer a question nobody asked.
+    """
+    vehicle = session.get(Vehicle, vehicle_id)
+    if vehicle is None:
+        raise HTTPException(404, "no vehicle with that id")
+
+    located = _latest_located_event(session, vehicle.id)
+    coords = _lat_lon(session, "telemetry_event", located.id) if located else None
+    if coords is None:
+        raise HTTPException(
+            409, "no recent position for that vehicle, so there is nothing to search around"
+        )
+
+    parking = session.scalar(
+        select(ParkingSession)
+        .where(ParkingSession.vehicle_id == vehicle.id, ParkingSession.ended_at.is_(None))
+        .order_by(ParkingSession.started_at.desc())
+        .limit(1)
+    )
+    found = suggest_spots(
+        session,
+        vehicle=vehicle,
+        lat=coords[0],
+        lon=coords[1],
+        radius_m=radius_m,
+        # The block it is on is the one it has to leave.
+        exclude_side_id=parking.segment_side_id if parking else None,
+    )
+    return SpotsResponse(
+        vehicle_id=vehicle.id,
+        searched_from=Position(
+            lat=coords[0],
+            lon=coords[1],
+            heading=located.heading_deg if located else None,
+            reported_at=located.occurred_at if located else datetime.now(UTC),
+        ),
+        radius_m=radius_m,
+        spots=[
+            SpotSuggestion(
+                segment_side_id=s.segment_side_id,
+                street_name=s.street_name,
+                side=s.side,
+                between=(
+                    f"{s.from_cross_street} to {s.to_cross_street}"
+                    if s.from_cross_street and s.to_cross_street
+                    else None
+                ),
+                distance_m=round(s.distance_m, 1),
+                next_cleaning=s.next_cleaning,
+                fits_van=s.fits_van,
+            )
+            for s in found
+        ],
+    )

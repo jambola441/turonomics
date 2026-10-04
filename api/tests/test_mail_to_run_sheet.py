@@ -88,7 +88,7 @@ def _parked_van_with_a_deadline(session) -> Vehicle:
     session.add(
         AspRule(
             segment_side_id=seg.id,
-            days_of_week=[0, 3],
+            days_of_week=[1, 4],  # ISO: Monday and Thursday
             starts_at=time(8, 30),
             ends_at=time(10, 0),
             source=RuleSource.nyc_signs,

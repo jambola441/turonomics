@@ -31,11 +31,11 @@ from turonomics_api.settings import fleet_timezone
 SOURCE_KIND = "parking_session"
 
 
-def _suspended_dates(session: Session) -> frozenset[date]:
+def suspended_dates(session: Session) -> frozenset[date]:
     return frozenset(session.scalars(select(AspSuspension.suspended_on)).all())
 
 
-def _rules_for(session: Session, segment_side_id: uuid.UUID) -> list[Rule]:
+def rules_for(session: Session, segment_side_id: uuid.UUID) -> list[Rule]:
     rows = session.scalars(select(AspRule).where(AspRule.segment_side_id == segment_side_id)).all()
     return [
         Rule(
@@ -130,9 +130,9 @@ def refresh_move_task(
     if parking.segment_side_id is None:
         return existing
 
-    rules = _rules_for(session, parking.segment_side_id)
+    rules = rules_for(session, parking.segment_side_id)
     window = next_cleaning_window(
-        rules, now=now, suspended_dates=_suspended_dates(session), tz=fleet_timezone()
+        rules, now=now, suspended_dates=suspended_dates(session), tz=fleet_timezone()
     )
     if window is None:
         return existing

@@ -25,7 +25,7 @@ import {
   type ScrapedPage,
   type ScrapedTable,
 } from "./tolls.js";
-import { summariseCalls, type SeenCall } from "./turo.js";
+import { describeEmbedded, summariseCalls, type Embedded, type SeenCall } from "./turo.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -346,6 +346,65 @@ async function fetchExportInPage(url: string): Promise<string | null> {
 }
 
 /**
+ * Every blob of JSON the document carries.
+ *
+ * Injected, so it runs in the page and is kept deliberately dumb: collect
+ * text, decide nothing. Which of these matters is a judgement, and judgements
+ * live in turo.ts where `npm test` can reach them.
+ */
+function readEmbeddedInPage(): Embedded[] {
+  // A hydration blob for a whole page runs to a megabyte or so; past this it
+  // is a bundle, and parsing it would block the page.
+  const MAX_TEXT = 4_000_000;
+  const found: Embedded[] = [];
+  const keep = (label: string, text: string | null | undefined) => {
+    if (!text || !text.trim() || text.length > MAX_TEXT) return;
+    if (found.length >= 12) return;
+    found.push({ label, text });
+  };
+
+  document.querySelectorAll("script").forEach((element, index) => {
+    const script = element as HTMLScriptElement;
+    const type = (script.type || "").toLowerCase();
+    const id = script.id ? `#${script.id}` : `[${index}]`;
+    if (type.includes("json")) {
+      keep(`script${id} type=${type}`, script.textContent);
+      return;
+    }
+    if (type && type !== "text/javascript" && type !== "module") return;
+    // An inline assignment: `window.__APOLLO_STATE__ = {...};`. The text is
+    // taken as it is and parsed back in the worker, which is the only place
+    // that knows how to say what it found without saying what it was.
+    const text = script.textContent ?? "";
+    const match = /window\.(__[A-Za-z0-9_]+__|__[A-Za-z0-9_]+)\s*=\s*(\{[\s\S]*\})\s*;?\s*$/.exec(
+      text.trim()
+    );
+    if (match) keep(`script${id} window.${match[1]}`, match[2]);
+  });
+
+  // And the globals themselves, which is where a framework leaves it after
+  // hydrating — by then the script tag may be gone.
+  const globals = window as unknown as Record<string, unknown>;
+  for (const name of [
+    "__NEXT_DATA__",
+    "__APOLLO_STATE__",
+    "__INITIAL_STATE__",
+    "__PRELOADED_STATE__",
+    "__NUXT__",
+    "__remixContext",
+  ]) {
+    const value = globals[name];
+    if (value === undefined || value === null) continue;
+    try {
+      keep(`window.${name}`, JSON.stringify(value));
+    } catch {
+      // Circular, or a live React handle. Not readable, not fatal.
+    }
+  }
+  return found;
+}
+
+/**
  * Find out which endpoints a Turo page gets its data from.
  *
  * The recorder has to be in place before React makes its first call, and a
@@ -386,7 +445,18 @@ async function probeTuro(tabId: number): Promise<string> {
       const w = window as Window & { __turonomicsCalls?: unknown[] };
       return (w.__turonomicsCalls ?? []) as SeenCall[];
     }, [], 12, "MAIN");
-    return summariseCalls(calls);
+    // Both halves, always. The first probe of a real trip page found no call
+    // carrying a trip: the pages are server-rendered, so the document is
+    // where the data is, and a report that only covered the network read as
+    // "there is nothing here".
+    const embedded = await inPage(tabId, readEmbeddedInPage, [], 12, "MAIN");
+    return [
+      "=== what it fetched ===",
+      summariseCalls(calls),
+      "",
+      "=== what the document carries ===",
+      describeEmbedded(embedded),
+    ].join("\n");
   } finally {
     await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
   }

@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.6.0 | build + reload | records what requests *send*, and a watch that survives a form submit |
 | 1.5.0 | build + reload | pulls Turo's reservation detail; new "Pull trips from Turo" button |
 | 1.4.1 | build + reload | first-party analytics filtered out |
 | 1.4.0 | build + reload | names the keys it drops; a long status is no longer masked |

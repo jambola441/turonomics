@@ -69,4 +69,7 @@ export type MessageType =
   | { type: "PROBE_TURO_ERROR"; error: string }
   | { type: "PULL_TURO"; tabId: number }
   | { type: "PULL_TURO_RESULT"; result: TuroPullResult }
-  | { type: "PULL_TURO_ERROR"; error: string };
+  | { type: "PULL_TURO_ERROR"; error: string }
+  | { type: "WATCH_TURO"; tabId: number }
+  | { type: "WATCH_TURO_RESULT" }
+  | { type: "REPORT_WATCH"; tabId: number };

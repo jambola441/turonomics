@@ -19,6 +19,7 @@ interface Recorded {
   url: string;
   status: number;
   body: unknown;
+  request: unknown;
 }
 
 type FakeWindow = {
@@ -77,6 +78,7 @@ test("and the call is recorded", async () => {
     url: "https://turo.com/api/reservation/1",
     status: 200,
     body: { status: "CHARGED" },
+    request: null,
   });
 });
 
@@ -132,4 +134,46 @@ test("a relative url is recorded absolute", async () => {
   await window.fetch("/api/properties");
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(calls()[0].url, "https://turo.com/api/properties");
+});
+
+
+// ---------------------------------------------------------------------------
+// What was sent, which is the whole point for a filing
+// ---------------------------------------------------------------------------
+
+test("a json request body is recorded", async () => {
+  // Every probe before 1.6.0 threw this away, which is why none of them could
+  // say how an invoice is filed.
+  const { window, calls } = await install(() => new Response("{}", { status: 200 }));
+  await window.fetch("https://turo.com/api/reimbursement", {
+    method: "POST",
+    body: JSON.stringify({ reservationId: 58626257, lineItems: [{ type: "TOLL", amount: 11.51 }] }),
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.deepEqual(calls()[0].request, {
+    reservationId: 58626257,
+    lineItems: [{ type: "TOLL", amount: 11.51 }],
+  });
+  assert.equal(calls()[0].method, "POST");
+});
+
+test("an uploaded image is described, not carried", async () => {
+  // An evidence upload is multipart with a PNG in it. Recording the bytes
+  // would mean megabytes of base64 shaped into a very long string for no gain.
+  const { window, calls } = await install(() => new Response("{}", { status: 200 }));
+  const form = new FormData();
+  form.append("purpose", "TOLL_EVIDENCE");
+  form.append("file", new Blob([new Uint8Array(2048)], { type: "image/png" }), "evidence.png");
+  await window.fetch("https://turo.com/api/images", { method: "POST", body: form });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  const sent = calls()[0].request as { "<multipart>": Record<string, string> };
+  assert.match(sent["<multipart>"].file, /^<file image\/png 2048 bytes>$/);
+  assert.equal(sent["<multipart>"].purpose, "<text 13>");
+});
+
+test("a request body that is not json is measured rather than kept", async () => {
+  const { window, calls } = await install(() => new Response("{}", { status: 200 }));
+  await window.fetch("https://turo.com/api/x", { method: "POST", body: "reservation=58626257" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls()[0].request, "<text 20>");
 });

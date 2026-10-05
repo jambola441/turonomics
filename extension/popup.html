@@ -50,6 +50,11 @@
           <pre id="pullReport"></pre>
         </details>
         <button id="probeBtn" class="btn btn-quiet">What does this page fetch?</button>
+        <!-- For capturing something that happens later, like filing an
+             invoice: start the watch, do the thing, then report. The one-shot
+             button above reloads and stops listening after a few seconds. -->
+        <button id="watchBtn" class="btn btn-quiet">Watch while I do something</button>
+        <button id="reportBtn" class="btn btn-quiet">Stop and report what it saw</button>
         <div id="probeNote" class="result hidden">
           Reloads the tab to catch the first requests.
         </div>

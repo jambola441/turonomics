@@ -469,6 +469,44 @@ function readEmbeddedInPage(): Embedded[] {
  * tab is reloaded, and it is unregistered afterwards — a probe that outlives
  * the question would sit in every Turo page the host opens.
  */
+async function watchTuro(tabId: number): Promise<void> {
+  // Install and leave installed. The one-shot probe reloads, listens for a few
+  // seconds and uninstalls, which is right for "what does this page load" and
+  // useless for "what happens when I submit this form" — the submit is minutes
+  // away, long after it has stopped listening.
+  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  await chrome.scripting.registerContentScripts([
+    {
+      id: HOOK_ID,
+      matches: ["https://turo.com/*"],
+      js: ["dist/turo-hook.js"],
+      runAt: "document_start",
+      world: "MAIN",
+    },
+  ]);
+  // The reload is what puts the hook in front of the page's first call. It also
+  // clears any form already filled in, which is why this is a separate button
+  // pressed *before* the work rather than after it.
+  await chrome.tabs.reload(tabId);
+  await waitForTab(tabId);
+}
+
+/** Collect what the watch recorded, without reloading away the page. */
+async function reportWatch(tabId: number): Promise<string> {
+  try {
+    const calls = await inPage(tabId, () => {
+      const w = window as Window & { __turonomicsCalls?: unknown[] };
+      return (w.__turonomicsCalls ?? []) as SeenCall[];
+    }, [], 12, "MAIN");
+    return [
+      "=== what it fetched ===",
+      summariseCalls(calls),
+    ].join("\n");
+  } finally {
+    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  }
+}
+
 async function probeTuro(tabId: number): Promise<string> {
   await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
   await chrome.scripting.registerContentScripts([
@@ -696,6 +734,30 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
         } satisfies MessageType)
     );
     return true; // async response
+  }
+
+  if (message.type === "WATCH_TURO") {
+    watchTuro(message.tabId).then(
+      () => sendResponse({ type: "WATCH_TURO_RESULT" } satisfies MessageType),
+      (error: unknown) =>
+        sendResponse({
+          type: "PROBE_TURO_ERROR",
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies MessageType)
+    );
+    return true;
+  }
+
+  if (message.type === "REPORT_WATCH") {
+    reportWatch(message.tabId).then(
+      (report) => sendResponse({ type: "PROBE_TURO_RESULT", report } satisfies MessageType),
+      (error: unknown) =>
+        sendResponse({
+          type: "PROBE_TURO_ERROR",
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies MessageType)
+    );
+    return true;
   }
 
   if (message.type === "PROBE_TURO") {

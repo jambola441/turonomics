@@ -34,3 +34,9 @@ docs/design/canvas/turo-fleet-ops.html
 
 # Local Postgres probe output
 /tmp_probe/
+
+# Rendered evidence sheets. Generated from the live ledger on demand, and they
+# carry a guest's name, a plate and a trip's times — none of which belongs in a
+# repository. The renderer is in api/src/turonomics_api/ingest/evidence.py.
+evidence-*.png
+evidence-*.svg

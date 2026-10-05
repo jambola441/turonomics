@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.4.0 | build + reload | names the keys it drops; a long status is no longer masked |
 | 1.3.0 | build + reload | reads the document as well as the network |
 | 1.2.0 | build + reload | manifest version and description changed; `dist/turo-hook.js` is new and is registered by filename at runtime, so a stale `dist/` fails at the moment you click the button rather than at load |
 | 1.1.0 | build + reload | the E-ZPass content script was removed; the worker injects what it needs |

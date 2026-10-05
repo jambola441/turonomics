@@ -264,3 +264,25 @@ test("the keys we are hunting match what Turo actually calls things", () => {
     assert.ok(TRIP_KEYS.test(key), key);
   }
 });
+
+test("a truncated object names what it dropped", () => {
+  // "+38 more" on Turo's reservation detail hid whichever key holds the actual
+  // return time — the one field the late-return grace exists to guess at. A
+  // key is structure; only the value beside it is shaped away.
+  const wide: Record<string, unknown> = {};
+  for (let i = 0; i < 85; i++) wide[`field${i}`] = "CHARGED";
+  const shape = jsonShape(wide);
+  assert.match(shape, /\+5 more: field80 field81 field82 field83 field84\}$/);
+});
+
+test("a status longer than a word is still vocabulary", () => {
+  // Turo's reimbursementStatus came back as str(34) against a cap tuned to
+  // "CHARGED", masking the single field the probe existed to read.
+  assert.equal(
+    stringShape("REIMBURSEMENT_CHARGED_TO_GUEST_OK"),
+    "REIMBURSEMENT_CHARGED_TO_GUEST_OK"
+  );
+  // Still not a licence plate, and still not a sentence.
+  assert.equal(stringShape("LWH4685"), "str(7)");
+  assert.equal(stringShape("Charged to the guest on Tuesday"), "str(31)");
+});

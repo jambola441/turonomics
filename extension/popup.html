@@ -37,6 +37,25 @@
 
       <hr />
 
+      <section>
+        <p class="subtitle">On any Turo page — trips, or an invoice</p>
+        <!-- The trip scraper matches on emotion class names and reads dates
+             with no year in them. Turo's pages get their data as JSON; this
+             finds out from where. The report names the shape of each payload
+             and masks every value, so it is safe to paste. -->
+        <button id="probeBtn" class="btn btn-quiet">What does this page fetch?</button>
+        <div id="probeNote" class="result hidden">
+          Reloads the tab to catch the first requests.
+        </div>
+        <details id="probeReportWrap" class="report hidden">
+          <summary>Endpoints and payload shapes</summary>
+          <pre id="probeReport"></pre>
+          <button id="probeCopy" class="btn btn-quiet">Copy</button>
+        </details>
+      </section>
+
+      <hr />
+
       <details id="settings">
         <summary>Settings</summary>
         <label for="apiBase">API</label>

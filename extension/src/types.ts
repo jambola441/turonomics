@@ -41,4 +41,7 @@ export type MessageType =
   | { type: "DETAIL_ERROR"; tripId: string; error: string }
   | { type: "SEND_TOLLS"; tabId: number }
   | { type: "SEND_TOLLS_RESULT"; result: SendTollsResult }
-  | { type: "SEND_TOLLS_ERROR"; error: string };
+  | { type: "SEND_TOLLS_ERROR"; error: string }
+  | { type: "PROBE_TURO"; tabId: number }
+  | { type: "PROBE_TURO_RESULT"; report: string }
+  | { type: "PROBE_TURO_ERROR"; error: string };

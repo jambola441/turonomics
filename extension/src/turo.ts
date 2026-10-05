@@ -36,7 +36,11 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 // digit; a plate, a VIN and a confirmation code always have one. Losing a
 // digit-bearing enum costs one round trip, and that is the cheaper mistake.
 const ENUM_TOKEN = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/;
-const MAX_ENUM_LENGTH = 32;
+// Raised from 32 after the first real invoice payload came back with
+// `reimbursementStatus: str(34)`. A status is the thing worth reading and
+// Turo's are sentence-length in screaming snake, so a cap tuned to "CHARGED"
+// masked exactly the field the probe existed to find.
+const MAX_ENUM_LENGTH = 64;
 
 export function stringShape(value: string): string {
   if (value === "") return "str(0)";
@@ -83,8 +87,11 @@ export function urlShape(raw: string, base = "https://turo.com/"): string {
 }
 
 const MAX_DEPTH = 6;
-const MAX_KEYS = 40;
+const MAX_KEYS = 80;
 const MAX_VARIANTS = 3;
+// Raised for objects, because a payload's keys are the map of it. Arrays stay
+// summarised: sixty trips of the same shape say it once.
+
 
 /**
  * The shape of a parsed JSON value: its structure, with every leaf replaced by
@@ -112,7 +119,13 @@ export function jsonShape(value: unknown, depth = 0): string {
     const body = kept
       .map(([key, item]) => `${key}: ${jsonShape(item, depth + 1)}`)
       .join(", ");
-    const more = entries.length > MAX_KEYS ? `, +${entries.length - MAX_KEYS} more` : "";
+    // The *names* of what was dropped, not a count. Turo's reservation detail
+    // has around eighty keys, and "+38 more" hid whichever of them holds the
+    // actual return time — the one field the whole late-return grace period
+    // exists to guess at. A key is structure, so printing it costs nothing;
+    // it is the values beside it that are shaped away.
+    const dropped = entries.slice(MAX_KEYS).map(([key]) => key);
+    const more = dropped.length ? `, +${dropped.length} more: ${dropped.join(" ")}` : "";
     return `{${body}${more}}`;
   }
   return typeof value;

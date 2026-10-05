@@ -32,6 +32,7 @@ from turonomics_api.db.base import session_scope
 from turonomics_api.db.models import StreetSegmentSide, Vehicle
 from turonomics_api.gmail.probe import DEFAULT_LIMIT, DEFAULT_QUERY, probe
 from turonomics_api.plates import normalize_plate
+from turonomics_api.settings import outside_fleet, parse_pairs
 
 log = logging.getLogger("turonomics.bootstrap")
 
@@ -139,16 +140,7 @@ def parse_tag_map(raw: str) -> dict[str, str]:
     docstring for a record of the fleet's bindings. The tags live in the
     environment; the source should not look like it knows them.
     """
-    out: dict[str, str] = {}
-    for pair in raw.split(","):
-        pair = pair.strip()
-        if not pair or "=" not in pair:
-            continue
-        name, _, tag = pair.partition("=")
-        name, tag = name.strip(), tag.strip()
-        if name and tag:
-            out[name.lower()] = tag
-    return out
+    return {name.lower(): tag for name, tag in parse_pairs(raw)}
 
 
 def apply_tags(session: Session, tag_map: dict[str, str]) -> list[str]:
@@ -385,7 +377,20 @@ def run_bootstrap() -> int:
             if bound:
                 log.info("turo listings bound: %s", ", ".join(bound))
 
-            tags = apply_tags(session, parse_tag_map(os.environ.get("EZPASS_TAGS", "")))
+            tag_map = parse_tag_map(os.environ.get("EZPASS_TAGS", ""))
+            clashes = {
+                tag for tag in tag_map.values() if tag.upper() in outside_fleet()
+            }
+            for tag in sorted(clashes):
+                # Contradictory configuration, and the expensive way round: a
+                # tag listed as outside the fleet but bound to a car would bill
+                # somebody else's crossings to that car's guests.
+                log.warning(
+                    "transponder %s is in both EZPASS_TAGS and EZPASS_OUTSIDE "
+                    "— binding it anyway, but one of the two is wrong",
+                    tag,
+                )
+            tags = apply_tags(session, tag_map)
             if tags:
                 log.info("ezpass transponders bound: %s", ", ".join(tags))
 

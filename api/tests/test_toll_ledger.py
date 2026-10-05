@@ -709,3 +709,111 @@ def test_the_stored_time_reads_back_as_the_printed_time(session, jerry):
     assert (local.hour, local.minute) == (15, 19)
     # And the stored instant is 7pm UTC, not 3pm — the shape of the original bug.
     assert toll.occurred_at.astimezone(UTC).hour == 19
+
+
+# ---------------------------------------------------------------------------
+# Crossings that are not this fleet's
+# ---------------------------------------------------------------------------
+# A statement covers an account, not a fleet: a family car and a van that has
+# since left sit on the same bill. Those crossings are real money out, but no
+# guest owes them and no binding will fix them. Counting them as unattributed
+# had the page asking every month for a car to bind them to.
+
+
+def _plate_statement(plate: str, amount: str = "-9.11") -> bytes:
+    return _csv(_row("500", f"NY {plate}", "10/04/2026", "11:00:00 AM", amount))
+
+
+def test_an_outside_crossing_is_labelled_not_chased(api_client, monkeypatch, session):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "00414500432=Mom's car,94979NF=Old van")
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("94979NF"), "text/csv")},
+    )
+    body = api_client.get("/api/tolls").json()
+    assert body["tolls"][0]["outside_label"] == "Old van"
+    assert body["outside_cents"] == 911
+    # Not ours to chase, so it is out of the figure that means "chase this".
+    assert body["unattributed_cents"] == 0
+    # Still on the bill, because the account was still charged for it.
+    assert body["total_cents"] == 911
+
+
+def test_an_unattributed_fleet_crossing_is_still_chased(api_client, monkeypatch, session, jerry):
+    """The other side of it, so the test above cannot pass by zeroing
+    everything."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "94979NF=Old van")
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("LZA7293"), "text/csv")},
+    )
+    body = api_client.get("/api/tolls").json()
+    assert body["tolls"][0]["outside_label"] is None
+    assert body["unattributed_cents"] == 911
+    assert body["outside_cents"] == 0
+
+
+def test_an_outside_tag_is_not_listed_as_unbound(api_client, monkeypatch, session):
+    """It is not waiting for a car. Listing it would ask, every month, for a
+    binding that should never be made."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "00414500432=Mom's car")
+    statement = (
+        b"Tag/Plate #,Exit Plaza,Date,Amount\n"
+        b'" 00414500432","RKB","10/4/26 11:00 AM","$-9.11"\n'
+        b'" 00415151710","RKB","10/4/26 11:05 AM","$-2.86"\n'
+    )
+    imported = api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", statement, "text/csv")}
+    ).json()
+    assert imported["unknown_tags"] == ["00415151710"]
+    assert api_client.get("/api/tolls").json()["unknown_tags"] == ["00415151710"]
+
+
+def test_the_label_is_matched_case_insensitively(api_client, monkeypatch, session):
+    """A statement's own casing is not something to depend on."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "94979nf=Old van")
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("94979NF"), "text/csv")},
+    )
+    assert api_client.get("/api/tolls").json()["tolls"][0]["outside_label"] == "Old van"
+
+
+def test_relabelling_needs_no_reimport(api_client, monkeypatch, session):
+    """Whose car it is lives in the environment, not on the crossing, so a
+    correction is a restart rather than a re-upload."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "94979NF=Old van")
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("94979NF"), "text/csv")},
+    )
+    monkeypatch.setenv("EZPASS_OUTSIDE", "94979NF=Dad's van")
+    assert api_client.get("/api/tolls").json()["tolls"][0]["outside_label"] == "Dad's van"
+
+
+def test_an_outside_crossing_attributed_to_a_trip_is_not_hidden(
+    api_client, monkeypatch, session, jerry
+):
+    """If a plate is both listed as outside and matches a fleet car on a trip,
+    the attribution wins for the money and the label still shows.
+
+    Contradictory configuration, but it must not silently drop a crossing a
+    guest owes.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "LZA7293=Mom's car")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 19, 0, tzinfo=EASTERN))
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("LZA7293"), "text/csv")},
+    )
+    body = api_client.get("/api/tolls").json()
+    assert body["tolls"][0]["guest_name"] == "Dylan"
+    assert body["outside_cents"] == 0, "an attributed crossing is not written off"

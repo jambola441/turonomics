@@ -144,7 +144,10 @@ def main() -> int:
             tolls = stub_api.TOLLS
             total = sum(t["amount_cents"] for t in tolls)
             owed = sum(t["amount_cents"] for t in tolls if not t["recovered_at"])
-            loose = sum(t["amount_cents"] for t in tolls if not t["trip_id"])
+            loose = sum(t["amount_cents"] for t in tolls
+                        if not t["trip_id"] and not t["outside_label"])
+            outside = sum(t["amount_cents"] for t in tolls
+                          if not t["trip_id"] and t["outside_label"])
 
             # One handler for both kinds of dialog the page raises, routed by
             # type. Two handlers do not work: Playwright calls every one that
@@ -175,6 +178,19 @@ def main() -> int:
             check("unattributed money is reported apart from recoverable money",
                   page.locator("#s-loose").text_content() == _money(loose))
 
+            # A crossing on a car outside the fleet is labelled, kept out of the
+            # chase-this figure, and still counted in what the account paid.
+            note = page.locator("#outside-note")
+            check("money outside the fleet is reported apart",
+                  note.is_visible() and _money(outside) in (note.text_content() or ""))
+            check("and named, so it is recognisable next month",
+                  "Mum's car" in (note.text_content() or ""))
+            check("an outside crossing is not shown as a gap",
+                  page.locator(".t-who.outside").count() == 1
+                  and page.locator(".t-who.loose").count()
+                      == sum(1 for t in tolls
+                             if not t["vehicle_nickname"] and not t["outside_label"]))
+
             # $2.01 is the amount that int(2.01 * 100) turns into 200. It cost
             # a cent on 137 of the first 2000 amounts when the importer did
             # that, and it would do the same here if the page divided floats.
@@ -185,8 +201,11 @@ def main() -> int:
             # The whole reason this card exists: a tag nobody has bound bills
             # to nobody, and the operator cannot fix that from a number they
             # cannot read in full.
+            # A labelled tag is not an unbound one: it belongs to a car that is
+            # not in this fleet and never will be, so it must not appear here.
             expected_tags = sorted({t["transponder_id"] for t in tolls
-                                    if t["transponder_id"] and not t["vehicle_nickname"]})
+                                    if t["transponder_id"] and not t["vehicle_nickname"]
+                                    and not t["outside_label"]})
             check("unbound transponders are called out",
                   page.locator("#unknown-wrap").is_visible()
                   and page.locator(".tag").count() == len(expected_tags))

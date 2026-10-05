@@ -93,6 +93,10 @@
   .toll .t-when{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
   .toll .t-who{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.35}
   .toll .t-who.loose{color:var(--red)}
+  /* Known, just not ours. Dim rather than red: red means "do something", and
+     there is nothing to do about a crossing on a family car. */
+  .toll .t-who.outside{color:var(--dim)}
+  .outside-note{font-size:12px;color:var(--dim);line-height:1.5;margin:-8px 0 16px;padding:0 2px}
   .toll .t-amt{font-family:var(--mono);font-size:15px;font-weight:600;flex-shrink:0}
   .tick{flex-shrink:0;width:34px;height:34px;border-radius:9px;font:inherit;font-size:15px;
         cursor:pointer;background:var(--surface2);border:1px solid var(--border2);
@@ -131,6 +135,8 @@
     <div class="stat loose"><div class="k">unattributed</div><div class="v" id="s-loose">—</div>
       <div class="n">nobody to bill</div></div>
   </div>
+
+  <div class="outside-note" id="outside-note" hidden></div>
 
   <section id="unknown-wrap" hidden>
     <div class="card warn">
@@ -269,6 +275,12 @@
   // that needs doing something about: billed to a guest, charged to a car that
   // was not out with anybody, or nobody at all.
   function who(toll) {
+    // Checked before the fleet cases only for a crossing nothing claimed: an
+    // attributed toll is a guest's whatever the label says, and hiding it
+    // behind a label would write off money somebody owes.
+    if (toll.outside_label && !toll.vehicle_nickname) {
+      return { text: toll.outside_label + " — not the fleet's", outside: true };
+    }
     if (toll.guest_name && toll.vehicle_nickname) {
       return { text: toll.guest_name + " — " + toll.vehicle_nickname, loose: false };
     }
@@ -288,6 +300,25 @@
     el("s-total").textContent = money(data.total_cents);
     el("s-owed").textContent = money(data.unrecovered_cents);
     el("s-loose").textContent = money(data.unattributed_cents);
+  }
+
+  // Money the account was charged that belongs to somebody else's car. Stated
+  // plainly and kept out of the figure above it, because the operator can do
+  // nothing about it and being shown it as a gap invites chasing it monthly.
+  function renderOutside(data) {
+    var note = el("outside-note");
+    if (!data.outside_cents) {
+      note.hidden = true;
+      return;
+    }
+    var names = {};
+    (data.tolls || []).forEach(function (t) {
+      if (t.outside_label && !t.vehicle_nickname) names[t.outside_label] = true;
+    });
+    var who = Object.keys(names).sort().join(", ");
+    note.textContent = "Plus " + money(data.outside_cents) + " on this account from " +
+      (who || "cars outside the fleet") + ". Not in the figures above — nobody owes it.";
+    note.hidden = false;
   }
 
   function renderUnknown(data) {
@@ -346,7 +377,8 @@
       add(body, "div", "t-plaza", toll.plaza);
       add(body, "div", "t-when", when(toll.occurred_at));
       var w = who(toll);
-      add(body, "div", "t-who" + (w.loose ? " loose" : ""), w.text);
+      add(body, "div", "t-who" + (w.loose ? " loose" : "") + (w.outside ? " outside" : ""),
+          w.text);
       add(card, "div", "t-amt", money(toll.amount_cents));
 
       var tick = add(card, "button", "tick", toll.recovered_at ? "✓" : "");
@@ -363,6 +395,7 @@
   function render() {
     if (!state.data) return;
     renderStats(state.data);
+    renderOutside(state.data);
     renderUnknown(state.data);
     renderLedger(state.data);
   }

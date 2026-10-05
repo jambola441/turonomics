@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.models import Toll, Trip, TripState, Vehicle
 from turonomics_api.models import EZPassToll
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
+from turonomics_api.settings import outside_fleet
 
 log = logging.getLogger("turonomics.ingest.tolls")
 
@@ -144,7 +145,11 @@ def import_tolls(
             result.matched += 1
         else:
             result.unmatched += 1
-            if vehicle is None and toll.transponder_id:
+            if (
+                vehicle is None
+                and toll.transponder_id
+                and toll.transponder_id.upper() not in outside_fleet()
+            ):
                 # Named so it can be bound. A tag the fleet does not recognise
                 # is one env var away from matching every toll it ever charges.
                 result.unknown_tags.add(toll.transponder_id)

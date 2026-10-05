@@ -20,6 +20,48 @@ def fleet_timezone() -> ZoneInfo:
     return ZoneInfo(os.environ.get("FLEET_TIMEZONE", "America/New_York"))
 
 
+def parse_pairs(raw: str) -> list[tuple[str, str]]:
+    """``"a=1,b=2"`` -> ``[("a", "1"), ("b", "2")]``, junk dropped.
+
+    Shared so that every ``KEY=VALUE,KEY=VALUE`` variable in this service
+    tolerates the same spacing and ignores the same malformed entries. An entry
+    missing either half is dropped rather than half-applied: a map keyed by the
+    empty string matches a vehicle with a blank nickname.
+    """
+    out: list[tuple[str, str]] = []
+    for pair in raw.split(","):
+        pair = pair.strip()
+        if not pair or "=" not in pair:
+            continue
+        left, _, right = pair.partition("=")
+        left, right = left.strip(), right.strip()
+        if left and right:
+            out.append((left, right))
+    return out
+
+
+def outside_fleet() -> dict[str, str]:
+    """Tags and plates on this EZPass account that are not this fleet's cars.
+
+    ``EZPASS_OUTSIDE="00414500432=Mom's car,94979NF=Old van"``.
+
+    A statement covers an account, not a fleet. Family cars and vehicles that
+    have since left sit on the same bill, and their crossings are real money
+    out — but they are not a guest's to repay and not a gap to be fixed. Before
+    this, they were counted as unattributed and the tolls page asked, every
+    month, for a car to bind them to. A figure the operator is told to chase
+    and cannot is worse than one that is simply labelled.
+
+    Keyed by the identifier exactly as a statement prints it, upper-cased, so a
+    tag and a plate can both be listed. Not stored on the crossing: whose car
+    it is can be corrected without re-importing anything.
+    """
+    return {
+        key.upper(): label
+        for key, label in parse_pairs(os.environ.get("EZPASS_OUTSIDE", ""))
+    }
+
+
 def asp_alert_lead_minutes() -> list[int]:
     """How far ahead of a deadline to warn, longest first.
 

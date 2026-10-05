@@ -261,7 +261,8 @@
           mine + " and these crossings are " + money(invoice.total_cents) +
           ", so check before asking again");
       if (invoice.charged_lines && invoice.charged_lines.length) {
-        add(body, "div", "asked", "that invoice: " + invoice.charged_lines.join(" · "));
+        add(body, "div", "asked",
+            "incidental charges: " + invoice.charged_lines.join(" · "));
       }
     } else if (invoice.charged_cents) {
       add(body, "div", "asked",

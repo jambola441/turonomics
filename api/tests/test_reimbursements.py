@@ -486,8 +486,13 @@ def test_a_wordier_toll_label_is_recognised() -> None:
 
 def test_a_label_merely_containing_the_letters_is_not_a_toll_line() -> None:
     """Word boundaries, so "Tolled" or a plaza name does not become the toll
-    line and write off the wrong amount."""
-    body = ITEMISED_BODY.replace("Tolls -", "Tollington Road damage -")
+    line and write off the wrong amount.
+
+    The label carries no other charge word on purpose. With "damage" in it this
+    test passed with the word boundaries removed — the non-toll guard was
+    refusing the line and the boundaries were doing nothing.
+    """
+    body = ITEMISED_BODY.replace("Tolls -", "Tollgate Lane repaint -")
     parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
     assert parsed is not None
     assert parsed.toll_cents is None, "a road name is not a toll charge"
@@ -641,16 +646,40 @@ def test_no_other_charge_is_read_as_tolls(label: str) -> None:
     assert parsed.toll_cents is None, f"{label!r} was taken as a toll charge"
 
 
-def test_a_line_naming_tolls_and_something_else_is_refused() -> None:
+@pytest.mark.parametrize(
+    "label",
+    # One per word in the non-toll list, because each word's only job is to
+    # refuse a label like this one. "distance" is here because Turo bills
+    # mileage as "22 mi additional distance", so a combined line would say
+    # "distance" and not "mileage".
+    [
+        "Tolls and fuel",
+        "Tolls and gas",
+        "Tolls and cleaning",
+        "Tolls and additional distance",
+        "Tolls and mileage",
+        "Tolls and parking",
+        "Tolls and damage",
+        "Tolls and tickets",
+        "Tolls and a citation",
+        "Tolls and smoking",
+        "Tolls and a violation",
+        "Tolls and pet hair",
+        "Tolls and delivery",
+        "Tolls and overage",
+        "Tolls and petrol",
+    ],
+)
+def test_a_line_naming_tolls_and_something_else_is_refused(label: str) -> None:
     """"Tolls and fuel - $55.55" does not say what the toll share was.
 
     Taking the whole amount would write off the fuel as though the guest had
     paid it, so this falls back to the total and refuses.
     """
-    body = BUNDLED_BODY.replace("Tolls - $15.55", "Tolls and fuel - $54.30")
+    body = BUNDLED_BODY.replace("Tolls - $15.55", f"{label} - $54.30")
     parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
     assert parsed is not None
-    assert any("Tolls and fuel" in label for label, _ in parsed.lines), "still listed"
+    assert any(label in listed for listed, _ in parsed.lines), "still listed"
     assert parsed.toll_cents is None, "but not reconciled"
 
 
@@ -733,3 +762,99 @@ def test_a_plain_toll_label_is_still_reconciled(label: str) -> None:
     parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
     assert parsed is not None
     assert parsed.toll_cents == 1555, f"{label!r} was not recognised as the toll line"
+
+
+# ---------------------------------------------------------------------------
+# What the invoices actually look like
+# ---------------------------------------------------------------------------
+#
+# Everything above this line was written against a guess at the format, and the
+# guess passed. A probe of the real mailbox then read 149 reimbursement
+# invoices and stored line items for *none* of them, because Turo writes the
+# quantity before the label — "22 mi additional distance" — and the pattern
+# required a leading letter. The heading is "Incidental charges", not the
+# "Reimbursement charges" invented above, and each charge carries a sentence of
+# explanation underneath it.
+
+OBSERVED_BODY = """Reimbursement invoice
+
+Your guest has been charged for the incidental charges below.
+
+View invoice (https://turo.com/reservation/59077848/invoice-hub?invoiceId=INV-77)
+
+59077848 Toyota Corolla
+
+Filed by Marguerite
+
+Incidental charges
+
+22 mi additional distance - $11.00
+
+Charged because the trip went over the distance included in this reservation.
+
+7 tolls - $40.71
+
+Total charge - $51.71
+
+Learn more about reimbursements at Turo (https://help.turo.com/categories/360)
+"""
+
+
+def test_the_quantified_labels_turo_actually_writes_all_parse() -> None:
+    parsed = parse_invoice(
+        "Marguerite has been charged for your reimbursement invoice", OBSERVED_BODY
+    )
+    assert parsed is not None
+    assert parsed.lines == (("22 mi additional distance", 1100), ("7 tolls", 4071))
+    assert parsed.total_cents == 5171
+
+
+def test_the_toll_line_is_found_despite_its_leading_count() -> None:
+    """"7 tolls - $40.71" is the line the whole feature exists to read."""
+    parsed = parse_invoice(
+        "Marguerite has been charged for your reimbursement invoice", OBSERVED_BODY
+    )
+    assert parsed is not None and parsed.toll_cents == 4071
+
+
+def test_the_sentence_under_a_charge_is_not_a_charge() -> None:
+    """Each charge has an explanation below it. It ends in a full stop rather
+    than an amount, which is what the end-of-line anchor is for."""
+    parsed = parse_invoice(
+        "Marguerite has been charged for your reimbursement invoice", OBSERVED_BODY
+    )
+    assert parsed is not None
+    assert all("Charged because" not in label for label, _ in parsed.lines)
+
+
+def test_a_quantified_distance_line_is_not_read_as_tolls() -> None:
+    """Allowing a leading digit widens what counts as a label, so the guard
+    that keeps a non-toll charge out of the toll line has to hold for these
+    too."""
+    body = OBSERVED_BODY.replace("7 tolls - $40.71", "3 gal fuel - $40.71")
+    parsed = parse_invoice(
+        "Marguerite has been charged for your reimbursement invoice", body
+    )
+    assert parsed is not None
+    assert parsed.toll_cents is None
+
+
+def test_a_sentence_that_happens_to_quote_an_amount_is_not_a_charge() -> None:
+    """The anchor that keeps prose out had nothing pinning it.
+
+    Dropping the end-of-line `$` from the line pattern passed the whole suite,
+    because every line of prose in the fixtures was dash-free or amount-free.
+    An invoice's explanatory sentences are neither by nature, and one that
+    reads like a label would be invoiced as a charge the guest never incurred.
+    """
+    body = OBSERVED_BODY.replace(
+        "Charged because the trip went over the distance included in this"
+        " reservation.",
+        "Charged because - $11.00 of distance was not included in this trip.",
+    )
+    parsed = parse_invoice(
+        "Marguerite has been charged for your reimbursement invoice", body
+    )
+    assert parsed is not None
+    assert all("Charged because" not in label for label, _ in parsed.lines)
+    assert parsed.lines == (("22 mi additional distance", 1100), ("7 tolls", 4071))

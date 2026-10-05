@@ -128,6 +128,24 @@ those pairs disagree.
 this endpoint hands out. The alerting in this app polls Gmail every ten
 minutes; this is where a guest message actually arrives from.
 
+## What reads it
+
+`extension/src/background.ts` holds `pullTuro`, and it holds no policy: it asks
+`GET /api/turo/wanted` which reservations to fetch and which route to fetch
+them from, fetches each with the page's own session, and posts the bodies back
+to `POST /api/turo/details` unmodified.
+
+Everything those bodies mean is decided in `ingest/turo_detail.py`, where
+`npm test` is not needed to run it. That split is on purpose: a change in
+Turo's shape is then a change to one Python module with tests against the
+observed payload, rather than to a TypeScript file that has to be rebuilt and
+side-loaded before anyone can see whether it worked.
+
+Turo's booking times win over the email's, which is the whole reason for
+pulling: email states a trip's times as they were when it was sent, and nothing
+re-states them when a guest extends. Each change is reported rather than
+applied quietly, and a change re-runs toll attribution.
+
 ## What this does not answer
 
 - Whether a check-out *time* (as opposed to an odometer reading) is in the

@@ -10,6 +10,7 @@
  *          point of it is not having to remember to do this by hand.
  */
 
+import { describePull } from "./turo.js";
 import type { MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 const exportBtn = document.getElementById("exportBtn") as HTMLButtonElement;
@@ -250,6 +251,50 @@ void (async () => {
   if (stored.apiBase) apiBaseEl.value = String(stored.apiBase);
   if (stored.tollsToken) tollsTokenEl.value = String(stored.tollsToken);
 })();
+
+// ---------------------------------------------------------------------------
+// "Pull trips from Turo"
+// ---------------------------------------------------------------------------
+const pullBtn = document.getElementById("pullBtn") as HTMLButtonElement;
+const pullResultEl = document.getElementById("pullResult") as HTMLDivElement;
+const pullReportWrap = document.getElementById("pullReportWrap") as HTMLDetailsElement;
+const pullReportEl = document.getElementById("pullReport") as HTMLPreElement;
+
+pullBtn.addEventListener("click", async () => {
+  reset();
+  pullResultEl.classList.add("hidden");
+  pullReportWrap.classList.add("hidden");
+  pullBtn.disabled = true;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
+      showStatus("Open any Turo page first — it needs your logged-in session.", true);
+      return;
+    }
+    showStatus("Asking Turo about each rental...");
+    const reply = await send(null, { type: "PULL_TURO", tabId: tab.id });
+    if (reply.type === "PULL_TURO_ERROR") throw new Error(reply.error);
+    if (reply.type !== "PULL_TURO_RESULT") throw new Error("Unexpected response from the worker.");
+    statusEl.classList.add("hidden");
+    pullResultEl.textContent = describePull(reply.result);
+    pullResultEl.classList.remove("hidden");
+    // The detail lines are the point when something moved: which booking, and
+    // where Turo's grace period actually falls.
+    const lines = [
+      ...reply.result.retimed.map((line) => `moved: ${line}`),
+      ...reply.result.wrong_plate.map((line) => `plate: ${line}`),
+      ...reply.result.grace_periods,
+    ];
+    if (lines.length) {
+      pullReportEl.textContent = lines.join("\n");
+      pullReportWrap.classList.remove("hidden");
+    }
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    pullBtn.disabled = false;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // "What does this page fetch?"

@@ -1,0 +1,137 @@
+"""What the extension pulls from Turo's own API, and where it goes.
+
+Two endpoints, deliberately shaped so the extension holds no policy. It asks
+which reservations to fetch, fetches them with the session the browser already
+has, and posts back what Turo said. Which reservations are wanted, what to do
+with a changed trip time, and whether a plate disagrees are all decided here,
+where they are testable without a browser.
+
+The payloads are Turo's, unmodified. Parsing them here rather than in the
+extension means a change in Turo's shape is a change to one Python module with
+tests, rather than to a TypeScript file that has to be rebuilt and side-loaded
+before anyone can see whether it worked.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import UTC, datetime
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, Header
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+from turonomics_api.db.base import get_session
+from turonomics_api.ingest.reimbursements import relink_invoices
+from turonomics_api.ingest.tolls import rematch_unattributed
+from turonomics_api.ingest.turo_detail import (
+    DetailResult,
+    apply_detail,
+    describe_grace_periods,
+    parse_detail,
+    wanted_reservations,
+)
+from turonomics_api.routers.tolls import require_token, token_configured
+
+log = logging.getLogger("turonomics.routers.turo")
+
+router = APIRouter(prefix="/api/turo", tags=["turo"])
+
+DbSession = Annotated[Session, Depends(get_session)]
+
+
+class WantedResponse(BaseModel):
+    """Which reservations the extension should fetch, and from where."""
+
+    reservations: list[str]
+    # The route, given once rather than hard-coded in the extension, so a
+    # change to it does not need a side-loaded rebuild to fix.
+    detail_path: str = "/api/reservation/detail?reservationId={id}&oppTermsAware=true"
+    token_required: bool
+
+
+class DetailsIn(BaseModel):
+    """Raw `/api/reservation/detail` bodies, exactly as Turo returned them."""
+
+    details: list[dict[str, Any]]
+
+
+class DetailsResponse(BaseModel):
+    seen: int
+    stored: int
+    unparsed: int
+    unknown: list[str]
+    retimed: list[str]
+    wrong_plate: list[str]
+    # Crossings that found a rental once the times moved, and invoices that
+    # could be reconciled as a result.
+    tolls_rematched: int
+    # One line per rental saying where Turo's gracePeriodEnd actually falls.
+    # Here rather than in a log because the answer decides whether the toll
+    # matcher can stop guessing, and a log line is easy to miss.
+    grace_periods: list[str]
+
+
+@router.get("/wanted", response_model=WantedResponse)
+def wanted(session: DbSession) -> WantedResponse:
+    return WantedResponse(
+        reservations=wanted_reservations(session),
+        token_required=token_configured(),
+    )
+
+
+@router.post("/details", response_model=DetailsResponse)
+def post_details(
+    payload: DetailsIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> DetailsResponse:
+    require_token(authorization)
+    now = datetime.now(UTC)
+    result = DetailResult()
+    unparsed = 0
+    for body in payload.details:
+        detail = parse_detail(body)
+        if detail is None:
+            # Counted, not raised. A batch of forty where one came back as a
+            # Turo error page should store the thirty-nine.
+            unparsed += 1
+            continue
+        apply_detail(session, detail, now=now, result=result)
+    session.flush()
+
+    # Only when something moved. Re-running attribution is cheap but it is not
+    # free, and a pull that changed nothing should read as having changed
+    # nothing.
+    rematched = 0
+    if result.retimed:
+        rematched = rematch_unattributed(session)
+        relink_invoices(session, now=now)
+    session.commit()
+
+    log.info(
+        "turo pull: %d detail(s) — %d stored, %d unparsed, %d retimed, "
+        "%d unknown reservation(s), %d crossing(s) rematched",
+        result.seen,
+        result.stored,
+        unparsed,
+        len(result.retimed),
+        len(result.unknown),
+        rematched,
+    )
+    for line in result.retimed:
+        log.info("turo pull: booking moved — %s", line)
+    for line in result.wrong_plate:
+        log.warning("turo pull: plate disagrees — %s", line)
+
+    return DetailsResponse(
+        seen=result.seen,
+        stored=result.stored,
+        unparsed=unparsed,
+        unknown=result.unknown,
+        retimed=result.retimed,
+        wrong_plate=result.wrong_plate,
+        tolls_rematched=rematched,
+        grace_periods=describe_grace_periods(session),
+    )

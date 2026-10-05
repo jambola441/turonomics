@@ -31,6 +31,28 @@ export interface SendTollsResult {
   amountsLookPositive?: boolean;
 }
 
+/** What the API says it wants fetched, and from where. */
+export interface TuroWanted {
+  reservations: string[];
+  detail_path: string;
+  token_required: boolean;
+}
+
+/** What the API says it did with them, plus what the pull itself managed. */
+export interface TuroPullResult {
+  seen: number;
+  stored: number;
+  unparsed: number;
+  unknown: string[];
+  retimed: string[];
+  wrong_plate: string[];
+  tolls_rematched: number;
+  grace_periods: string[];
+  /** How many the API asked for, and how many Turo would not hand over. */
+  asked: number;
+  failed: number;
+}
+
 export type MessageType =
   | { type: "SCRAPE_TRIPS" }
   | { type: "TRIPS_RESULT"; trips: TuroTrip[]; error?: never }
@@ -44,4 +66,7 @@ export type MessageType =
   | { type: "SEND_TOLLS_ERROR"; error: string }
   | { type: "PROBE_TURO"; tabId: number }
   | { type: "PROBE_TURO_RESULT"; report: string }
-  | { type: "PROBE_TURO_ERROR"; error: string };
+  | { type: "PROBE_TURO_ERROR"; error: string }
+  | { type: "PULL_TURO"; tabId: number }
+  | { type: "PULL_TURO_RESULT"; result: TuroPullResult }
+  | { type: "PULL_TURO_ERROR"; error: string };

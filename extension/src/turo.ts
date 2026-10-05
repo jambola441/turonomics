@@ -213,6 +213,8 @@ export function summariseCalls(calls: SeenCall[]): string {
 // The lesson is the one this file keeps relearning: an absence reported by a
 // tool is a claim about the tool first.
 
+import type { TuroPullResult } from "./types.js";
+
 /** A blob of JSON found in the document. */
 export interface Embedded {
   /** Where it was: `script#__NEXT_DATA__`, `window.__APOLLO_STATE__`. */
@@ -316,4 +318,24 @@ export function describeEmbedded(blobs: Embedded[]): string {
     }
   }
   return lines.join("\n").trim();
+}
+
+
+// ---------------------------------------------------------------------------
+// Saying what a pull did
+// ---------------------------------------------------------------------------
+
+/** What the pull did, in one line, with the interesting parts named. */
+export function describePull(result: TuroPullResult): string {
+  const parts = [`${result.stored} of ${result.asked} rental(s) read`];
+  if (result.retimed.length) parts.push(`${result.retimed.length} booking(s) moved`);
+  if (result.tolls_rematched) parts.push(`${result.tolls_rematched} crossing(s) re-attributed`);
+  if (result.wrong_plate.length) parts.push(`${result.wrong_plate.length} on the wrong car`);
+  if (result.unknown.length) parts.push(`${result.unknown.length} not in the app`);
+  // Named separately from the ones the API refused, because the two have
+  // different causes: Turo would not hand it over, versus the API could not
+  // read it.
+  if (result.failed) parts.push(`${result.failed} Turo would not return`);
+  if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
+  return parts.join(" · ");
 }

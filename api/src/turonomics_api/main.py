@@ -20,6 +20,7 @@ from turonomics_api.routers import (
     sync,
     tolls,
     trips,
+    turo,
 )
 
 # Uvicorn configures its own loggers and leaves everything else to the root
@@ -117,6 +118,7 @@ app.include_router(push.router)
 app.include_router(tolls.router)
 app.include_router(trips.router)
 app.include_router(invoices.router)
+app.include_router(turo.router)
 
 
 @app.get("/health")

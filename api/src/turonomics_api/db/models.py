@@ -494,6 +494,23 @@ class Trip(Base):
 
     earnings_cents: Mapped[int | None] = mapped_column(Integer)
 
+    # What Turo's own reservation detail says, as opposed to what its email
+    # said. Null until the extension has pulled it; `detail_synced_at` is how
+    # a stale one is told from an unfetched one.
+    #
+    # `grace_period_ends_at` is stored and deliberately not yet used. It is
+    # Turo's `booking.gracePeriodEnd`, and which grace period that is has not
+    # been established: it sits beside a *cancellation* policy block, so it may
+    # well be the free-cancellation deadline measured from booking rather than
+    # anything to do with a late return. Using it to decide whose crossing a
+    # toll is would be a guess dressed as a fact — see
+    # `describe_grace_periods` for the comparison that settles it.
+    grace_period_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Turo answering, about this reservation, whether an invoice can still be
+    # filed. `TOLL_FILING_WINDOW_DAYS` is a number read off a help page.
+    can_file_reimbursement: Mapped[bool | None] = mapped_column(Boolean)
+    detail_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 
     __table_args__ = (

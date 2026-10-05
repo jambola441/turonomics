@@ -498,13 +498,13 @@ class Trip(Base):
     # said. Null until the extension has pulled it; `detail_synced_at` is how
     # a stale one is told from an unfetched one.
     #
-    # `grace_period_ends_at` is stored and deliberately not yet used. It is
-    # Turo's `booking.gracePeriodEnd`, and which grace period that is has not
-    # been established: it sits beside a *cancellation* policy block, so it may
-    # well be the free-cancellation deadline measured from booking rather than
-    # anything to do with a late return. Using it to decide whose crossing a
-    # toll is would be a guess dressed as a fact — see
-    # `describe_grace_periods` for the comparison that settles it.
+    # `grace_period_ends_at` is Turo's `booking.gracePeriodEnd`, and it is kept
+    # for the record rather than used. Measured across all 57 reservations on
+    # the live account, every one falls *before the trip starts* — a cluster at
+    # exactly 24h before pickup — so it is the free-cancellation deadline and
+    # has nothing to do with a late return. Using it to decide whose crossing a
+    # toll is would have moved the window to a day before the rental began.
+    # `read_grace` holds that conclusion where a test can keep it honest.
     grace_period_ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Turo answering, about this reservation, whether an invoice can still be
     # filed. `TOLL_FILING_WINDOW_DAYS` is a number read off a help page.

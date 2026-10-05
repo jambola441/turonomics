@@ -50,10 +50,24 @@ id, messageCount, cohosts[], owner, +38 more
 
 Three fields here replace guesses in this codebase:
 
-**`booking.gracePeriodEnd`** is Turo's own grace period, per reservation. The
-toll matcher invents one (`TOLL_OVERRUN_GRACE_MINUTES`, two hours) because
-email carries no such thing. This is the real boundary, and it is the
-difference between billing a guest for an 11pm crossing and eating it.
+**`booking.gracePeriodEnd`** is the free-cancellation deadline, and it is no
+use at all for a late return. Measured across all 57 reservations on the live
+account, every one of them falls *before the trip starts* — a cluster at
+exactly 24 hours before pickup, and much larger negatives for bookings made
+months ahead:
+
+```
+61311766: grace  -24.0h from start,  -86.0h from end
+61838661: grace -873.5h from start, -938.0h from end
+```
+
+Written down because the first reading of this field was the opposite — "this
+is the real boundary" — and building on it would have moved the toll window to
+a day before the rental began. `GET /api/turo/grace` reports the offsets and
+states the reading, so this is a measurement rather than an impression.
+
+The toll matcher keeps `TOLL_OVERRUN_GRACE_MINUTES`, and it keeps being a
+guess. Turo does not appear to publish a return grace anywhere in this payload.
 
 **`allowedToRequestReimbursement`** is the filing window, authoritatively.
 `TOLL_FILING_WINDOW_DAYS = 90` is a number from the help pages; this is Turo

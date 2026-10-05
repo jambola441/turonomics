@@ -12,7 +12,19 @@
  * content script reads the DOM; this decides what the DOM meant.
  */
 
-import { chooseStatement, describeShape } from "./tolls.js";
+import {
+  chooseStatement,
+  describeShape,
+  mergeActivityPages,
+  pickPageSize,
+  rankNextControls,
+  shouldStopPaging,
+  tableSignature,
+  type ControlDescriptor,
+  type PageSizeOption,
+  type ScrapedPage,
+  type ScrapedTable,
+} from "./tolls.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -176,18 +188,20 @@ async function postStatement(csv: string): Promise<ImportResult> {
   return body as ImportResult;
 }
 
-async function sendTolls(page: Parameters<typeof chooseStatement>[0]): Promise<SendTollsResult> {
+async function sendTolls(page: ScrapedPage): Promise<SendTollsResult> {
+  const paging = { pagesRead: page.pagesRead, pagingStopped: page.pagingStopped };
   const choice = chooseStatement(page);
   if (!choice.csv) {
     // Nothing matched. The masked report describes the page's shape without
     // carrying tag numbers or amounts out of it, so it can be pasted into a
     // bug report.
-    return { result: null, source: "none", rowCount: 0, report: describeShape(page) };
+    return { ...paging, result: null, source: "none", rowCount: 0, report: describeShape(page) };
   }
   LOG(`sending ${choice.rowCount} row(s) from the ${choice.source}`);
   try {
     const result = await postStatement(choice.csv);
     return {
+      ...paging,
       result,
       source: choice.source,
       rowCount: choice.rowCount,
@@ -195,6 +209,7 @@ async function sendTolls(page: Parameters<typeof chooseStatement>[0]): Promise<S
     };
   } catch (error) {
     return {
+      ...paging,
       result: null,
       source: choice.source,
       rowCount: choice.rowCount,
@@ -203,6 +218,256 @@ async function sendTolls(page: Parameters<typeof chooseStatement>[0]): Promise<S
       amountsLookPositive: choice.amountsLookPositive,
     };
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Reading the E-ZPass statement, all of it
+// ---------------------------------------------------------------------------
+// Driven from here rather than from a content script, because a "next" link
+// that navigates tears a content script down half way through the loop. The
+// worker survives that; it re-injects and carries on.
+//
+// The three functions below are serialised and run inside the page, so they
+// are self-contained by necessity: no imports, no closure over anything here.
+// They do the least possible — read the DOM, click a thing, set a select — and
+// every decision is made back in `tolls.ts`, where it can be tested.
+
+interface PageDescriptor {
+  url: string;
+  tables: ScrapedTable[];
+  downloadLinks: string[];
+  nextControls: ControlDescriptor[];
+  pageSizes: PageSizeOption[];
+}
+
+function readPageInPage(): PageDescriptor {
+  const text = (node: Element | null): string =>
+    (node?.textContent ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  const tables: ScrapedTable[] = [];
+  document.querySelectorAll("table").forEach((element) => {
+    const table = element as HTMLTableElement;
+    const rows = Array.from(table.rows);
+    if (!rows.length) return;
+    let headerIndex = rows.findIndex((row) => row.querySelector("th"));
+    if (headerIndex < 0) headerIndex = 0;
+    const headers = Array.from(rows[headerIndex].cells).map((cell) => text(cell));
+    if (headers.length < 2) return;
+    tables.push({
+      headers,
+      rows: rows.slice(headerIndex + 1).map((row) => Array.from(row.cells).map((c) => text(c))),
+    });
+  });
+
+  const hint = /\.csv|\.xlsx?|csv|excel|export|download/i;
+  const downloadLinks = [
+    ...new Set(
+      Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
+        .filter((a) => {
+          const href = a.getAttribute("href") ?? "";
+          if (!href || href.startsWith("#") || href.startsWith("javascript:")) return false;
+          return hint.test(href) || hint.test(text(a));
+        })
+        .map((a) => a.href)
+    ),
+  ].sort((a, b) => Number(/\.csv/i.test(b)) - Number(/\.csv/i.test(a)));
+
+  // Anything clickable that might advance a page. Ranked back in the worker.
+  const nextControls: ControlDescriptor[] = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "a[href], button, [role='button'], [class*='pag'] *[onclick]"
+    )
+  ).map((node) => ({
+    text: text(node),
+    rel: node.getAttribute("rel") ?? undefined,
+    ariaLabel: node.getAttribute("aria-label") ?? undefined,
+    disabled:
+      (node as HTMLButtonElement).disabled === true ||
+      node.getAttribute("aria-disabled") === "true",
+    className: node.className ? String(node.className) : undefined,
+  }));
+
+  // A select whose options are all numbers (or "All") is a rows-per-page
+  // control. Taking the largest turns a twelve-page statement into one.
+  let pageSizes: PageSizeOption[] = [];
+  document.querySelectorAll("select").forEach((element) => {
+    const select = element as HTMLSelectElement;
+    const options = Array.from(select.options).map((o) => ({
+      value: o.value,
+      label: text(o),
+    }));
+    if (!options.length || pageSizes.length) return;
+    const looksLikeSize = options.every((o) => /^\s*(?:all|show all|\d+[^\d]*)\s*$/i.test(o.label));
+    if (looksLikeSize) pageSizes = options;
+  });
+
+  return { url: location.href, tables, downloadLinks, nextControls, pageSizes };
+}
+
+function clickControlInPage(index: number): boolean {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "a[href], button, [role='button'], [class*='pag'] *[onclick]"
+    )
+  );
+  const node = nodes[index];
+  if (!node) return false;
+  node.click();
+  return true;
+}
+
+function setPageSizeInPage(value: string): boolean {
+  const selects = Array.from(document.querySelectorAll("select")) as HTMLSelectElement[];
+  for (const select of selects) {
+    if (Array.from(select.options).some((o) => o.value === value)) {
+      select.value = value;
+      // Both, because some pages listen for one and some for the other.
+      select.dispatchEvent(new Event("input", { bubbles: true }));
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+      return true;
+    }
+  }
+  return false;
+}
+
+async function fetchExportInPage(url: string): Promise<string | null> {
+  try {
+    const response = await fetch(url, { credentials: "include" });
+    if (!response.ok) return null;
+    if (/html/i.test(response.headers.get("content-type") ?? "")) return null;
+    const body = await response.text();
+    if (!body.trim() || /^\s*</.test(body)) return null;
+    return body.split(/\r?\n/)[0].includes(",") ? body : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Run a function in the page, retrying while a navigation is in flight. */
+async function inPage<Args extends unknown[], R>(
+  tabId: number,
+  func: (...args: Args) => R,
+  args: Args,
+  tries = 12
+): Promise<R> {
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < tries; attempt++) {
+    try {
+      const [result] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func,
+        args,
+      });
+      return result.result as R;
+    } catch (error) {
+      // "Frame was removed", "cannot access a chrome:// URL" while the next
+      // page loads. Waiting is the whole remedy.
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+function activityOf(descriptor: PageDescriptor): ScrapedTable | null {
+  return mergeActivityPages(descriptor.tables);
+}
+
+/**
+ * Read every page of the statement the tab is showing.
+ *
+ * A download the site generates still wins outright — it is not paginated and
+ * it is the format the parser was written against. Paging is the fallback's
+ * fallback.
+ */
+async function readStatement(tabId: number): Promise<ScrapedPage> {
+  let descriptor = await inPage(tabId, readPageInPage, []);
+
+  for (const url of descriptor.downloadLinks.slice(0, 3)) {
+    const csv = await inPage(tabId, fetchExportInPage, [url]);
+    if (csv) {
+      LOG("got a CSV from the site; no paging needed");
+      return {
+        url: descriptor.url,
+        tables: descriptor.tables,
+        downloadLinks: descriptor.downloadLinks,
+        downloadedCsv: csv,
+      };
+    }
+  }
+
+  // Fewer pages beats cleverer paging.
+  const size = pickPageSize(descriptor.pageSizes);
+  if (size !== null) {
+    const before = tableSignature(activityOf(descriptor));
+    if (await inPage(tabId, setPageSizeInPage, [size])) {
+      descriptor = await waitForChange(tabId, before, descriptor);
+      LOG(`asked for ${size} rows per page`);
+    }
+  }
+
+  const pages: ScrapedTable[] = [];
+  const signatures: string[] = [];
+  let stopped: string | null = null;
+
+  for (;;) {
+    pages.push(...descriptor.tables);
+    signatures.push(tableSignature(activityOf(descriptor)));
+
+    stopped = shouldStopPaging(signatures);
+    if (stopped) break;
+
+    const ranked = rankNextControls(descriptor.nextControls);
+    if (!ranked.length) {
+      stopped = "no next page";
+      break;
+    }
+
+    const before = signatures[signatures.length - 1];
+    let advanced = false;
+    for (const index of ranked) {
+      if (!(await inPage(tabId, clickControlInPage, [index]))) continue;
+      const after = await waitForChange(tabId, before, descriptor);
+      if (tableSignature(activityOf(after)) !== before) {
+        descriptor = after;
+        advanced = true;
+        break;
+      }
+      // That control did nothing. Try the next candidate rather than
+      // concluding the statement ends here.
+    }
+    if (!advanced) {
+      stopped = "no next page";
+      break;
+    }
+  }
+
+  const merged = mergeActivityPages(pages);
+  LOG(`read ${signatures.length} page(s): ${stopped}`);
+  return {
+    url: descriptor.url,
+    tables: descriptor.tables,
+    downloadLinks: descriptor.downloadLinks,
+    merged: merged ?? undefined,
+    pagesRead: signatures.length,
+    pagingStopped: stopped ?? undefined,
+  };
+}
+
+/** Re-read until the table changes, or long enough to be sure it will not. */
+async function waitForChange(
+  tabId: number,
+  before: string,
+  fallback: PageDescriptor
+): Promise<PageDescriptor> {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    const descriptor = await inPage(tabId, readPageInPage, []);
+    if (tableSignature(activityOf(descriptor)) !== before) return descriptor;
+    fallback = descriptor;
+  }
+  return fallback;
 }
 
 // ---------------------------------------------------------------------------
@@ -219,7 +484,9 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "SEND_TOLLS") {
-    sendTolls(message.page).then(
+    readStatement(message.tabId)
+      .then(sendTolls)
+      .then(
       (result) => sendResponse({ type: "SEND_TOLLS_RESULT", result } satisfies MessageType),
       (error: unknown) =>
         sendResponse({

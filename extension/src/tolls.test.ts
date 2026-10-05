@@ -19,8 +19,14 @@ import {
   classifyHeaders,
   cleanCell,
   describeShape,
+  MAX_PAGES,
   maskValue,
+  mergeActivityPages,
   pickActivityTable,
+  pickPageSize,
+  rankNextControls,
+  shouldStopPaging,
+  tableSignature,
   toCsv,
   usableRows,
   type ScrapedPage,
@@ -227,4 +233,206 @@ test("produces exactly the CSV the Python importer is tested against", () => {
     ["33240000001", "99900000111", "NYSTA", "", "19", "2L", "12/30/2025", "11:00:00 AM", "$1.50"],
   ];
   assert.equal(toCsv(headers, rows), fixture);
+});
+
+// ---------------------------------------------------------------------------
+// Paging
+// ---------------------------------------------------------------------------
+// An account-activity page shows a few weeks at a time, so a statement had to
+// be sent one page at a time by hand — and a page missed is money never billed.
+
+test("prefers a rel=next link over anything else", () => {
+  const ranked = rankNextControls([
+    { text: "2" },
+    { text: "Next", rel: "next" },
+    { text: "Next" },
+  ]);
+  assert.equal(ranked[0], 1);
+});
+
+test("recognises the usual arrows and wordings", () => {
+  for (const text of ["Next", "next page", ">", "›", "→", "Next >"]) {
+    assert.deepEqual(rankNextControls([{ text }]), [0], `did not rank ${text}`);
+  }
+});
+
+test("never ranks a backwards control", () => {
+  for (const text of ["Previous", "prev", "<", "‹", "←", "First"]) {
+    assert.deepEqual(rankNextControls([{ text }]), [], `ranked ${text} as next`);
+  }
+});
+
+test("never ranks a jump-to-last control", () => {
+  // Clicking ">>" would skip every page in between, and the rows on them.
+  for (const text of [">>", "»", "Last"]) {
+    assert.deepEqual(rankNextControls([{ text }]), [], `ranked ${text} as next`);
+  }
+});
+
+test("skips a disabled next, however it says so", () => {
+  assert.deepEqual(rankNextControls([{ text: "Next", disabled: true }]), []);
+  assert.deepEqual(rankNextControls([{ text: "Next", className: "btn disabled" }]), []);
+});
+
+test("an aria-label can carry the meaning the text does not", () => {
+  // A chevron with no text at all is common.
+  assert.deepEqual(rankNextControls([{ text: "", ariaLabel: "Next page" }]), [0]);
+});
+
+test("ranks every candidate, so a dud click can be followed by another", () => {
+  const ranked = rankNextControls([
+    { text: "go next" },
+    { text: "Next", rel: "next" },
+    { text: ">" },
+  ]);
+  assert.deepEqual(ranked, [1, 2, 0]);
+});
+
+test("picks 'All' over any number of rows per page", () => {
+  assert.equal(
+    pickPageSize([
+      { value: "10", label: "10" },
+      { value: "100", label: "100" },
+      { value: "-1", label: "All" },
+    ]),
+    "-1"
+  );
+});
+
+test("otherwise picks the largest page size", () => {
+  assert.equal(
+    pickPageSize([
+      { value: "a", label: "25" },
+      { value: "b", label: "100 per page" },
+      { value: "c", label: "50" },
+    ]),
+    "b"
+  );
+});
+
+test("leaves the page size alone when there is nothing numeric to pick", () => {
+  assert.equal(pickPageSize([{ value: "x", label: "Sort by date" }]), null);
+});
+
+test("a signature changes when the table does and not otherwise", () => {
+  const page1: ScrapedTable = { headers: ["A"], rows: [["1"], ["2"]] };
+  const same: ScrapedTable = { headers: ["A"], rows: [["1"], ["2"]] };
+  const page2: ScrapedTable = { headers: ["A"], rows: [["3"], ["4"]] };
+  assert.equal(tableSignature(page1), tableSignature(same));
+  assert.notEqual(tableSignature(page1), tableSignature(page2));
+});
+
+test("the row count alone can be the only difference", () => {
+  // Same first row, same last row, different length. Without the count in the
+  // signature these two read as the same page, and paging would stop here —
+  // the first version of this test used tables whose ends differed too, so it
+  // passed with the count removed.
+  const three: ScrapedTable = { headers: ["A"], rows: [["1"], ["2"], ["1"]] };
+  const two: ScrapedTable = { headers: ["A"], rows: [["1"], ["1"]] };
+  assert.notEqual(tableSignature(three), tableSignature(two));
+});
+
+test("text reading both ways is not treated as next", () => {
+  // "< Prev | Next >" as one control is a coin toss, so it is excluded rather
+  // than guessed at.
+  assert.deepEqual(rankNextControls([{ text: "< Prev | Next >" }]), []);
+});
+
+test("an aria-label outranks text that disagrees with it", () => {
+  // Written expecting the opposite, which was wrong. The text here is most
+  // often the whole paginator's — "« Prev 1 2 3 Next »" picked up from a
+  // wrapper that carries the real meaning in its label — so the label is the
+  // more reliable of the two, and excluding it would silently truncate a
+  // statement on exactly the markup this has to cope with.
+  assert.deepEqual(rankNextControls([{ text: "Prev", ariaLabel: "Next page" }]), [0]);
+});
+
+test("paging continues while the pages keep changing", () => {
+  assert.equal(shouldStopPaging(["a", "b", "c"]), null);
+});
+
+test("paging stops when a page repeats", () => {
+  // A control that wraps to the first page would otherwise loop forever.
+  assert.match(shouldStopPaging(["a", "b", "a"]) ?? "", /stopped changing/);
+});
+
+test("paging stops when the click changed nothing", () => {
+  assert.match(shouldStopPaging(["a", "a"]) ?? "", /stopped changing/);
+});
+
+test("paging stops on an empty page", () => {
+  assert.match(shouldStopPaging(["a", "empty"]) ?? "", /empty/);
+});
+
+test("an empty first page is not a reason to stop before starting", () => {
+  assert.equal(shouldStopPaging(["empty"]), null);
+});
+
+test("paging gives up rather than clicking forever, and says so", () => {
+  const many = Array.from({ length: MAX_PAGES }, (_, i) => `p${i}`);
+  const reason = shouldStopPaging(many);
+  assert.match(reason ?? "", /stopped at/);
+  // The wording matters: rows may be missing, and that has to reach the
+  // operator rather than looking like a clean read.
+  assert.match(reason ?? "", new RegExp(String(MAX_PAGES)));
+});
+
+test("pages are merged into one table", () => {
+  const p1: ScrapedTable = { headers: ACTIVITY.headers, rows: [ACTIVITY.rows[0]] };
+  const p2: ScrapedTable = { headers: ACTIVITY.headers, rows: [ACTIVITY.rows[1]] };
+  const merged = mergeActivityPages([p1, p2]);
+  assert.ok(merged);
+  assert.equal(merged.rows.length, 2);
+  assert.deepEqual(merged.headers, ACTIVITY.headers);
+});
+
+test("a row seen on two pages is kept once", () => {
+  // Paging controls re-render the same rows more often than an account is
+  // charged twice in one second.
+  const merged = mergeActivityPages([ACTIVITY, ACTIVITY]);
+  assert.equal(merged?.rows.length, 2);
+});
+
+test("a page whose headers disagree is dropped, not appended", () => {
+  // Appending it would put a plaza where an amount should be.
+  const odd: ScrapedTable = {
+    headers: ["Date", "Tag/Plate #", "Amount", "Something Else"],
+    rows: [["12/29/2025", "99900000111", "$-2.86", "x"]],
+  };
+  const merged = mergeActivityPages([ACTIVITY, odd]);
+  assert.equal(merged?.rows.length, 2, "only the first page's rows");
+});
+
+test("merging nothing is null rather than an empty statement", () => {
+  assert.equal(mergeActivityPages([]), null);
+  assert.equal(mergeActivityPages([{ headers: ["Date"], rows: [] }]), null);
+});
+
+test("a merged table is what chooseStatement uses", () => {
+  const merged: ScrapedTable = {
+    headers: ACTIVITY.headers,
+    rows: [ACTIVITY.rows[0], ACTIVITY.rows[1], ACTIVITY.rows[0].map((c) => c + "x")],
+  };
+  const choice = chooseStatement(page({ tables: [ACTIVITY], merged }));
+  assert.equal(choice.source, "table");
+  assert.equal(choice.rowCount, 3, "the merged pages, not the one on screen");
+});
+
+test("a next-looking arrow with a jump-to-last label is excluded", () => {
+  // The case the jump-to-last check exists for. ">" alone scores as next, so
+  // without consulting the label this control would be clicked — and it skips
+  // every page in between, and the crossings on them. Every earlier test here
+  // had the two agreeing, so removing the check went unnoticed.
+  assert.deepEqual(rankNextControls([{ text: ">", ariaLabel: "Last page" }]), []);
+  assert.deepEqual(rankNextControls([{ text: ">", ariaLabel: "Jump to last" }]), []);
+});
+
+test("'>>' text beats a label claiming it is next", () => {
+  // The case the symbol check exists for, and a deliberate asymmetry with the
+  // aria-label test above. Treating a real "next" as "last" stops paging early,
+  // which is reported and can be finished by hand. Treating a real "last" as
+  // "next" silently skips pages and reads as a complete statement. The second
+  // is the worse mistake, so for this one signal the text wins.
+  assert.deepEqual(rankNextControls([{ text: ">>", ariaLabel: "Next page" }]), []);
+  assert.deepEqual(rankNextControls([{ text: "»", ariaLabel: "Next" }]), []);
 });

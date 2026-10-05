@@ -1,5 +1,3 @@
-import type { ScrapedPage } from "./tolls.js";
-
 export interface TuroTrip {
   tripId: string;
   startTime: string; // ISO 8601
@@ -18,6 +16,9 @@ export interface ImportResult {
 }
 
 export interface SendTollsResult {
+  /** How many pages of the statement were read, and why reading stopped. */
+  pagesRead?: number;
+  pagingStopped?: string;
   /** Null when the page yielded no statement; the report says what it had. */
   result: ImportResult | null;
   source: "download" | "table" | "none";
@@ -38,9 +39,6 @@ export type MessageType =
   | { type: "FETCH_DETAIL"; tripId: string }
   | { type: "DETAIL_RESULT"; tripId: string; scheduleDates: string[]; scheduleTimes: string[] }
   | { type: "DETAIL_ERROR"; tripId: string; error: string }
-  | { type: "SCRAPE_TOLLS" }
-  | { type: "TOLLS_PAGE"; page: ScrapedPage }
-  | { type: "TOLLS_PAGE_ERROR"; error: string }
-  | { type: "SEND_TOLLS"; page: ScrapedPage }
+  | { type: "SEND_TOLLS"; tabId: number }
   | { type: "SEND_TOLLS_RESULT"; result: SendTollsResult }
   | { type: "SEND_TOLLS_ERROR"; error: string };

@@ -174,11 +174,23 @@ sent: {
 
 Two things to note before building on this.
 
-**`mediaEvidenceUuids` is required in practice and the upload was not
-captured.** The image already had a uuid by the time this POST went out, and
-no upload call appears in the report — because the probe only reported writes
-to `turo.com`, and an image goes to a presigned URL on a storage host. Fixed
-in 1.6.1; the next filing run should show it.
+**`mediaEvidenceUuids` comes from a separate upload**, observed on the second
+run:
+
+```
+POST /api/reservation/image                       # multipart, same origin
+  sent: {file: <file image/png 92579 bytes>, reservationId: int}
+-> {uuid, imageId, step: TRIP_PHOTO, photographerDriverRole: HOST, success}
+```
+
+The `uuid` from that response is what goes in `mediaEvidenceUuids`. So filing
+is two calls, in order: upload, then request. No presigned storage host and no
+separate media service — the guess that the upload must have gone off-origin
+was wrong, though the widened write filter it prompted is worth keeping.
+
+Note the image is uploaded as `step: TRIP_PHOTO`, the same bucket as the
+check-in photos, rather than as anything invoice-specific. Evidence is a trip
+photo that a reimbursement happens to point at.
 
 **`automatedTollTransactionsDto.transactionUuids` was empty** on a manual
 filing. Turo evidently has its own automated toll feed, and those uuids are

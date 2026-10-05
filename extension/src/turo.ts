@@ -42,8 +42,16 @@ const ENUM_TOKEN = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/;
 // masked exactly the field the probe existed to find.
 const MAX_ENUM_LENGTH = 64;
 
+// A descriptor this probe wrote itself: "<file image/png 92579 bytes>",
+// "<text 20>", "<blob …>". They are structure by construction and must survive
+// the masker, which otherwise reduces them to their own length — the upload
+// call reported `file: str(28)`, and 28 is the length of
+// "<file image/png 92579 bytes>", the one field written to describe it.
+const OWN_DESCRIPTOR = /^<[a-z]+[^<>]*>$/;
+
 export function stringShape(value: string): string {
   if (value === "") return "str(0)";
+  if (OWN_DESCRIPTOR.test(value)) return value;
   if (ISO_DATETIME.test(value)) return "iso-datetime";
   if (ISO_DATE.test(value)) return "iso-date";
   if (MONEY.test(value)) return "money";

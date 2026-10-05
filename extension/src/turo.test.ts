@@ -383,3 +383,30 @@ test("an upload to a storage host is reported, a beacon is not", () => {
   // Reads are still first party only, so a page's fonts and CDNs stay quiet.
   assert.equal(interestingCall("https://fonts.googleapis.com/css", "https://turo.com/", "GET"), false);
 });
+
+test("the probe's own descriptors survive the masker", () => {
+  // The upload reported `file: str(28)`, and 28 is the length of
+  // "<file image/png 92579 bytes>" — the masker ate the one field written to
+  // describe the upload, leaving a number that looks like a short string.
+  assert.equal(stringShape("<file image/png 92579 bytes>"), "<file image/png 92579 bytes>");
+  assert.equal(stringShape("<text 130>"), "<text 130>");
+  assert.equal(stringShape("<blob application/pdf 4096 bytes>"), "<blob application/pdf 4096 bytes>");
+  // Not a licence to pass through anything in angle brackets: a value is still
+  // a value, and markup is not a descriptor.
+  assert.equal(stringShape("<Marguerite Whitfield>"), "str(22)");
+  assert.equal(stringShape("<p>hello</p>"), "str(12)");
+});
+
+test("an uploaded file is legible in the report", () => {
+  const report = summariseCalls([
+    {
+      method: "POST",
+      url: "https://turo.com/api/reservation/image",
+      status: 200,
+      request: { "<multipart>": { file: "<file image/png 92579 bytes>", reservationId: 58626257 } },
+      body: { uuid: "7a1f0b2c-1111-2222-3333-444455556666", step: "TRIP_PHOTO" },
+    },
+  ]);
+  assert.match(report, /file: <file image\/png 92579 bytes>/);
+  assert.match(report, /reservationId: int/);
+});

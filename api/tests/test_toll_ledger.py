@@ -8,6 +8,7 @@ nobody can be billed for shrinks it. The tests are mostly about those.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import func, select
@@ -19,7 +20,13 @@ from .conftest import requires_db
 
 pytestmark = requires_db
 
-NOW = datetime(2026, 10, 4, 12, 0, tzinfo=UTC)
+# Noon on the clock an EZPass statement prints, which is what the rows below
+# say. Spelled in Eastern rather than UTC so the relationship between a trip
+# window and a toll's printed time is visible: when this was UTC, "12:00:00 PM"
+# in a row happened to line up only because the parser was handing back naive
+# datetimes that Postgres then read as UTC.
+EASTERN = ZoneInfo("America/New_York")
+NOW = datetime(2026, 10, 4, 12, 0, tzinfo=EASTERN)
 
 HEADER = "Lane Txn ID,Tag/Plate #,Agency,Entry Plaza,Exit Plaza,Class,Date,Exit Time,Amount"
 
@@ -637,3 +644,68 @@ def test_deleting_needs_the_token(api_client, session, monkeypatch):
     )
     assert ok.status_code == 200
     assert session.scalar(select(func.count()).select_from(Toll)) == 0
+
+
+# ---------------------------------------------------------------------------
+# The zone, where it costs money
+# ---------------------------------------------------------------------------
+# A four-hour error in a toll's timestamp is not a display problem. Attribution
+# picks the trip whose window contains the crossing, so a shifted toll lands in
+# the next guest's rental, or in nobody's. That is a wrong name on a bill.
+
+
+def test_a_toll_is_billed_to_whoever_had_the_car_at_that_local_time(session, jerry):
+    """An afternoon crossing during an afternoon rental.
+
+    Shift the toll four hours and it leaves this window entirely, which is
+    exactly what was happening: the crossing was real, the guest was real, and
+    the charge went to neither.
+    """
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 18, 0, tzinfo=EASTERN))
+    import_tolls(session, _csv(_row("77", "NY LZA7293", "10/04/2026", "03:19:00 PM", "-6.94")))
+    session.commit()
+    assert session.scalars(select(Toll)).one().trip.guest_name == "Dylan"
+
+
+def test_a_toll_outside_every_window_is_billed_to_nobody(session, jerry):
+    """The other direction, so the test above cannot pass by attributing
+    everything to the only trip there is."""
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 18, 0, tzinfo=EASTERN))
+    import_tolls(session, _csv(_row("78", "NY LZA7293", "10/04/2026", "09:00:00 AM", "-6.94")))
+    session.commit()
+    toll = session.scalars(select(Toll)).one()
+    assert toll.trip_id is None
+    assert toll.vehicle.nickname == "Jerry"   # still known to be our car
+
+
+def test_the_handover_hour_goes_to_the_right_guest(session, jerry):
+    """Two rentals on one day, and a crossing in the second.
+
+    With the timestamps four hours early this crossing fell inside the morning
+    guest's window instead, which is the specific way the bug produced a
+    plausible but wrong bill.
+    """
+    _trip(session, jerry, guest="Morning",
+          starts=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 12, 0, tzinfo=EASTERN))
+    _trip(session, jerry, guest="Afternoon",
+          starts=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 19, 0, tzinfo=EASTERN))
+    import_tolls(session, _csv(_row("79", "NY LZA7293", "10/04/2026", "02:30:00 PM", "-6.94")))
+    session.commit()
+    assert session.scalars(select(Toll)).one().trip.guest_name == "Afternoon"
+
+
+def test_the_stored_time_reads_back_as_the_printed_time(session, jerry):
+    """What the statement said, through the database, in fleet-local terms."""
+    import_tolls(session, _csv(_row("80", "NY LZA7293", "10/04/2026", "03:19:00 PM", "-6.94")))
+    session.commit()
+    toll = session.scalars(select(Toll)).one()
+    local = toll.occurred_at.astimezone(EASTERN)
+    assert (local.hour, local.minute) == (15, 19)
+    # And the stored instant is 7pm UTC, not 3pm — the shape of the original bug.
+    assert toll.occurred_at.astimezone(UTC).hour == 19

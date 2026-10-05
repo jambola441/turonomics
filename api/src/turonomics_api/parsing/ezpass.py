@@ -35,9 +35,11 @@ Example payment row (skip):
 import csv
 import io
 import re
-from datetime import datetime
+from datetime import UTC, datetime
+from zoneinfo import ZoneInfo
 
 from turonomics_api.models import EZPassToll
+from turonomics_api.settings import fleet_timezone
 
 # ---------------------------------------------------------------------------
 # Column name → canonical key mapping (lowercase, spaces→underscores)
@@ -80,7 +82,12 @@ def _parse_amount(value: str) -> float:
     return float(cleaned)  # preserves sign; caller checks sign
 
 
-def _parse_datetime(date_str: str, time_str: str = "") -> datetime:
+# The one format whose text states its own zone. Everything else an EZPass
+# statement prints is local wall-clock with nothing to say so.
+_UTC_FORMATS = frozenset({"%Y-%m-%dT%H:%M:%SZ"})
+
+
+def _parse_datetime(date_str: str, time_str: str = "", tz: ZoneInfo | None = None) -> datetime:
     """Parse the date and time an EZPass row carries, in any shape seen so far.
 
     The download and the website do not agree. A downloaded statement writes
@@ -94,7 +101,16 @@ def _parse_datetime(date_str: str, time_str: str = "") -> datetime:
     neither can quietly claim the other's dates. That was worth checking —
     ``%m/%d/%Y`` silently reading "10/4/26" as the year 26 would have put a
     toll in the Roman empire and still called it a success.
+
+    The result is timezone-aware, in ``FLEET_TIMEZONE``. A statement prints the
+    local wall-clock time of the crossing and says nothing about the zone, and
+    treating that as UTC is not a display problem: the first real import put
+    every crossing four hours early, which showed up as tolls at 4am and, far
+    more expensively, moved crossings across the trip boundaries that decide
+    which guest is billed. ``zoneinfo`` rather than a fixed offset, because
+    half this statement is EDT and half will be EST.
     """
+    tz = tz or fleet_timezone()
     combined = f"{date_str.strip()} {time_str.strip()}".strip()
     for fmt in (
         "%m/%d/%Y %I:%M:%S %p",
@@ -115,9 +131,12 @@ def _parse_datetime(date_str: str, time_str: str = "") -> datetime:
         "%Y-%m-%d",
     ):
         try:
-            return datetime.strptime(combined, fmt)
+            naive = datetime.strptime(combined, fmt)
         except ValueError:
             continue
+        if fmt in _UTC_FORMATS:
+            return naive.replace(tzinfo=UTC)
+        return naive.replace(tzinfo=tz)
     raise ValueError(f"Unrecognized EZPass datetime: {combined!r}")
 
 
@@ -142,7 +161,9 @@ def _classify_tag_plate(value: str) -> tuple[str | None, str | None]:
     return None, plate or None
 
 
-def parse_ezpass_csv(content: str | bytes) -> list[EZPassToll]:
+def parse_ezpass_csv(
+    content: str | bytes, *, tz: ZoneInfo | None = None
+) -> list[EZPassToll]:
     """Parse a NY EZPass account activity CSV and return EZPassToll objects.
 
     Skips:
@@ -193,7 +214,7 @@ def parse_ezpass_csv(content: str | bytes) -> list[EZPassToll]:
 
             date_str = row[headers["date"]].strip()
             time_str = row.get(headers.get("time", ""), "").strip() if "time" in headers else ""
-            timestamp = _parse_datetime(date_str, time_str)
+            timestamp = _parse_datetime(date_str, time_str, tz)
 
             # Plaza: prefer Exit Plaza; fall back to Agency when exit is empty
             agency = row.get(headers.get("agency", ""), "").strip() if "agency" in headers else ""

@@ -8,12 +8,9 @@ Expected columns (case-insensitive):
 import csv
 import io
 from datetime import UTC, datetime
-from zoneinfo import ZoneInfo
 
 from turonomics_api.models import TuroTrip
-
-_EASTERN = ZoneInfo("America/New_York")
-
+from turonomics_api.settings import fleet_timezone
 
 # Accepted column name aliases (lowercase)
 _COL_MAP = {
@@ -45,22 +42,23 @@ def _resolve_headers(raw_headers: list[str]) -> dict[str, str]:
 def _parse_datetime(value: str) -> datetime:
     """Parse ISO 8601 or common date formats produced by the extension.
 
-    Timestamps with a trailing Z are UTC and are converted to Eastern time so
-    they compare correctly against EZPass timestamps (which are already local).
+    Always timezone-aware. A trailing Z means UTC and is kept as UTC; anything
+    without a zone is local wall-clock in ``FLEET_TIMEZONE``.
+
+    This used to convert the UTC ones to Eastern and then strip the zone, so
+    that both sides of the toll matcher were naive-Eastern. That was internally
+    consistent and quietly wrong at the edges: a naive datetime cannot be
+    stored in a ``timestamptz`` column without Postgres reading it as UTC,
+    which is how every scraped crossing ended up four hours early. One
+    representation, aware everywhere, is the only version of this that cannot
+    be got wrong by whoever touches it next.
     """
     value = value.strip()
-    # UTC formats: convert to Eastern local time
     for fmt in ("%Y-%m-%dT%H:%M:%S.%fZ", "%Y-%m-%dT%H:%M:%SZ"):
         try:
-            return (
-                datetime.strptime(value, fmt)
-                .replace(tzinfo=UTC)
-                .astimezone(_EASTERN)
-                .replace(tzinfo=None)
-            )
+            return datetime.strptime(value, fmt).replace(tzinfo=UTC)
         except ValueError:
             continue
-    # Non-UTC formats: treat as local (Eastern) time already
     for fmt in (
         "%Y-%m-%dT%H:%M:%S.%f",
         "%Y-%m-%dT%H:%M:%S",
@@ -71,7 +69,7 @@ def _parse_datetime(value: str) -> datetime:
         "%m/%d/%Y %I:%M %p",
     ):
         try:
-            return datetime.strptime(value, fmt)
+            return datetime.strptime(value, fmt).replace(tzinfo=fleet_timezone())
         except ValueError:
             continue
     raise ValueError(f"Unrecognized datetime format: {value!r}")

@@ -1,11 +1,14 @@
 """Tests for the EZPass CSV parser using the real NY EZPass export format."""
 
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
+
+EASTERN = ZoneInfo("America/New_York")
 
 # Minimal valid header row for convenience
 _HDR = "Lane Txn ID,Tag/Plate #,Agency,Entry Plaza,Exit Plaza,Class,Date,Exit Time,Amount\n"
@@ -37,7 +40,7 @@ class TestTransponderRows:
 
     def test_transponder_timestamp(self) -> None:
         tolls = parse_ezpass_csv(_HDR + row(date="12/29/2025", time="05:13:32 PM"))
-        assert tolls[0].timestamp == datetime(2025, 12, 29, 17, 13, 32)
+        assert tolls[0].timestamp == datetime(2025, 12, 29, 17, 13, 32, tzinfo=EASTERN)
 
     def test_transponder_plaza_is_exit_plaza(self) -> None:
         tolls = parse_ezpass_csv(_HDR + row(exit_="19"))
@@ -158,7 +161,7 @@ class TestRealWorldSample:
         assert rbk.license_plate == "LZA7293"
         assert rbk.transponder_id is None
         assert rbk.amount == 9.11
-        assert rbk.timestamp == datetime(2025, 12, 31, 15, 10, 36)
+        assert rbk.timestamp == datetime(2025, 12, 31, 15, 10, 36, tzinfo=EASTERN)
 
     def test_transponder_row_parsed_correctly(self) -> None:
         tolls = parse_ezpass_csv(self.SAMPLE)
@@ -200,7 +203,7 @@ def test_a_statement_scraped_from_the_website_parses() -> None:
     assert tag_read.transponder_id == "99900000111"
     assert tag_read.license_plate is None
     assert tag_read.amount == pytest.approx(2.86)
-    assert tag_read.timestamp == datetime(2025, 12, 29, 17, 13, 32)
+    assert tag_read.timestamp == datetime(2025, 12, 29, 17, 13, 32, tzinfo=EASTERN)
 
     # The plaza carries a comma, so it has to have survived the quoting that
     # `toCsv` put around it and the CSV reader took off again.
@@ -221,15 +224,16 @@ def test_a_statement_scraped_from_the_website_parses() -> None:
 @pytest.mark.parametrize(
     ("date_cell", "expected"),
     [
-        ("10/4/26 3:19 PM", datetime(2026, 10, 4, 15, 19)),
-        ("10/4/26 3:19:07 PM", datetime(2026, 10, 4, 15, 19, 7)),
-        ("10/4/26 15:19", datetime(2026, 10, 4, 15, 19)),
-        ("10/4/26", datetime(2026, 10, 4)),
+        ("10/4/26 3:19 PM", datetime(2026, 10, 4, 15, 19, tzinfo=EASTERN)),
+        ("10/4/26 3:19:07 PM", datetime(2026, 10, 4, 15, 19, 7, tzinfo=EASTERN)),
+        ("10/4/26 15:19", datetime(2026, 10, 4, 15, 19, tzinfo=EASTERN)),
+        ("10/4/26", datetime(2026, 10, 4, tzinfo=EASTERN)),
         # Midnight and noon are where a 12-hour clock goes wrong.
-        ("1/1/26 12:00 AM", datetime(2026, 1, 1, 0, 0)),
-        ("1/1/26 12:00 PM", datetime(2026, 1, 1, 12, 0)),
-        # Still reads the download's format.
-        ("12/29/2025 5:13:32 PM", datetime(2025, 12, 29, 17, 13, 32)),
+        ("1/1/26 12:00 AM", datetime(2026, 1, 1, 0, 0, tzinfo=EASTERN)),
+        ("1/1/26 12:00 PM", datetime(2026, 1, 1, 12, 0, tzinfo=EASTERN)),
+        # Still reads the download's format. December is EST, October is EDT —
+        # a fixed offset would get one of these wrong.
+        ("12/29/2025 5:13:32 PM", datetime(2025, 12, 29, 17, 13, 32, tzinfo=EASTERN)),
     ],
 )
 def test_the_website_date_format_parses(date_cell: str, expected: datetime) -> None:
@@ -262,3 +266,65 @@ def test_a_date_in_no_known_format_still_names_itself() -> None:
         parse_ezpass_csv(
             "Tag/Plate #,Exit Plaza,Date,Amount\n" "\" 99900000111\",\"19\",\"4th October '26\",\"$-2.86\"\n"
         )
+
+
+# ---------------------------------------------------------------------------
+# What zone a statement is written in
+# ---------------------------------------------------------------------------
+# A statement prints the local wall-clock time of the crossing and says nothing
+# about the zone. Reading that as UTC is not a display bug: the first real
+# import put all 305 crossings four hours early, which showed as tolls at 4am
+# and moved crossings across the trip boundaries that decide who is billed.
+
+
+def _one(date_cell: str, tz: ZoneInfo | None = None) -> datetime:
+    header = "Tag/Plate #,Exit Plaza,Date,Amount\n"
+    tolls = parse_ezpass_csv(
+        header + f'" 99900000111","19","{date_cell}","$-2.86"\n', tz=tz
+    )
+    return tolls[0].timestamp
+
+
+def test_a_statement_time_is_local_not_utc() -> None:
+    """The bug, stated as a test.
+
+    8am on the statement is noon UTC in July, not 8am UTC. Asserted on the UTC
+    hour rather than on equality, because comparing two aware datetimes would
+    pass either way round.
+    """
+    assert _one("7/15/26 8:00 AM").astimezone(UTC).hour == 12
+
+
+def test_the_offset_follows_daylight_saving() -> None:
+    """July is EDT and January is EST. A fixed -4 or -5 gets one of them wrong,
+    which is why this uses zoneinfo and not a constant."""
+    assert _one("7/15/26 8:00 AM").utcoffset() == timedelta(hours=-4)
+    assert _one("1/15/26 8:00 AM").utcoffset() == timedelta(hours=-5)
+
+
+def test_the_wall_clock_survives_the_round_trip() -> None:
+    """Whatever the statement printed is what the page should show."""
+    shown = _one("10/4/26 3:19 PM").astimezone(EASTERN)
+    assert (shown.hour, shown.minute) == (15, 19)
+
+
+def test_an_explicitly_utc_timestamp_is_not_shifted() -> None:
+    """One format states its own zone. Localising that one too would move it."""
+    assert _one("2026-07-15T08:00:00Z").astimezone(UTC).hour == 8
+
+
+def test_the_zone_is_configurable() -> None:
+    """FLEET_TIMEZONE owns this fact, so the parser must not hardcode Eastern."""
+    pacific = ZoneInfo("America/Los_Angeles")
+    assert _one("7/15/26 8:00 AM", tz=pacific).astimezone(UTC).hour == 15
+
+
+def test_the_repeated_hour_of_a_dst_fallback_does_not_raise() -> None:
+    """1:30am happens twice on 1 November 2026.
+
+    A statement cannot say which, and nothing here can either. The first is
+    taken; what matters is that an unremarkable row does not fail the whole
+    import.
+    """
+    moment = _one("11/1/26 1:30 AM")
+    assert moment.utcoffset() in (timedelta(hours=-4), timedelta(hours=-5))

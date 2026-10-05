@@ -178,6 +178,54 @@ def main() -> int:
             check("unattributed money is reported apart from recoverable money",
                   page.locator("#s-loose").text_content() == _money(loose))
 
+            # A crossing billed to a guest because the car came back late is
+            # an inference about whose money it is, so it is shown as one
+            # rather than appearing as an ordinary attribution.
+            over = page.locator(".t-over")
+            check("a late return is billed but labelled",
+                  over.count() == 1 and "late return" in (over.first.text_content() or ""))
+            check("and says how far over it ran",
+                  "34m" in (over.first.text_content() or ""))
+
+            # Off-platform rentals: the place an unattributed crossing leads.
+            check("recorded rentals are listed",
+                  page.locator(".rental").count() == len(stub_api.TRIPS))
+            check("a rental that caught no tolls is called out",
+                  page.locator(".r-tolls.none").count() == 1)
+
+            page.locator("#r-car").fill("Jerry")
+            page.locator("#r-from").fill("2026-10-04T13:00")
+            page.locator("#r-to").fill("2026-10-04T18:00")
+            page.locator("#r-save").click()
+            page.wait_for_timeout(700)
+            check("recording a rental reports what it attributed",
+                  "2 tolls now attributed" in (page.locator("#r-result").text_content() or ""))
+
+            # Removing one is confirmed, like removing a toll: it unbills a
+            # guest rather than just tidying a list.
+            rentals_before = page.locator(".rental").count()
+            confirm_answers.append(False)
+            page.locator(".rental").first.locator(".drop").click()
+            page.wait_for_timeout(400)
+            check("cancelling keeps the rental",
+                  page.locator(".rental").count() == rentals_before)
+            confirm_answers.append(True)
+            page.locator(".rental").first.locator(".drop").click()
+            page.wait_for_timeout(700)
+            check("confirming removes it",
+                  page.locator(".rental").count() == rentals_before - 1)
+
+            # An unattributed crossing shows how far it sits from the nearest
+            # rental, which is the difference between "the guest was still
+            # driving" and "that was one of mine".
+            check("the nearest rental is offered as a hint",
+                  page.locator(".t-near").count() == 1)
+            hint = page.locator(".t-near").first.text_content() or ""
+            check("the hint says how long and which way",
+                  "20m" in hint and "after" in hint and "Dylan" in hint)
+            check("the hint is not phrased as an attribution",
+                  "probably" not in hint.lower() and "owes" not in hint.lower())
+
             # A crossing on a car outside the fleet is labelled, kept out of the
             # chase-this figure, and still counted in what the account paid.
             note = page.locator("#outside-note")
@@ -283,13 +331,13 @@ def main() -> int:
             # from the server's side too: the page could have been handed a 401
             # on each write and shown a stale figure.
             seen = json.loads(urllib.request.urlopen(f"{API}/seen-auth").read())["seen"]
-            # Five writes above: the tick, the untick, the delete, the
-            # upload, the re-match. An exact count rather than a floor, so an
-            # extra write nobody meant to add also shows up here. The cancelled
-            # delete is not among them — a dismissed confirm must not reach the
-            # API at all.
-            check("the page sent the token on every write",
-                  seen == [stub_api.TOLLS_TOKEN] * 5)
+            # Every write above: recording a rental, removing one, the tick,
+            # the untick, the toll delete, the upload, the re-match. An exact
+            # count rather than a floor, so an extra write nobody meant to add
+            # shows up here — and the two cancelled confirms must not appear at
+            # all, because a dismissed confirm must not reach the API.
+            check(f"the page sent the token on every write (saw {len(seen)})",
+                  seen == [stub_api.TOLLS_TOKEN] * 7)
 
             # And a rejected token must be forgotten, or the page asks nobody
             # and fails the same way forever.

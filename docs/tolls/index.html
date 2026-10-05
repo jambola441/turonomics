@@ -77,6 +77,26 @@
        background:var(--bg);border:1px solid var(--border);border-radius:8px;
        padding:10px 11px;margin-top:10px;overflow-x:auto;white-space:pre}
 
+  /* Off-platform rentals. Its own section rather than its own page: you
+     discover you need one while looking at an unattributed crossing. */
+  .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
+  .form label{display:flex;flex-direction:column;gap:4px;min-width:0}
+  .form .wide{grid-column:1 / -1}
+  .form .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
+       text-transform:uppercase;color:var(--dim)}
+  .form input{font:inherit;font-size:13px;color:var(--text);background:var(--surface);
+       border:1px solid var(--border2);border-radius:8px;padding:9px 10px;min-height:40px;
+       min-width:0;width:100%}
+  .form input:focus{outline:none;border-color:var(--muted)}
+  .rentals{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+  .rental{display:flex;align-items:center;gap:10px;padding:10px 11px;border-radius:9px;
+       background:var(--surface);border:1px solid var(--border2)}
+  .rental .r-body{flex:1;min-width:0}
+  .rental .r-who{font-size:14px;font-weight:600}
+  .rental .r-when{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
+  .rental .r-tolls{font-family:var(--mono);font-size:11px;flex-shrink:0;color:var(--dim)}
+  .rental .r-tolls.none{color:var(--amber)}
+
   .filters{display:flex;gap:7px;margin-bottom:10px}
   .filter{flex:0 0 auto;font:inherit;font-family:var(--mono);font-size:11.5px;font-weight:600;
           letter-spacing:.04em;color:var(--muted);background:var(--surface2);
@@ -96,6 +116,12 @@
   /* Known, just not ours. Dim rather than red: red means "do something", and
      there is nothing to do about a crossing on a family car. */
   .toll .t-who.outside{color:var(--dim)}
+  /* A guess, and styled like one: no colour that implies a state, and the
+     gap first because the gap is what makes it a guess worth reading. */
+  .toll .t-near{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
+  /* Amber, not green: this one is billed to a guest on an inference, and the
+     operator should be able to see which ones those are at a glance. */
+  .toll .t-over{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:3px}
   .outside-note{font-size:12px;color:var(--dim);line-height:1.5;margin:-8px 0 16px;padding:0 2px}
   .toll .t-amt{font-family:var(--mono);font-size:15px;font-weight:600;flex-shrink:0}
   .tick{flex-shrink:0;width:34px;height:34px;border-radius:9px;font:inherit;font-size:15px;
@@ -161,6 +187,33 @@
         <input type="file" id="file" accept=".csv,text/csv">
       </div>
       <p class="note" id="import-result" hidden></p>
+    </div>
+  </section>
+
+  <section>
+    <div class="card">
+      <h2>Off-platform rentals</h2>
+      <p>A rental arranged outside Turo leaves no trace, so its crossings have
+        nobody to bill. Record one here and the tolls inside it attribute
+        immediately.</p>
+      <div class="form">
+        <label><span class="k">car</span>
+          <input id="r-car" list="r-cars" placeholder="Jerry" autocomplete="off"></label>
+        <label><span class="k">guest</span>
+          <input id="r-guest" placeholder="optional" autocomplete="off"></label>
+        <label><span class="k">from</span>
+          <input id="r-from" type="datetime-local"></label>
+        <label><span class="k">to</span>
+          <input id="r-to" type="datetime-local"></label>
+        <label class="wide"><span class="k">earned (optional)</span>
+          <input id="r-earned" inputmode="decimal" placeholder="180.00"></label>
+      </div>
+      <datalist id="r-cars"></datalist>
+      <div class="actions">
+        <button class="btn go" id="r-save">Record rental</button>
+      </div>
+      <p class="note" id="r-result" hidden></p>
+      <div class="rentals" id="rentals"></div>
     </div>
   </section>
 
@@ -296,6 +349,28 @@
     return { text: "nothing says whose crossing this was", loose: true };
   }
 
+  // "23m", "4h 10m", "2d". Coarse on purpose: the question is whether a
+  // crossing is minutes from a rental or days from one, and a gap of
+  // "1h 23m 06s" answers it no better while reading like a stopwatch.
+  function gap(seconds) {
+    var m = Math.round(seconds / 60);
+    if (m < 60) return m + "m";
+    var h = Math.floor(m / 60);
+    if (h < 24) return m % 60 ? h + "h " + (m % 60) + "m" : h + "h";
+    var d = Math.floor(h / 24);
+    return h % 24 ? d + "d " + (h % 24) + "h" : d + "d";
+  }
+
+  // Shown only where there is nothing better: a crossing on one of our cars
+  // that no rental claims. Deliberately worded as proximity rather than
+  // ownership — "20m after Dylan's trip", not "probably Dylan's" — because the
+  // page cannot tell the difference and should not pretend to.
+  function nearNote(toll) {
+    if (toll.near_gap_seconds == null) return null;
+    var who = toll.near_guest ? toll.near_guest + "'s" : "a";
+    return gap(toll.near_gap_seconds) + " " + toll.near_relation + " " + who + " trip";
+  }
+
   function renderStats(data) {
     el("s-total").textContent = money(data.total_cents);
     el("s-owed").textContent = money(data.unrecovered_cents);
@@ -379,6 +454,12 @@
       var w = who(toll);
       add(body, "div", "t-who" + (w.loose ? " loose" : "") + (w.outside ? " outside" : ""),
           w.text);
+      if (toll.overrun_seconds != null) {
+        add(body, "div", "t-over",
+            "late return — " + gap(toll.overrun_seconds) + " after their trip ended");
+      }
+      var near = nearNote(toll);
+      if (near) add(body, "div", "t-near", near);
       add(card, "div", "t-amt", money(toll.amount_cents));
 
       var tick = add(card, "button", "tick", toll.recovered_at ? "✓" : "");
@@ -516,6 +597,119 @@
       .then(function () { state.busy = false; });
   }
 
+  // ---- off-platform rentals ---------------------------------------------
+  // The times go up without a zone, as a datetime-local input writes them, and
+  // the API reads a bare time as fleet-local. Converting here would mean two
+  // places deciding what "2pm" means.
+  function loadRentals() {
+    return fetch(API + "/api/trips")
+      .then(function (r) { return r.ok ? r.json() : { trips: [] }; })
+      .then(function (data) { renderRentals(data.trips || []); })
+      .catch(function () { /* the ledger above is the page's real job */ });
+  }
+
+  function renderRentals(trips) {
+    var list = el("rentals");
+    clear(list);
+    trips.forEach(function (trip) {
+      var card = add(list, "div", "rental");
+      var body = add(card, "div", "r-body");
+      add(body, "div", "r-who",
+          (trip.guest_name || "No name") + " — " + (trip.vehicle_nickname || "?"));
+      add(body, "div", "r-when", when(trip.starts_at) + " → " + when(trip.ends_at));
+      // A rental that caught nothing is usually a window typed slightly wrong,
+      // which is the cheapest moment to notice it.
+      add(card, "div", "r-tolls" + (trip.toll_count ? "" : " none"),
+          trip.toll_count ? trip.toll_count + " toll" + (trip.toll_count === 1 ? "" : "s")
+                          : "no tolls");
+      var drop = add(card, "button", "drop", "\u00d7");
+      drop.title = "Remove this rental";
+      drop.addEventListener("click", function () { dropRental(trip); });
+    });
+  }
+
+  function dropRental(trip) {
+    if (state.busy || !ensureToken()) return;
+    if (!window.confirm("Remove the rental for " + (trip.guest_name || "no name") +
+                        "?\n\nIts tolls go back to unattributed; they are not deleted.")) return;
+    state.busy = true;
+    fetch(API + "/api/trips/" + trip.id, { method: "DELETE", headers: authHeaders() })
+      .then(handleStatus)
+      .then(function (r) {
+        if (!r.ok) throw new Error("the API said " + r.status);
+        return r.json();
+      })
+      .then(function () { return Promise.all([load(), loadRentals()]); })
+      .catch(function (e) { fail("Could not remove that rental: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  function saveRental() {
+    if (state.busy || !ensureToken()) return;
+    var result = el("r-result");
+    var car = el("r-car").value.trim();
+    var from = el("r-from").value;
+    var to = el("r-to").value;
+    if (!car || !from || !to) {
+      result.hidden = false;
+      result.textContent = "A car and both times are needed.";
+      return;
+    }
+    var earned = el("r-earned").value.trim();
+    var body = {
+      vehicle: car,
+      guest_name: el("r-guest").value.trim() || null,
+      starts_at: from,
+      ends_at: to,
+    };
+    // Dollars in the box, integer cents on the wire, rounded rather than
+    // truncated — the same cent that $2.01 loses to int().
+    if (earned) body.earnings_cents = Math.round(parseFloat(earned) * 100);
+
+    state.busy = true;
+    result.hidden = false;
+    result.textContent = "Recording…";
+    fetch(API + "/api/trips", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify(body),
+    })
+      .then(handleStatus)
+      .then(function (r) {
+        return r.json().then(function (payload) {
+          if (!r.ok) throw new Error(payload && payload.detail ? payload.detail
+                                                              : "the API said " + r.status);
+          return payload;
+        });
+      })
+      .then(function (payload) {
+        result.textContent = payload.tolls_matched
+          ? "Recorded · " + payload.tolls_matched + " toll" +
+            (payload.tolls_matched === 1 ? "" : "s") + " now attributed"
+          : "Recorded · no tolls fell inside it";
+        el("r-guest").value = "";
+        el("r-earned").value = "";
+        return Promise.all([load(), loadRentals()]);
+      })
+      .catch(function (e) { result.textContent = ""; fail("Could not record it: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  el("r-save").addEventListener("click", saveRental);
+
+  // The car names, so the field does not have to be typed from memory.
+  fetch(API + "/api/fleet")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      if (!data) return;
+      var list = el("r-cars");
+      clear(list);
+      (data.vehicles || []).forEach(function (v) {
+        add(list, "option").value = v.nickname || v.plate || "";
+      });
+    })
+    .catch(function () { /* typing the name still works */ });
+
   el("pick").addEventListener("click", function () { el("file").click(); });
   el("file").addEventListener("change", function (ev) {
     upload(ev.target.files && ev.target.files[0]);
@@ -533,6 +727,7 @@
   el("f-owed").addEventListener("click", function () { setFilter(true); });
 
   load();
+  loadRentals();
 })();
 </script>
 </body>

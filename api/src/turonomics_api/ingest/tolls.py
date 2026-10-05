@@ -22,8 +22,9 @@ from __future__ import annotations
 import hashlib
 import logging
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -31,7 +32,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.models import Toll, Trip, TripState, Vehicle
 from turonomics_api.models import EZPassToll
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
-from turonomics_api.settings import outside_fleet
+from turonomics_api.settings import outside_fleet, toll_overrun_minutes
 
 log = logging.getLogger("turonomics.ingest.tolls")
 
@@ -124,6 +125,130 @@ def _trip_at(session: Session, vehicle_id: uuid.UUID, when: datetime) -> Trip | 
     )
 
 
+
+@dataclass(frozen=True)
+class NearestTrip:
+    """The closest rental to a crossing that no rental contains.
+
+    A hint, never an attribution. A toll twenty minutes after a trip ended is
+    usually the guest still driving — Turo's end time is when they marked the
+    car returned, not when they stopped using it — while one three days out is
+    the operator's own errand. Both are unattributed and only the gap tells
+    them apart, so the gap is what gets shown.
+    """
+
+    trip_id: uuid.UUID
+    guest_name: str | None
+    gap_seconds: int
+    # Where the crossing sits relative to the rental: "after" it ended, or
+    # "before" it began.
+    relation: str
+
+
+# Beyond this, the nearest rental says nothing useful about a crossing, and a
+# label would be noise dressed as a clue.
+NEAREST_TRIP_WINDOW = timedelta(days=3)
+
+
+def nearest_trip(
+    trips: Iterable[Trip], when: datetime, *, within: timedelta = NEAREST_TRIP_WINDOW
+) -> NearestTrip | None:
+    """The rental nearest to ``when`` among ``trips``, or None.
+
+    Takes the trips rather than querying for them: a statement leaves a hundred
+    crossings unattributed, and two queries each is a hundred round trips to
+    answer a question one query could. The caller fetches a car's rentals once.
+
+    A trip that contains ``when`` is skipped. Those are already attributed, and
+    reporting a gap of zero to the trip a crossing is already billed against
+    would be a hint about nothing.
+    """
+    best: NearestTrip | None = None
+    for trip in trips:
+        if trip.state is TripState.cancelled:
+            continue
+        if trip.starts_at <= when <= trip.ends_at:
+            continue
+        if when > trip.ends_at:
+            gap, relation = when - trip.ends_at, "after"
+        else:
+            gap, relation = trip.starts_at - when, "before"
+        if gap > within:
+            continue
+        if best is None or gap.total_seconds() < best.gap_seconds:
+            best = NearestTrip(
+                trip_id=trip.id,
+                guest_name=trip.guest_name,
+                gap_seconds=int(gap.total_seconds()),
+                relation=relation,
+            )
+    return best
+
+
+def _trip_overrunning(
+    session: Session, vehicle_id: uuid.UUID, when: datetime, grace: timedelta
+) -> Trip | None:
+    """The rental this crossing belongs to because the car came back late.
+
+    Turo's end time is when the guest marked the car returned, not when they
+    stopped driving it. A guest who runs over without extending the booking
+    leaves their last crossings outside every window, and they were the only
+    person with the keys.
+
+    Bounded twice over, because this attributes money to a guest on an
+    inference. By ``grace``, so an evening of the operator's own driving cannot
+    be swallowed; and by the next rental of that car, because once somebody
+    else has the keys the crossing is plainly theirs. The most recent qualifying
+    rental wins, which for back-to-back lets is the one that actually just
+    ended.
+    """
+    if not grace:
+        # Redundant with the window below, which is empty when grace is zero,
+        # but said out loud: "off" has to be unmistakable in a function that
+        # decides whose money this is.
+        return None
+    candidate = session.scalar(
+        select(Trip)
+        .where(
+            Trip.vehicle_id == vehicle_id,
+            Trip.state != TripState.cancelled,
+            Trip.ends_at < when,
+            Trip.ends_at >= when - grace,
+        )
+        .order_by(Trip.ends_at.desc())
+        .limit(1)
+    )
+    if candidate is None:
+        return None
+    # Somebody else took the car in between, so the overrun is over.
+    #
+    # Unreachable through `_claim`, which tries exact containment first and
+    # would have matched the later rental — and the ordering above already
+    # prefers the latest-ending one. Kept because this function is callable on
+    # its own, and without it a direct caller would bill the morning's guest
+    # for a crossing during the afternoon's rental. Tested directly, for that
+    # reason.
+    handed_over = session.scalar(
+        select(Trip)
+        .where(
+            Trip.vehicle_id == vehicle_id,
+            Trip.state != TripState.cancelled,
+            Trip.id != candidate.id,
+            Trip.starts_at > candidate.ends_at,
+            Trip.starts_at <= when,
+        )
+        .limit(1)
+    )
+    return None if handed_over is not None else candidate
+
+
+def _claim(session: Session, vehicle_id: uuid.UUID, when: datetime) -> Trip | None:
+    """The rental a crossing is billed to: containing it, or overrun into."""
+    return _trip_at(session, vehicle_id, when) or _trip_overrunning(
+        session, vehicle_id, when, timedelta(minutes=toll_overrun_minutes())
+    )
+
+
 def import_tolls(
     session: Session, content: str | bytes, *, now: datetime | None = None
 ) -> ImportResult:
@@ -140,7 +265,7 @@ def import_tolls(
             continue
 
         vehicle = _vehicle_for(session, toll)
-        trip = _trip_at(session, vehicle.id, toll.timestamp) if vehicle else None
+        trip = _claim(session, vehicle.id, toll.timestamp) if vehicle else None
         if trip is not None:
             result.matched += 1
         else:
@@ -204,7 +329,7 @@ def rematch_unattributed(session: Session) -> int:
             if vehicle is None:
                 continue
             toll.vehicle_id = vehicle.id
-        trip = _trip_at(session, vehicle.id, toll.occurred_at)
+        trip = _claim(session, vehicle.id, toll.occurred_at)
         if trip is not None:
             toll.trip_id = trip.id
             fixed += 1

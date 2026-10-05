@@ -155,6 +155,11 @@ def _toll(**over: object) -> dict:
         "trip_id": None,
         "recovered_at": None,
         "outside_label": None,
+        "near_guest": None,
+        "near_gap_seconds": None,
+        "near_relation": None,
+        "near_trip_id": None,
+        "overrun_seconds": None,
     }
     row.update(over)
     return row
@@ -178,6 +183,13 @@ TOLLS = [
           license_plate="LWH4685", vehicle_nickname="Jolene"),
     _toll(id="dddd0000-0000-0000-0000-00000000003a", plaza="NYSTA 15 to 19",
           amount_cents=201, transponder_id=STUB_TAG_A),
+    _toll(id="dddd0000-0000-0000-0000-0000000000aa", plaza="VNB", amount_cents=1263,
+          license_plate="LEH9892", vehicle_nickname="Jimmy", guest_name="Priya",
+          trip_id="eeee0000-0000-0000-0000-00000000000d", overrun_seconds=34 * 60),
+    _toll(id="dddd0000-0000-0000-0000-00000000009a", plaza="TNB", amount_cents=688,
+          license_plate="LWH4685", vehicle_nickname="Jolene",
+          near_guest="Dylan", near_gap_seconds=20 * 60, near_relation="after",
+          near_trip_id="eeee0000-0000-0000-0000-00000000000c"),
     _toll(id="dddd0000-0000-0000-0000-00000000004a", plaza="LNT", amount_cents=1700,
           transponder_id=STUB_TAG_A),
     _toll(id="dddd0000-0000-0000-0000-00000000005a", plaza="BER", amount_cents=217,
@@ -201,6 +213,18 @@ TOLLS = [
 # that prompts and then forgets to send the header would otherwise look fine.
 TOLLS_TOKEN = "letmein"
 SEEN_AUTH: list[str] = []
+
+
+TRIPS = [
+    {"id": "eeee0000-0000-0000-0000-00000000000e", "vehicle_nickname": "Jolene",
+     "guest_name": "Priya", "starts_at": _iso(days=-2), "ends_at": _iso(days=-1),
+     "source": "manual", "earnings_cents": 18000, "toll_count": 3},
+    # A rental that caught nothing: usually a window typed slightly wrong, and
+    # the page calls it out rather than leaving it to be noticed.
+    {"id": "eeee0000-0000-0000-0000-00000000000f", "vehicle_nickname": "Bubba",
+     "guest_name": None, "starts_at": _iso(days=-9), "ends_at": _iso(days=-8),
+     "source": "manual", "earnings_cents": None, "toll_count": 0},
+]
 
 
 def _tolls_payload() -> dict:
@@ -259,7 +283,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/seen-auth"):
+        if self.path.startswith("/api/trips"):
+            self._send({"trips": TRIPS})
+        elif self.path.startswith("/seen-auth"):
             self._send({"seen": SEEN_AUTH})
         elif self.path.startswith("/api/tolls"):
             self._send(_tolls_payload())
@@ -284,7 +310,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path, _, query = self.path.partition("?")
-        if path.startswith("/api/tolls") and not self._authorized():
+        if (path.startswith("/api/tolls") or path.startswith("/api/trips")) \
+                and not self._authorized():
             return
         if path.endswith("/recovered"):
             toll_id = path.split("/")[-2]
@@ -301,6 +328,9 @@ class Handler(BaseHTTPRequestHandler):
             self._read_body()
             self._send({"rows": 9, "imported": 7, "already_known": 2,
                         "matched": 4, "unmatched": 3, "unknown_tags": [STUB_TAG_A, STUB_TAG_B]})
+        elif path == "/api/trips":
+            self._read_body()
+            self._send({"trip": TRIPS[0], "tolls_matched": 2})
         elif path == "/api/tolls/rematch":
             self._send({"rows": 3, "imported": 0, "already_known": 0,
                         "matched": 0, "unmatched": 3, "unknown_tags": []})
@@ -309,7 +339,17 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path, _, _query = self.path.partition("?")
-        if path.startswith("/api/tolls") and not self._authorized():
+        if (path.startswith("/api/tolls") or path.startswith("/api/trips")) \
+                and not self._authorized():
+            return
+        if path.startswith("/api/trips/"):
+            trip_id = path.rsplit("/", 1)[-1]
+            for index, trip in enumerate(TRIPS):
+                if trip["id"] == trip_id:
+                    TRIPS.pop(index)
+                    self._send({"deleted": 1, "tolls_released": trip["toll_count"]})
+                    return
+            self._send({"deleted": 0, "tolls_released": 0})
             return
         toll_id = path.rsplit("/", 1)[-1]
         for index, toll in enumerate(TOLLS):

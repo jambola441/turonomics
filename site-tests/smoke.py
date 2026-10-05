@@ -352,6 +352,71 @@ def main() -> int:
 
             check("no uncaught errors on the tolls page", not errors)
 
+            # ---- the invoices page ----------------------------------------
+            # The view that turns the ledger into money: what to bill whom, and
+            # how long is left to ask. The grouping is the point, so that is
+            # what gets checked.
+            invoices = stub_api.INVOICES
+            page.goto(f"{SITE}/invoices/?api={API}", wait_until="domcontentloaded")
+            page.wait_for_timeout(700)
+
+            check("the invoices error banner is not showing", page.locator("#err").is_hidden())
+            check("every rental to bill is listed",
+                  page.locator(".inv").count() == len(invoices))
+            check("the total to bill is the sum of the invoices",
+                  page.locator("#s-total").text_content()
+                  == _money(sum(i["total_cents"] for i in invoices)))
+
+            # An expired invoice must be reported apart from collectable money:
+            # Turo will not take it, and counting it as work to do would have
+            # the operator chasing something that cannot be filed.
+            expired = [i for i in invoices if i["expired"]]
+            check("money past the window is reported apart",
+                  page.locator("#s-gone").text_content()
+                  == _money(sum(i["total_cents"] for i in expired)))
+            check("and it is not counted as due soon",
+                  page.locator("#s-urgent").text_content()
+                  != page.locator("#s-total").text_content())
+
+            headings = (page.locator("#groups").text_content() or "")
+            check("the urgent ones get their own heading", "File these first" in headings)
+            check("the expired ones get their own heading", "Past the window" in headings)
+            check("off-platform rentals are separated",
+                  "Off-platform" in headings and "no deadline" in headings)
+            check("an expired invoice says how long ago it lapsed",
+                  "5 days past the window" in headings)
+            check("an urgent one says how long is left", "6 days left" in headings)
+
+            # The soonest deadline has to be at the top, or the view does not
+            # answer the question it exists for.
+            first = page.locator(".inv").first.text_content() or ""
+            check("the soonest deadline is first", "Samuel" in first)
+
+            # Lines are collapsed until a rental is picked.
+            check("lines start hidden", page.locator(".line").count() == 0)
+            page.locator(".inv-head").first.click()
+            page.wait_for_timeout(300)
+            check("opening a rental shows its lines", page.locator(".line").count() >= 1)
+            check("a late-return line says why it is on the bill",
+                  page.locator(".line .late").count() == 1)
+            check("and there is a link to file it on Turo",
+                  "reservation/54958910" in (
+                      page.locator(".acts a").first.get_attribute("href") or ""))
+
+            before_count = page.locator(".inv").count()
+            confirm_answers.append(False)
+            page.locator(".acts .btn.go").first.click()
+            page.wait_for_timeout(400)
+            check("cancelling leaves the invoice alone",
+                  page.locator(".inv").count() == before_count)
+            confirm_answers.append(True)
+            page.locator(".acts .btn.go").first.click()
+            page.wait_for_timeout(700)
+            check("marking it billed back removes it from the list",
+                  page.locator(".inv").count() == before_count - 1)
+
+            check("no uncaught errors on the invoices page", not errors)
+
             if errors:
                 print("\nconsole/page errors:")
                 for message in errors[:10]:

@@ -311,6 +311,48 @@ INVOICES = [
 ]
 
 
+def _ledger_payload() -> dict[str, object]:
+    """Both ledgers per rental, including rentals already dealt with.
+
+    The settled row is the point of the fixture: the invoices list leaves it
+    out, and a reader checking where the money went needs it or the columns do
+    not add up.
+    """
+    rows = [
+        {
+            "trip_id": "11111111-1111-1111-1111-111111111111",
+            "turo_trip_id": "58626257", "guest_name": "Alice",
+            "vehicle_nickname": "Jolene",
+            "starts_at": "2026-07-09T11:00:00Z", "ends_at": "2026-07-12T18:00:00Z",
+            "days_left": 4,
+            "tolls_cents": 1779, "unfiled_cents": 1100, "filed_cents": 679,
+            "recovered_cents": 0, "asked_cents": 679, "charged_cents": 0,
+            "turo_toll_line_cents": None,
+            "state": "partly billed",
+            "note": "11.00 arrived after the first invoice",
+        },
+        {
+            "trip_id": "22222222-2222-2222-2222-222222222222",
+            "turo_trip_id": "58322522", "guest_name": "Marguerite",
+            "vehicle_nickname": "Jerry",
+            "starts_at": "2026-07-03T11:00:00Z", "ends_at": "2026-07-05T18:00:00Z",
+            "days_left": -2,
+            "tolls_cents": 979, "unfiled_cents": 0, "filed_cents": 0,
+            "recovered_cents": 979, "asked_cents": 2500, "charged_cents": 2500,
+            "turo_toll_line_cents": 2500,
+            "state": "settled", "note": None,
+        },
+    ]
+    return {
+        "rows": rows,
+        "tolls_cents": 2758,
+        "unfiled_cents": 1100,
+        "filed_cents": 679,
+        "recovered_cents": 979,
+        "charged_cents": 2500,
+    }
+
+
 def _invoices_payload() -> dict:
     return {
         "invoices": INVOICES,
@@ -351,7 +393,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/api/invoices"):
+        if self.path.startswith("/api/invoices/ledger"):
+            self._send(_ledger_payload())
+        elif self.path.startswith("/api/invoices"):
             self._send(_invoices_payload())
         elif self.path.startswith("/api/trips"):
             self._send({"trips": TRIPS})

@@ -26,7 +26,7 @@ import {
   type ScrapedTable,
 } from "./tolls.js";
 import { describeEmbedded, summariseCalls, type Embedded, type SeenCall } from "./turo.js";
-import type { TuroPullResult, TuroWanted } from "./types.js";
+import type { Draft, FileInvoiceResult, TuroPullResult, TuroWanted } from "./types.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -394,6 +394,185 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
 
 const PULL_GAP_MS = 250;
 
+/**
+ * File the invoice the API says is most worth filing.
+ *
+ * Which rental, how much, and what the guest reads are all decided by the API.
+ * This does the two things only a logged-in browser can: rasterise the sheet
+ * and talk to Turo as the host.
+ */
+async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
+  const { apiBase, tollsToken } = await settings();
+  const response = await fetch(`${apiBase}/api/invoices/next-draft`);
+  if (response.status === 404) return { filed: false, reason: "nothing to file" };
+  if (!response.ok) throw new Error(`the API said ${response.status}`);
+  const draft = (await response.json()) as Draft;
+  if (!draft.turo_trip_id) {
+    return { filed: false, reason: "that rental is off-platform — file it yourself" };
+  }
+  if (!draft.can_file) {
+    return { filed: false, reason: "Turo will not take an invoice for that rental" };
+  }
+
+  const outcome = await inPage(
+    tabId,
+    fileInvoiceInPage,
+    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message, LOCALE],
+    12,
+    "MAIN"
+  );
+  if (!outcome.ok) {
+    return {
+      filed: false,
+      reason: `${outcome.stage}: ${outcome.error}`,
+      guest: draft.guest_name ?? undefined,
+      amountCents: draft.total_cents,
+    };
+  }
+
+  // Recorded only after Turo has said yes, and before anything else: until
+  // this lands the page still lists these crossings as money to collect, and
+  // a second filing is a dispute with a guest.
+  await fetch(`${apiBase}/api/invoices/${draft.trip_id}/filed`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+    },
+    body: JSON.stringify({
+      reimbursement_id: outcome.reimbursementId,
+      amount_cents: draft.total_cents,
+    }),
+  });
+  return {
+    filed: true,
+    guest: draft.guest_name ?? undefined,
+    amountCents: draft.total_cents,
+    reservation: draft.turo_trip_id,
+    daysLeft: draft.days_left ?? undefined,
+  };
+}
+
+// Turo's own routes carry it, and every observed call used "us". Kept as a
+// constant rather than scattered so a fleet elsewhere is one edit.
+const LOCALE = "us";
+
+/**
+ * File one toll invoice, from inside the page.
+ *
+ * Two calls, in this order, both same-origin and both needing the session the
+ * browser already holds:
+ *
+ *   POST /api/reservation/image              multipart {file, reservationId}
+ *   POST /api/<locale>/reimbursement/<id>/request   with that image's uuid
+ *
+ * The SVG is rasterised here rather than in the worker because a service
+ * worker has no DOM to draw one with, and the sheet is self-contained — no
+ * external images or fonts — so the canvas stays untainted and `toBlob` works.
+ *
+ * Returns a discriminated result rather than throwing: a filing that failed
+ * halfway (image uploaded, request refused) has to say so, because the caller
+ * must not record it as filed.
+ */
+function fileInvoiceInPage(
+  svg: string,
+  reservationId: string,
+  amount: number,
+  message: string,
+  locale: string
+): Promise<{ ok: true; reimbursementId: number } | { ok: false; error: string; stage: string }> {
+  const fail = (stage: string, error: string) =>
+    ({ ok: false as const, error, stage });
+
+  const rasterise = (): Promise<Blob> =>
+    new Promise((resolve, reject) => {
+      const image = new Image();
+      const encoded =
+        "data:image/svg+xml;base64," +
+        btoa(String.fromCharCode(...new TextEncoder().encode(svg)));
+      image.onload = () => {
+        // Twice the natural size: Turo shows evidence at a few hundred pixels
+        // wide and a guest reading a toll time should not have to squint.
+        const scale = 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = image.width * scale;
+        canvas.height = image.height * scale;
+        const context = canvas.getContext("2d");
+        if (!context) return reject(new Error("no 2d context"));
+        context.fillStyle = "#ffffff";
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        context.drawImage(image, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(
+          (blob) => (blob ? resolve(blob) : reject(new Error("canvas produced nothing"))),
+          "image/png"
+        );
+      };
+      image.onerror = () => reject(new Error("the evidence sheet would not render"));
+      image.src = encoded;
+    });
+
+  return (async () => {
+    let png: Blob;
+    try {
+      png = await rasterise();
+    } catch (error) {
+      return fail("rasterise", error instanceof Error ? error.message : String(error));
+    }
+
+    const form = new FormData();
+    form.append("file", png, `tolls-${reservationId}.png`);
+    form.append("reservationId", reservationId);
+    let uuid: string;
+    try {
+      const response = await fetch("/api/reservation/image", {
+        method: "POST",
+        credentials: "include",
+        body: form,
+      });
+      if (!response.ok) return fail("upload", `Turo said ${response.status}`);
+      const body = (await response.json()) as { uuid?: string };
+      if (!body.uuid) return fail("upload", "no uuid came back");
+      uuid = body.uuid;
+    } catch (error) {
+      return fail("upload", error instanceof Error ? error.message : String(error));
+    }
+
+    try {
+      const response = await fetch(`/api/${locale}/reimbursement/${reservationId}/request`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          items: [
+            {
+              amount,
+              itemType: "TOLLS",
+              invoiceItemType: null,
+              mediaEvidenceUuids: [uuid],
+            },
+          ],
+          message,
+          automatedTollTransactionsDto: { transactionUuids: [] },
+          automatedOnTripEVTransactionsDto: null,
+          evPostTripRechargingBatteryLevelsDto: null,
+        }),
+      });
+      if (!response.ok) return fail("request", `Turo said ${response.status}`);
+      const body = (await response.json()) as { reimbursementId?: number };
+      if (typeof body.reimbursementId !== "number") {
+        // The image is uploaded and Turo may or may not have taken the
+        // filing. Saying so is the only safe outcome: recording it as filed
+        // would stop the crossings being chased, and retrying blind could ask
+        // the guest twice.
+        return fail("request", "no reimbursementId came back");
+      }
+      return { ok: true as const, reimbursementId: body.reimbursementId };
+    } catch (error) {
+      return fail("request", error instanceof Error ? error.message : String(error));
+    }
+  })();
+}
+
 /** Fetch one of Turo's own JSON endpoints, from inside the page. */
 function fetchJsonInPage(path: string): Promise<unknown | null> {
   return fetch(path, { credentials: "include", headers: { Accept: "application/json" } })
@@ -722,6 +901,18 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
         } satisfies MessageType)
     );
     return true; // async response
+  }
+
+  if (message.type === "FILE_INVOICE") {
+    fileInvoice(message.tabId).then(
+      (result) => sendResponse({ type: "FILE_INVOICE_RESULT", result } satisfies MessageType),
+      (error: unknown) =>
+        sendResponse({
+          type: "FILE_INVOICE_ERROR",
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies MessageType)
+    );
+    return true;
   }
 
   if (message.type === "PULL_TURO") {

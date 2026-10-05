@@ -12,6 +12,7 @@ import { test } from "node:test";
 import type { TuroPullResult } from "./types.js";
 import {
   CHARGE_KEYS,
+  describeFiling,
   describePull,
   describeEmbedded,
   findByKey,
@@ -364,4 +365,80 @@ test("what was sent is reported before what came back", () => {
   ]);
   assert.match(report, /sent: \{reservationId: int, lineItems: \[1 × \{type: TOLL_REIMBURSEMENT\}\]\}/);
   assert.ok(report.indexOf("sent:") < report.indexOf("invoiceId"), report);
+});
+
+test("an upload to a storage host is reported, a beacon is not", () => {
+  // The filing POST came back with mediaEvidenceUuids already populated and no
+  // upload call in the report: an evidence image goes to a presigned URL on a
+  // storage host, and first-party-only filtering threw it away.
+  const put = (url: string) => interestingCall(url, "https://turo.com/", "PUT");
+  const post = (url: string) => interestingCall(url, "https://turo.com/", "POST");
+  assert.equal(put("https://turo-media.s3.amazonaws.com/abc123?X-Amz-Signature=x"), true);
+  assert.equal(post("https://uploads.turo.com/media"), true);
+  assert.equal(post("https://some-cdn.example.com/upload"), true, "cannot be named in advance");
+  // Measurement stays out, however it is written to.
+  assert.equal(post("https://bam.nr-data.net/jserrors/1/abc"), false);
+  assert.equal(post("https://www.google.com/ccm/collect?en=x"), false);
+  assert.equal(post("https://cmp.osano.com/x/y/z"), false);
+  assert.equal(post("https://api.segment.io/v1/t"), false);
+  // Reads are still first party only, so a page's fonts and CDNs stay quiet.
+  assert.equal(interestingCall("https://fonts.googleapis.com/css", "https://turo.com/", "GET"), false);
+});
+
+test("the probe's own descriptors survive the masker", () => {
+  // The upload reported `file: str(28)`, and 28 is the length of
+  // "<file image/png 92579 bytes>" — the masker ate the one field written to
+  // describe the upload, leaving a number that looks like a short string.
+  assert.equal(stringShape("<file image/png 92579 bytes>"), "<file image/png 92579 bytes>");
+  assert.equal(stringShape("<text 130>"), "<text 130>");
+  assert.equal(stringShape("<blob application/pdf 4096 bytes>"), "<blob application/pdf 4096 bytes>");
+  // Not a licence to pass through anything in angle brackets: a value is still
+  // a value, and markup is not a descriptor.
+  assert.equal(stringShape("<Marguerite Whitfield>"), "str(22)");
+  assert.equal(stringShape("<p>hello</p>"), "str(12)");
+});
+
+test("an uploaded file is legible in the report", () => {
+  const report = summariseCalls([
+    {
+      method: "POST",
+      url: "https://turo.com/api/reservation/image",
+      status: 200,
+      request: { "<multipart>": { file: "<file image/png 92579 bytes>", reservationId: 58626257 } },
+      body: { uuid: "7a1f0b2c-1111-2222-3333-444455556666", step: "TRIP_PHOTO" },
+    },
+  ]);
+  assert.match(report, /file: <file image\/png 92579 bytes>/);
+  assert.match(report, /reservationId: int/);
+});
+
+// ---------------------------------------------------------------------------
+// Saying what a filing did
+// ---------------------------------------------------------------------------
+
+test("a filing says who was asked and for how much", () => {
+  const out = describeFiling({
+    filed: true, guest: "Alice", amountCents: 1151, reservation: "58626257", daysLeft: 4,
+  });
+  assert.match(out, /Filed for \$11\.51 to Alice on reservation 58626257/);
+  assert.match(out, /4 day\(s\) left/, "the deadline, while it is still close");
+});
+
+test("a comfortable deadline is not mentioned", () => {
+  const out = describeFiling({
+    filed: true, guest: "Alice", amountCents: 1151, reservation: "58626257", daysLeft: 60,
+  });
+  assert.ok(!out.includes("day(s) left"), out);
+});
+
+test("a failure names the amount as well as the reason", () => {
+  // "It did not work" about an unknown sum is not something anyone can act on.
+  const out = describeFiling({
+    filed: false, reason: "upload: Turo said 413", amountCents: 1151,
+  });
+  assert.match(out, /Not filed for \$11\.51 — upload: Turo said 413/);
+});
+
+test("nothing to file is not reported as a failure to file", () => {
+  assert.equal(describeFiling({ filed: false, reason: "nothing to file" }), "Not filed — nothing to file");
 });

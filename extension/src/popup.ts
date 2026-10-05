@@ -10,7 +10,7 @@
  *          point of it is not having to remember to do this by hand.
  */
 
-import { describePull } from "./turo.js";
+import { describeFiling, describePull } from "./turo.js";
 import type { MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 const exportBtn = document.getElementById("exportBtn") as HTMLButtonElement;
@@ -329,6 +329,30 @@ probeBtn.addEventListener("click", async () => {
   } finally {
     probeBtn.disabled = false;
     probeNoteEl.classList.add("hidden");
+  }
+});
+
+const fileBtn = document.getElementById("fileBtn") as HTMLButtonElement;
+const fileResultEl = document.getElementById("fileResult") as HTMLDivElement;
+
+fileBtn.addEventListener("click", async () => {
+  reset();
+  fileResultEl.classList.add("hidden");
+  fileBtn.disabled = true;
+  try {
+    const tab = await turoTab();
+    if (!tab?.id) return;
+    showStatus("Drafting, attaching the evidence and filing...");
+    const reply = await send(null, { type: "FILE_INVOICE", tabId: tab.id });
+    if (reply.type === "FILE_INVOICE_ERROR") throw new Error(reply.error);
+    if (reply.type !== "FILE_INVOICE_RESULT") throw new Error("Unexpected response from the worker.");
+    statusEl.classList.add("hidden");
+    fileResultEl.textContent = describeFiling(reply.result);
+    fileResultEl.classList.remove("hidden");
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    fileBtn.disabled = false;
   }
 });
 

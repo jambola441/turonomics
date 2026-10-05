@@ -42,8 +42,16 @@ const ENUM_TOKEN = /^[A-Za-z]+(?:[_-][A-Za-z]+)*$/;
 // masked exactly the field the probe existed to find.
 const MAX_ENUM_LENGTH = 64;
 
+// A descriptor this probe wrote itself: "<file image/png 92579 bytes>",
+// "<text 20>", "<blob …>". They are structure by construction and must survive
+// the masker, which otherwise reduces them to their own length — the upload
+// call reported `file: str(28)`, and 28 is the length of
+// "<file image/png 92579 bytes>", the one field written to describe it.
+const OWN_DESCRIPTOR = /^<[a-z]+[^<>]*>$/;
+
 export function stringShape(value: string): string {
   if (value === "") return "str(0)";
+  if (OWN_DESCRIPTOR.test(value)) return value;
   if (ISO_DATETIME.test(value)) return "iso-datetime";
   if (ISO_DATE.test(value)) return "iso-date";
   if (MONEY.test(value)) return "money";
@@ -160,6 +168,10 @@ const ASSET = /\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|map)$/i;
 // First party by host and still not Turo's data: Cloudflare's RUM beacon and
 // Turo's own analytics collector, both of which answer 204 or HTML.
 const FIRST_PARTY_NOISE = /^\/(?:cdn-cgi\/|api\/tracking$)/i;
+// Hosts whose only business is measurement. Everything else that is written to
+// is worth seeing, including storage hosts nobody can name in advance.
+const ANALYTICS =
+  /(?:nr-data\.net|segment\.(?:io|com)|sentry\.io|datadoghq|googletagmanager|google-analytics|google\.com|doubleclick|osano|fullstory|launchdarkly|optimizely|facebook\.com|bing\.com|clarity\.ms)$|^(?:[a-z0-9-]+\.)*(?:nr-data\.net|osano\.com)$/i;
 
 export function interestingCall(
   url: string,
@@ -172,11 +184,18 @@ export function interestingCall(
   } catch {
     return false;
   }
+  // A write is reported wherever it goes, unless it is going somewhere whose
+  // only business is analytics. First party only was too narrow and cost a
+  // real finding: the filing POST came back carrying `mediaEvidenceUuids`,
+  // meaning the evidence image had already been uploaded — and the upload
+  // itself was missing from the report, because an image goes to a presigned
+  // URL on a storage host rather than to turo.com.
+  //
+  // A denylist rather than an allowlist, because the storage host cannot be
+  // guessed in advance and the analytics vendors can: they are the ones
+  // already seen beaconing from these pages.
+  if (method.toUpperCase() !== "GET") return !ANALYTICS.test(parsed.hostname);
   if (!FIRST_PARTY.test(parsed.hostname)) return false;
-  // A write to Turo is never noise, whatever its route looks like. The filing
-  // POST and the image upload are the two calls this exists to catch, and
-  // guessing their paths in advance is exactly what cannot be done.
-  if (method.toUpperCase() !== "GET") return true;
   if (FIRST_PARTY_NOISE.test(parsed.pathname)) return false;
   return !ASSET.test(parsed.pathname);
 }
@@ -234,7 +253,7 @@ export function summariseCalls(calls: SeenCall[]): string {
 // The lesson is the one this file keeps relearning: an absence reported by a
 // tool is a claim about the tool first.
 
-import type { TuroPullResult } from "./types.js";
+import type { FileInvoiceResult, TuroPullResult } from "./types.js";
 
 /** A blob of JSON found in the document. */
 export interface Embedded {
@@ -359,4 +378,22 @@ export function describePull(result: TuroPullResult): string {
   if (result.failed) parts.push(`${result.failed} Turo would not return`);
   if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
   return parts.join(" · ");
+}
+
+
+/** What a filing did, in one line. */
+export function describeFiling(result: FileInvoiceResult): string {
+  const money =
+    result.amountCents === undefined ? "" : ` for $${(result.amountCents / 100).toFixed(2)}`;
+  if (!result.filed) {
+    // The amount is named even on a failure, because "it did not work" about
+    // an unknown sum is not something anyone can act on.
+    return result.reason ? `Not filed${money} — ${result.reason}` : `Not filed${money}`;
+  }
+  const who = result.guest ? ` to ${result.guest}` : "";
+  const urgency =
+    result.daysLeft !== undefined && result.daysLeft <= 7
+      ? ` (${result.daysLeft} day(s) left on it)`
+      : "";
+  return `Filed${money}${who} on reservation ${result.reservation}${urgency}`;
 }

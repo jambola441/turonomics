@@ -43,7 +43,9 @@
              with no year in them. Turo's pages get their data as JSON; this
              finds out from where. The report names the shape of each payload
              and masks every value, so it is safe to paste. -->
-        <button id="pullBtn" class="btn">Pull trips from Turo</button>
+        <button id="fileBtn" class="btn">File the next toll invoice</button>
+        <div id="fileResult" class="result hidden"></div>
+        <button id="pullBtn" class="btn btn-quiet">Pull trips from Turo</button>
         <div id="pullResult" class="result hidden"></div>
         <details id="pullReportWrap" class="report hidden">
           <summary>What came back</summary>

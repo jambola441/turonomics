@@ -121,6 +121,82 @@ So Turo's cut is a fee on some charge types and not others, and it is itemised
 rather than inferred. An invoice's toll line is gross either way, which is why
 it reconciles against a statement and the total does not.
 
+## Filing a reimbursement
+
+Observed 2026-10-05 by watching a real toll invoice being filed for
+reservation 58626257, with the extension's watch mode.
+
+### `GET /api/reservations/<id>/reimbursement-options`
+
+What may be claimed, and how much:
+
+```
+alreadyRequested: {amount, currencyCode}
+maximumReimbursementPerTrip: {amount, currencyCode}
+maximumReimbursementRequestAmount: int
+options: [{
+  itemType: TOLLS | TICKETS
+  name, description, shortDescription, unit: CURRENCY
+  reimbursementCalculationDto: {
+    type:            TOLL_REIMBURSEMENT | TICKET_REIMBURSEMENT
+    invoiceItemType: TOLL_REIMBURSEMENT | TICKET_REIMBURSEMENT
+    reimbursementInputUnit: CURRENCY
+    maxReimbursementAmount: {amount, currencyCode}
+    hostEarningsCalculationDto: {hostEarningsTakeRate, hostEarningsUnitCost}
+  }
+}]
+tripInfo: {tripStart, tripEnd, timeZone, guestFirstName, hostFirstName, …}
+```
+
+`hostEarningsTakeRate` is the ×0.9 that the email shapes note recorded as a
+mystery, stated per item type rather than inferred from two invoices. The
+three caps — `alreadyRequested`, `maximumReimbursementPerTrip` and
+`maximumReimbursementRequestAmount` — are worth reading before filing rather
+than after being refused.
+
+### `POST /api/<locale>/reimbursement/<reservationId>/request`
+
+```
+sent: {
+  items: [{
+    amount: num                     # dollars, not cents
+    itemType: TOLLS                 # from reimbursement-options
+    invoiceItemType: null           # null on the wire, despite the options
+    mediaEvidenceUuids: [uuid]      # evidence, uploaded beforehand
+  }]
+  message: str                      # the host's note to the guest
+  automatedTollTransactionsDto: {transactionUuids: []}
+  automatedOnTripEVTransactionsDto: null
+  evPostTripRechargingBatteryLevelsDto: null
+}
+-> {messageUuid: uuid, reimbursementId: int}
+```
+
+Two things to note before building on this.
+
+**`mediaEvidenceUuids` comes from a separate upload**, observed on the second
+run:
+
+```
+POST /api/reservation/image                       # multipart, same origin
+  sent: {file: <file image/png 92579 bytes>, reservationId: int}
+-> {uuid, imageId, step: TRIP_PHOTO, photographerDriverRole: HOST, success}
+```
+
+The `uuid` from that response is what goes in `mediaEvidenceUuids`. So filing
+is two calls, in order: upload, then request. No presigned storage host and no
+separate media service — the guess that the upload must have gone off-origin
+was wrong, though the widened write filter it prompted is worth keeping.
+
+Note the image is uploaded as `step: TRIP_PHOTO`, the same bucket as the
+check-in photos, rather than as anything invoice-specific. Evidence is a trip
+photo that a reimbursement happens to point at.
+
+**`automatedTollTransactionsDto.transactionUuids` was empty** on a manual
+filing. Turo evidently has its own automated toll feed, and those uuids are
+presumably its transactions rather than ours. Filing with an empty list and an
+amount works, which is the path this app would take.
+
 ## Also present
 
 | endpoint | carries |

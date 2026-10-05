@@ -25,6 +25,7 @@ import {
   type ScrapedPage,
   type ScrapedTable,
 } from "./tolls.js";
+import { summariseCalls, type SeenCall } from "./turo.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -344,12 +345,73 @@ async function fetchExportInPage(url: string): Promise<string | null> {
   }
 }
 
+/**
+ * Find out which endpoints a Turo page gets its data from.
+ *
+ * The recorder has to be in place before React makes its first call, and a
+ * reload wipes anything injected into the current document. So the hook is
+ * registered as a document_start content script in the page's own world, the
+ * tab is reloaded, and it is unregistered afterwards — a probe that outlives
+ * the question would sit in every Turo page the host opens.
+ */
+async function probeTuro(tabId: number): Promise<string> {
+  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  await chrome.scripting.registerContentScripts([
+    {
+      id: HOOK_ID,
+      matches: ["https://turo.com/*"],
+      js: ["dist/turo-hook.js"],
+      runAt: "document_start",
+      world: "MAIN",
+    },
+  ]);
+  try {
+    await chrome.tabs.reload(tabId);
+    await waitForTab(tabId);
+    // The page is "complete" before its data arrives: a React route fetches
+    // after it paints. Polling until the count stops growing beats a fixed
+    // wait, which was either too short for the invoice hub or too long for
+    // everything else.
+    let previous = -1;
+    for (let attempt = 0; attempt < HOOK_POLLS; attempt++) {
+      await new Promise((resolve) => setTimeout(resolve, HOOK_POLL_MS));
+      const seen = await inPage(tabId, () => {
+        const w = window as Window & { __turonomicsCalls?: unknown[] };
+        return w.__turonomicsCalls?.length ?? 0;
+      }, [], 12, "MAIN");
+      if (seen > 0 && seen === previous) break;
+      previous = seen;
+    }
+    const calls = await inPage(tabId, () => {
+      const w = window as Window & { __turonomicsCalls?: unknown[] };
+      return (w.__turonomicsCalls ?? []) as SeenCall[];
+    }, [], 12, "MAIN");
+    return summariseCalls(calls);
+  } finally {
+    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  }
+}
+
+const HOOK_ID = "turonomics-turo-hook";
+const HOOK_POLLS = 10;
+const HOOK_POLL_MS = 900;
+
+/** Resolve once the tab has finished loading. */
+async function waitForTab(tabId: number): Promise<void> {
+  for (let attempt = 0; attempt < 40; attempt++) {
+    const tab = await chrome.tabs.get(tabId).catch(() => null);
+    if (tab?.status === "complete") return;
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+}
+
 /** Run a function in the page, retrying while a navigation is in flight. */
 async function inPage<Args extends unknown[], R>(
   tabId: number,
   func: (...args: Args) => R,
   args: Args,
-  tries = 12
+  tries = 12,
+  world?: chrome.scripting.ExecutionWorld
 ): Promise<R> {
   let lastError: unknown = null;
   for (let attempt = 0; attempt < tries; attempt++) {
@@ -358,6 +420,7 @@ async function inPage<Args extends unknown[], R>(
         target: { tabId },
         func,
         args,
+        ...(world ? { world } : {}),
       });
       return result.result as R;
     } catch (error) {
@@ -491,6 +554,18 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
       (error: unknown) =>
         sendResponse({
           type: "SEND_TOLLS_ERROR",
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies MessageType)
+    );
+    return true; // async response
+  }
+
+  if (message.type === "PROBE_TURO") {
+    probeTuro(message.tabId).then(
+      (report) => sendResponse({ type: "PROBE_TURO_RESULT", report } satisfies MessageType),
+      (error: unknown) =>
+        sendResponse({
+          type: "PROBE_TURO_ERROR",
           error: error instanceof Error ? error.message : String(error),
         } satisfies MessageType)
     );

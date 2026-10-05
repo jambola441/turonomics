@@ -251,6 +251,48 @@ void (async () => {
   if (stored.tollsToken) tollsTokenEl.value = String(stored.tollsToken);
 })();
 
+// ---------------------------------------------------------------------------
+// "What does this page fetch?"
+// ---------------------------------------------------------------------------
+const probeBtn = document.getElementById("probeBtn") as HTMLButtonElement;
+const probeNoteEl = document.getElementById("probeNote") as HTMLDivElement;
+const probeReportWrap = document.getElementById("probeReportWrap") as HTMLDetailsElement;
+const probeReportEl = document.getElementById("probeReport") as HTMLPreElement;
+const probeCopyBtn = document.getElementById("probeCopy") as HTMLButtonElement;
+
+probeBtn.addEventListener("click", async () => {
+  reset();
+  probeReportWrap.classList.add("hidden");
+  probeBtn.disabled = true;
+  probeNoteEl.classList.remove("hidden");
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
+      showStatus("Open a Turo page first — a trip, or an invoice.", true);
+      return;
+    }
+    showStatus("Reloading and watching what it fetches...");
+    const reply = await send(null, { type: "PROBE_TURO", tabId: tab.id });
+    if (reply.type === "PROBE_TURO_ERROR") throw new Error(reply.error);
+    if (reply.type !== "PROBE_TURO_RESULT") throw new Error("Unexpected response from the worker.");
+    statusEl.classList.add("hidden");
+    probeReportEl.textContent = reply.report;
+    probeReportWrap.classList.remove("hidden");
+    probeReportWrap.open = true;
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    probeBtn.disabled = false;
+    probeNoteEl.classList.add("hidden");
+  }
+});
+
+probeCopyBtn.addEventListener("click", async () => {
+  await navigator.clipboard.writeText(probeReportEl.textContent ?? "");
+  probeCopyBtn.textContent = "Copied";
+  setTimeout(() => (probeCopyBtn.textContent = "Copy"), 1500);
+});
+
 saveSettingsBtn.addEventListener("click", async () => {
   await chrome.storage.local.set({
     apiBase: apiBaseEl.value.trim(),

@@ -371,3 +371,88 @@ def test_two_identical_looking_crossings_are_kept_apart_by_their_ids(session, je
     session.commit()
     assert result.imported == 2, "two charges, two rows"
     assert sum(t.amount_cents for t in session.scalars(select(Toll))) == 572
+
+
+# ---------------------------------------------------------------------------
+# The write endpoints
+# ---------------------------------------------------------------------------
+# These change a figure the operator bills a guest, and the API has no login.
+# Open by default, closed by TOLLS_TOKEN — so the thing worth testing is that
+# the variable actually closes them, and that a reader is not asked for a
+# secret to look at the ledger.
+
+
+def _statement() -> bytes:
+    return _csv(_row("1", "NY LZA7293", "10/01/2026", "09:00:00 AM", "-9.11")).encode()
+
+
+def test_importing_is_open_when_no_token_is_set(api_client, monkeypatch):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    response = api_client.post(
+        "/api/tolls/import", files={"statement": ("activity.csv", _statement(), "text/csv")}
+    )
+    assert response.status_code == 200
+    assert response.json()["imported"] == 1
+
+
+def test_importing_without_the_token_is_refused_once_one_is_set(api_client, monkeypatch):
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    response = api_client.post(
+        "/api/tolls/import", files={"statement": ("activity.csv", _statement(), "text/csv")}
+    )
+    assert response.status_code == 401
+
+
+def test_importing_with_the_token_is_allowed(api_client, monkeypatch, session):
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    response = api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("activity.csv", _statement(), "text/csv")},
+        headers={"Authorization": "Bearer letmein"},
+    )
+    assert response.status_code == 200
+    assert session.scalar(select(Toll).where(Toll.license_plate == "LZA7293")) is not None
+
+
+def test_a_near_miss_token_is_refused(api_client, monkeypatch):
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    response = api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("activity.csv", _statement(), "text/csv")},
+        headers={"Authorization": "Bearer letmei"},
+    )
+    assert response.status_code == 401
+
+
+def test_rematching_and_ticking_are_behind_the_same_token(api_client, monkeypatch, session, jerry):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post(
+        "/api/tolls/import", files={"statement": ("activity.csv", _statement(), "text/csv")}
+    )
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    assert api_client.post("/api/tolls/rematch").status_code == 401
+    assert api_client.post(f"/api/tolls/{toll.id}/recovered").status_code == 401
+
+    auth = {"Authorization": "Bearer letmein"}
+    assert api_client.post("/api/tolls/rematch", headers=auth).status_code == 200
+    assert api_client.post(f"/api/tolls/{toll.id}/recovered", headers=auth).status_code == 200
+
+
+def test_reading_the_ledger_never_needs_a_token(api_client, monkeypatch):
+    """A token on the reads would mean the page cannot render at all.
+
+    It also would not protect much: the rest of this API serves fleet positions
+    and trip history unauthenticated. The token is about writes.
+    """
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    response = api_client.get("/api/tolls")
+    assert response.status_code == 200
+    assert response.json()["token_required"] is True
+
+
+def test_the_ledger_says_when_no_token_is_needed(api_client, monkeypatch):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    assert api_client.get("/api/tolls").json()["token_required"] is False

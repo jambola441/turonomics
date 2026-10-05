@@ -9,11 +9,14 @@ back-office thing, to the benefit of neither.
 
 from __future__ import annotations
 
+import hmac
+import logging
+import os
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -22,6 +25,8 @@ from turonomics_api.db.base import get_session
 from turonomics_api.db.models import Toll
 from turonomics_api.ingest.tolls import import_tolls, rematch_unattributed
 
+log = logging.getLogger("turonomics.routers.tolls")
+
 router = APIRouter(prefix="/api/tolls", tags=["tolls"])
 
 DbSession = Annotated[Session, Depends(get_session)]
@@ -29,6 +34,29 @@ DbSession = Annotated[Session, Depends(get_session)]
 # A statement is a few hundred rows. Enough that the page is not paginated,
 # capped so a mistaken upload cannot ask the database for everything at once.
 DEFAULT_LIMIT = 500
+
+
+def require_token(authorization: str | None) -> None:
+    """Enforce ``TOLLS_TOKEN`` on the writes if it is set; allow all if not.
+
+    Open by default for the same reason ``/api/push`` is: the app has no login,
+    and an upload button the operator cannot use without first inventing a
+    token is worse than one they have to protect. It is a weaker argument here
+    than it is there, though, and worth being plain about — a stranger who
+    posts a statement does not read anything, they add invented charges to the
+    figure this fleet bills its guests. Set the variable.
+    """
+    expected = os.environ.get("TOLLS_TOKEN", "").strip()
+    if not expected:
+        return
+    supplied = (authorization or "").removeprefix("Bearer ").strip()
+    # Constant time: a token is a secret, and a timing oracle is a slow leak.
+    if not supplied or not hmac.compare_digest(supplied, expected):
+        raise HTTPException(401, "bad or missing token")
+
+
+def token_configured() -> bool:
+    return bool(os.environ.get("TOLLS_TOKEN", "").strip())
 
 
 class TollRow(BaseModel):
@@ -52,6 +80,9 @@ class TollsResponse(BaseModel):
     unrecovered_cents: int
     unattributed_cents: int
     unknown_tags: list[str]
+    # Whether the writes need a token. The page asks for one up front rather
+    # than discovering it from a failed upload.
+    token_required: bool = False
 
 
 class ImportResponse(BaseModel):
@@ -125,16 +156,22 @@ def list_tolls(
         unrecovered_cents=int(unrecovered),
         unattributed_cents=int(unattributed),
         unknown_tags=sorted(t for t in unknown if t),
+        token_required=token_configured(),
     )
 
 
 @router.post("/import", response_model=ImportResponse)
-async def import_statement(session: DbSession, statement: UploadFile) -> ImportResponse:
+async def import_statement(
+    session: DbSession,
+    statement: UploadFile,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ImportResponse:
     """Read an EZPass account-activity CSV and attribute every crossing.
 
     Only the statement. The Turo half of the old two-file upload is redundant
     now that trips are stored with their guests and windows.
     """
+    require_token(authorization)
     content = await statement.read()
     try:
         result = import_tolls(session, content)
@@ -154,13 +191,17 @@ async def import_statement(session: DbSession, statement: UploadFile) -> ImportR
 
 
 @router.post("/rematch", response_model=ImportResponse)
-def rematch(session: DbSession) -> ImportResponse:
+def rematch(
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ImportResponse:
     """Re-attribute tolls after binding a transponder or fixing a plate.
 
     Re-importing the statement will not do it: those rows are already known, so
     the importer skips them and nothing changes. This is the thing to call once
     a tag has a car.
     """
+    require_token(authorization)
     fixed = rematch_unattributed(session)
     session.commit()
     still_loose = (
@@ -180,8 +221,14 @@ def rematch(session: DbSession) -> ImportResponse:
 
 
 @router.post("/{toll_id}/recovered", response_model=TollRow)
-def mark_recovered(toll_id: uuid.UUID, session: DbSession, undo: bool = False) -> TollRow:
+def mark_recovered(
+    toll_id: uuid.UUID,
+    session: DbSession,
+    undo: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
+) -> TollRow:
     """Tick a toll off once it has been billed back, or untick it."""
+    require_token(authorization)
     toll = session.get(Toll, toll_id)
     if toll is None:
         raise HTTPException(404, "no toll with that id")

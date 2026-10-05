@@ -2,9 +2,18 @@
   "manifest_version": 3,
   "name": "Turonomics",
   "version": "1.0.0",
-  "description": "Export Turo host trip history (last 90 days) as CSV",
-  "permissions": ["downloads", "scripting", "tabs"],
-  "host_permissions": ["https://turo.com/*"],
+  "description": "Export Turo host trip history, and send an E-ZPass statement to Turonomics",
+  "permissions": [
+    "downloads",
+    "scripting",
+    "tabs",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://turo.com/*",
+    "https://*.e-zpassny.com/*",
+    "https://turonomics.onrender.com/*"
+  ],
   "background": {
     "service_worker": "dist/background.js",
     "type": "module"
@@ -15,8 +24,21 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://turo.com/*"],
-      "js": ["dist/content.js"],
+      "matches": [
+        "https://turo.com/*"
+      ],
+      "js": [
+        "dist/content.js"
+      ],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*.e-zpassny.com/*"
+      ],
+      "js": [
+        "dist/ezpass.js"
+      ],
       "run_at": "document_idle"
     }
   ]

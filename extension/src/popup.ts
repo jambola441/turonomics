@@ -1,14 +1,16 @@
 /**
  * Popup script — runs in the extension popup window.
  *
- * Flow:
- * 1. User clicks "Export Last 90 Days"
- * 2. We find the active turo.com tab and inject the content script if needed
- * 3. We send SCRAPE_TRIPS to the content script and wait for the response
- * 4. On success, send DOWNLOAD_CSV to the background worker
+ * Two flows, the same shape:
+ *
+ * Turo:    find the turo.com tab → SCRAPE_TRIPS → DOWNLOAD_CSV, and a file
+ *          lands in Downloads.
+ * E-ZPass: find the e-zpassny.com tab → SCRAPE_TOLLS → SEND_TOLLS, and the
+ *          statement goes straight to the API. No file in between, because the
+ *          point of it is not having to remember to do this by hand.
  */
 
-import type { MessageType, TuroTrip } from "./types.js";
+import type { MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 const exportBtn = document.getElementById("exportBtn") as HTMLButtonElement;
 const statusEl = document.getElementById("status") as HTMLDivElement;
@@ -108,4 +110,151 @@ exportBtn.addEventListener("click", async () => {
   } finally {
     exportBtn.disabled = false;
   }
+});
+
+
+// ---------------------------------------------------------------------------
+// E-ZPass → the API
+// ---------------------------------------------------------------------------
+const tollsBtn = document.getElementById("tollsBtn") as HTMLButtonElement;
+const tollsResultEl = document.getElementById("tollsResult") as HTMLDivElement;
+const tollsReportWrap = document.getElementById("tollsReportWrap") as HTMLDetailsElement;
+const tollsReportEl = document.getElementById("tollsReport") as HTMLPreElement;
+
+const apiBaseEl = document.getElementById("apiBase") as HTMLInputElement;
+const tollsTokenEl = document.getElementById("tollsToken") as HTMLInputElement;
+const saveSettingsBtn = document.getElementById("saveSettings") as HTMLButtonElement;
+const settingsSavedEl = document.getElementById("settingsSaved") as HTMLDivElement;
+
+function showReport(report: string | undefined): void {
+  if (!report) {
+    tollsReportWrap.classList.add("hidden");
+    return;
+  }
+  tollsReportEl.textContent = report;
+  tollsReportWrap.classList.remove("hidden");
+  tollsReportWrap.open = true;
+}
+
+async function getActiveEzPassTab(): Promise<chrome.tabs.Tab | null> {
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  const tab = tabs[0];
+  if (!tab?.url?.includes("e-zpassny.com")) return null;
+  return tab;
+}
+
+function send<T extends MessageType>(target: number | null, message: MessageType): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const callback = (response: MessageType | undefined) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+        return;
+      }
+      if (!response) {
+        reject(new Error("No response."));
+        return;
+      }
+      resolve(response as T);
+    };
+    if (target === null) chrome.runtime.sendMessage(message, callback);
+    else chrome.tabs.sendMessage(target, message, callback);
+  });
+}
+
+/** What came back, in a sentence, including the cases that are not successes. */
+function describeImport(result: SendTollsResult): { text: string; isError: boolean } {
+  if (result.problem) {
+    return { text: `The API refused the file: ${result.problem}`, isError: true };
+  }
+  if (!result.result) {
+    return {
+      text: "Nothing on this page looked like account activity. Open the activity page and try again.",
+      isError: true,
+    };
+  }
+  const { rows, imported, already_known, matched, unmatched, unknown_tags } = result.result;
+  if (rows > 0 && imported === 0 && already_known === 0) {
+    // Read rows, stored none. Almost always the sign convention: a download
+    // writes charges negative and the API skips positive rows as payments.
+    return {
+      text:
+        `Read ${rows} rows and kept none. ` +
+        (result.amountsLookPositive
+          ? "This page shows charges as positive, which the API reads as payments."
+          : "Nothing in the file parsed as a toll charge."),
+      isError: true,
+    };
+  }
+  const parts = [`${rows} rows read`, `${imported} new`];
+  if (already_known) parts.push(`${already_known} already on file`);
+  parts.push(`${matched} attributed`);
+  if (unmatched) parts.push(`${unmatched} with nobody to bill`);
+  if (unknown_tags.length) {
+    parts.push(`${unknown_tags.length} unbound tag(s): ${unknown_tags.join(", ")}`);
+  }
+  return { text: parts.join(" · "), isError: false };
+}
+
+tollsBtn.addEventListener("click", async () => {
+  reset();
+  tollsResultEl.classList.add("hidden");
+  showReport(undefined);
+  tollsBtn.disabled = true;
+  showStatus("Looking for an E-ZPass tab...");
+
+  try {
+    const tab = await getActiveEzPassTab();
+    if (!tab?.id) {
+      showStatus("No active E-ZPass tab. Log in and open Account Activity first.", true);
+      return;
+    }
+
+    // The tab may predate the extension being installed, in which case the
+    // manifest's content script never ran in it.
+    await chrome.scripting
+      .executeScript({ target: { tabId: tab.id }, files: ["dist/ezpass.js"] })
+      .catch(() => undefined);
+
+    showStatus("Reading the page...");
+    const page = await send(tab.id, { type: "SCRAPE_TOLLS" });
+    if (page.type === "TOLLS_PAGE_ERROR") throw new Error(page.error);
+    if (page.type !== "TOLLS_PAGE") throw new Error("Unexpected response from the page.");
+
+    showStatus("Sending the statement...");
+    const sent = await send(null, { type: "SEND_TOLLS", page: page.page });
+    if (sent.type === "SEND_TOLLS_ERROR") throw new Error(sent.error);
+    if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");
+
+    const described = describeImport(sent.result);
+    if (described.isError) {
+      showStatus(described.text, true);
+      showReport(sent.result.report);
+    } else {
+      statusEl.classList.add("hidden");
+      tollsResultEl.textContent = described.text;
+      tollsResultEl.classList.remove("hidden");
+    }
+  } catch (err) {
+    showStatus(err instanceof Error ? err.message : String(err), true);
+  } finally {
+    tollsBtn.disabled = false;
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Settings
+// ---------------------------------------------------------------------------
+void (async () => {
+  const stored = await chrome.storage.local.get(["apiBase", "tollsToken"]);
+  if (stored.apiBase) apiBaseEl.value = String(stored.apiBase);
+  if (stored.tollsToken) tollsTokenEl.value = String(stored.tollsToken);
+})();
+
+saveSettingsBtn.addEventListener("click", async () => {
+  await chrome.storage.local.set({
+    apiBase: apiBaseEl.value.trim(),
+    tollsToken: tollsTokenEl.value.trim(),
+  });
+  settingsSavedEl.classList.remove("hidden");
+  setTimeout(() => settingsSavedEl.classList.add("hidden"), 1500);
 });

@@ -189,6 +189,14 @@ TOLLS = [
 ]
 
 
+# The stub demands a token, because the page's behaviour when one is required
+# is the part worth checking: it has to ask for it, keep it, and send it. Set to
+# a list so the handler can record what actually arrived on the wire — a page
+# that prompts and then forgets to send the header would otherwise look fine.
+TOLLS_TOKEN = "letmein"
+SEEN_AUTH: list[str] = []
+
+
 def _tolls_payload() -> dict:
     """Recomputed per request, so a tick changes what the next load reports.
 
@@ -206,6 +214,7 @@ def _tolls_payload() -> dict:
         "unrecovered_cents": sum(t["amount_cents"] for t in TOLLS if not t["recovered_at"]),
         "unattributed_cents": sum(t["amount_cents"] for t in TOLLS if not t["trip_id"]),
         "unknown_tags": unknown,
+        "token_required": True,
     }
 
 
@@ -224,15 +233,33 @@ class Handler(BaseHTTPRequestHandler):
         self._send({})
 
     def do_GET(self) -> None:
-        if self.path.startswith("/api/tolls"):
+        if self.path.startswith("/seen-auth"):
+            self._send({"seen": SEEN_AUTH})
+        elif self.path.startswith("/api/tolls"):
             self._send(_tolls_payload())
         elif "/spots" in self.path:
             self._send(SPOTS)
         else:
             self._send(FLEET)
 
+    def _authorized(self) -> bool:
+        supplied = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
+        SEEN_AUTH.append(supplied)
+        if supplied == TOLLS_TOKEN:
+            return True
+        body = b'{"detail":"bad or missing token"}'
+        self.send_response(401)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        return False
+
     def do_POST(self) -> None:
         path, _, query = self.path.partition("?")
+        if path.startswith("/api/tolls") and not self._authorized():
+            return
         if path.endswith("/recovered"):
             toll_id = path.split("/")[-2]
             undo = "undo=true" in query

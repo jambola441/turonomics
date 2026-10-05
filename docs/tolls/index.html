@@ -176,6 +176,49 @@
 
   var state = { data: null, owedOnly: false, busy: false };
 
+  // The writes change what a guest gets billed, so the API can be set to
+  // require a token (TOLLS_TOKEN). Kept per browser rather than in the page:
+  // this is a static file served to anyone who has the URL, so a secret
+  // committed into it would not be one.
+  var TOKEN_KEY = "turonomics.tolls.token";
+
+  function token() {
+    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
+  }
+
+  function rememberToken(value) {
+    try {
+      if (value) localStorage.setItem(TOKEN_KEY, value);
+      else localStorage.removeItem(TOKEN_KEY);
+    } catch (e) { /* private window: it just has to be re-entered */ }
+  }
+
+  // Asked for before the write, not after a 401, because the alternative is
+  // losing the file the operator just picked.
+  function ensureToken() {
+    if (!state.data || !state.data.token_required) return true;
+    if (token()) return true;
+    var entered = window.prompt("This API needs the tolls token (TOLLS_TOKEN) to make changes.");
+    if (!entered) return false;
+    rememberToken(entered.trim());
+    return true;
+  }
+
+  function authHeaders() {
+    var value = token();
+    return value ? { Authorization: "Bearer " + value } : {};
+  }
+
+  // A rejected token is a wrong token. Forgetting it means the next attempt
+  // asks again rather than failing the same way forever.
+  function handleStatus(r) {
+    if (r.status === 401) {
+      rememberToken("");
+      throw new Error("the token was rejected — it will be asked for again");
+    }
+    return r;
+  }
+
   function el(id) { return document.getElementById(id); }
 
   // Cents in, string out, no float ever. The API stores integer cents for the
@@ -337,11 +380,12 @@
   // collected, so it shows what the server came back with, not what was
   // tapped.
   function recover(toll) {
-    if (state.busy) return;
+    if (state.busy || !ensureToken()) return;
     state.busy = true;
     var undo = !!toll.recovered_at;
     fetch(API + "/api/tolls/" + toll.id + "/recovered?undo=" + (undo ? "true" : "false"),
-          { method: "POST" })
+          { method: "POST", headers: authHeaders() })
+      .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
         return r.json();
@@ -352,14 +396,16 @@
   }
 
   function upload(file) {
-    if (!file || state.busy) return;
+    if (!file || state.busy || !ensureToken()) return;
     state.busy = true;
     var form = new FormData();
     form.append("statement", file, file.name);
     var result = el("import-result");
     result.hidden = false;
     result.textContent = "Reading " + file.name + "…";
-    fetch(API + "/api/tolls/import", { method: "POST", body: form })
+    fetch(API + "/api/tolls/import",
+          { method: "POST", body: form, headers: authHeaders() })
+      .then(handleStatus)
       .then(function (r) {
         return r.json().then(function (body) {
           // 422 carries the parser's own message, which names the missing
@@ -385,12 +431,13 @@
   }
 
   function rematch() {
-    if (state.busy) return;
+    if (state.busy || !ensureToken()) return;
     state.busy = true;
     var result = el("import-result");
     result.hidden = false;
     result.textContent = "Re-matching…";
-    fetch(API + "/api/tolls/rematch", { method: "POST" })
+    fetch(API + "/api/tolls/rematch", { method: "POST", headers: authHeaders() })
+      .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
         return r.json();

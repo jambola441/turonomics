@@ -4,10 +4,15 @@ on:
   push:
     paths:
       - "api/**"
+      # The parser is tested against a fixture the extension generates, so a
+      # change to it has to run this workflow as well as the extension's.
+      - "examples/ezpass/**"
       - ".github/workflows/ci-api.yml"
   pull_request:
     paths:
       - "api/**"
+      - "examples/ezpass/**"
+      - ".github/workflows/ci-api.yml"
 
 jobs:
   test:

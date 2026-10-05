@@ -73,3 +73,68 @@ h1 {
 .hidden {
   display: none;
 }
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid #e5e5e5;
+}
+
+details summary {
+  font-size: 12px;
+  color: #666;
+  cursor: pointer;
+}
+
+details > *:not(summary) {
+  margin-top: 8px;
+}
+
+.report pre {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 10.5px;
+  line-height: 1.45;
+  background: #f7f7f8;
+  border: 1px solid #e5e5e5;
+  border-radius: 6px;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  /* The report is wide — one line per table, with every column name on it.
+     Wrapping it keeps the popup 280px instead of scrolling sideways. */
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+input[type="url"],
+input[type="password"] {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid #d5d5d8;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+}
+
+.btn-quiet {
+  background: #eceef2;
+  color: #1d3461;
+}
+
+.btn-quiet:hover {
+  background: #e0e3ea;
+}

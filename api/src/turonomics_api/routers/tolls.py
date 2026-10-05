@@ -22,8 +22,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import Toll
-from turonomics_api.ingest.tolls import import_tolls, rematch_unattributed
+from turonomics_api.db.models import Toll, Trip, TripState
+from turonomics_api.ingest.tolls import (
+    import_tolls,
+    nearest_trip,
+    rematch_unattributed,
+)
 from turonomics_api.settings import outside_fleet
 
 log = logging.getLogger("turonomics.routers.tolls")
@@ -74,6 +78,19 @@ class TollRow(BaseModel):
     # Whose car it is, when the crossing belongs to one that is not this
     # fleet's. None for everything else.
     outside_label: str | None = None
+    # The nearest rental to a crossing no rental contains, as a hint about
+    # whose it might have been. Set only for an unattributed crossing on a car
+    # this fleet owns; never an attribution.
+    near_guest: str | None = None
+    near_gap_seconds: int | None = None
+    near_relation: str | None = None
+    near_trip_id: uuid.UUID | None = None
+    # Set when this crossing is billed to a rental it happened *after* — a late
+    # return. Derived rather than stored: the crossing's own time against the
+    # rental's end says it exactly. Surfaced because it is an inference about
+    # whose money this is, and the operator should be able to see and overrule
+    # it rather than find a guest billed for a toll on a hunch.
+    overrun_seconds: int | None = None
 
 
 class TollsResponse(BaseModel):
@@ -114,10 +131,50 @@ def _identifier(toll: Toll) -> str:
     return toll.transponder_id or toll.license_plate or ""
 
 
-def _row(toll: Toll, outside: dict[str, str] | None = None) -> TollRow:
+def _trips_by_vehicle(session: Session, tolls: list[Toll]) -> dict[uuid.UUID, list[Trip]]:
+    """Every rental of every car that has an unattributed crossing, in one query.
+
+    Loaded up front because the alternative is two queries per loose crossing,
+    and a statement leaves a hundred of them.
+    """
+    wanted = {
+        t.vehicle_id for t in tolls if t.vehicle_id is not None and t.trip_id is None
+    }
+    if not wanted:
+        return {}
+    trips = session.scalars(
+        select(Trip).where(
+            Trip.vehicle_id.in_(wanted), Trip.state != TripState.cancelled
+        )
+    ).all()
+    out: dict[uuid.UUID, list[Trip]] = {}
+    for trip in trips:
+        out.setdefault(trip.vehicle_id, []).append(trip)
+    return out
+
+
+def _row(
+    toll: Toll,
+    outside: dict[str, str] | None = None,
+    trips: dict[uuid.UUID, list[Trip]] | None = None,
+) -> TollRow:
     outside = outside if outside is not None else outside_fleet()
+    near = None
+    # Only worth computing for a crossing on one of our cars that nothing has
+    # claimed. An attributed one has its answer, and one on a car outside the
+    # fleet has no rentals to be near.
+    if trips and toll.trip_id is None and toll.vehicle_id is not None:
+        near = nearest_trip(trips.get(toll.vehicle_id, ()), toll.occurred_at)
+    overrun = None
+    if toll.trip is not None and toll.occurred_at > toll.trip.ends_at:
+        overrun = int((toll.occurred_at - toll.trip.ends_at).total_seconds())
     return TollRow(
         outside_label=outside.get(_identifier(toll)),
+        overrun_seconds=overrun,
+        near_guest=near.guest_name if near else None,
+        near_gap_seconds=near.gap_seconds if near else None,
+        near_relation=near.relation if near else None,
+        near_trip_id=near.trip_id if near else None,
         id=toll.id,
         occurred_at=toll.occurred_at,
         plaza=toll.plaza,
@@ -148,6 +205,7 @@ def list_tolls(
         query = query.where(Toll.recovered_at.is_(None))
     rows = session.scalars(query).all()
     outside = outside_fleet()
+    trips = _trips_by_vehicle(session, list(rows))
 
     total = session.scalar(select(func.coalesce(func.sum(Toll.amount_cents), 0))) or 0
     unrecovered = (
@@ -181,7 +239,7 @@ def list_tolls(
     ).all()
 
     return TollsResponse(
-        tolls=[_row(t, outside) for t in rows],
+        tolls=[_row(t, outside, trips) for t in rows],
         total_cents=int(total),
         unrecovered_cents=int(unrecovered),
         unattributed_cents=int(unattributed),

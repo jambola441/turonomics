@@ -62,6 +62,33 @@ def outside_fleet() -> dict[str, str]:
     }
 
 
+def toll_overrun_minutes() -> int:
+    """How long after a rental ends a crossing is still that guest's.
+
+    A guest who brings the car back late without extending the booking leaves
+    Turo's end time saying one thing and the car saying another, and every
+    crossing in between falls outside the window that decides who pays. Those
+    tolls are the guest's — the operator was not driving — and before this they
+    were reported as money nobody owed.
+
+    Two hours by default: long enough for a late return and the bridge on the
+    way back, short enough that it cannot swallow an evening of the operator's
+    own errands. Set ``TOLL_OVERRUN_GRACE_MINUTES=0`` to switch it off, which
+    is worth knowing about — it attributes money to a guest on an inference,
+    and the inference is visible on the page precisely so it can be overruled.
+
+    It never reaches past the next rental of that car: once somebody else has
+    the keys, the crossing is theirs.
+    """
+    raw = os.environ.get("TOLL_OVERRUN_GRACE_MINUTES", "").strip()
+    if not raw:
+        return 120
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return 120
+
+
 def asp_alert_lead_minutes() -> list[int]:
     """How far ahead of a deadline to warn, longest first.
 

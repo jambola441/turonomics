@@ -817,3 +817,239 @@ def test_an_outside_crossing_attributed_to_a_trip_is_not_hidden(
     body = api_client.get("/api/tolls").json()
     assert body["tolls"][0]["guest_name"] == "Dylan"
     assert body["outside_cents"] == 0, "an attributed crossing is not written off"
+
+
+# ---------------------------------------------------------------------------
+# The hint, through the API
+# ---------------------------------------------------------------------------
+def test_an_unattributed_crossing_carries_the_nearest_rental(
+    api_client, monkeypatch, session, jerry
+):
+    """A gap too wide to bill, which is what the hint is for.
+
+    This test used a twenty-minute gap until late returns started attributing
+    those outright — so it was testing a case that no longer reaches the hint.
+    Four hours is past any grace: not the guest's to bill, but worth knowing
+    whose rental it was closest to.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 3, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN))
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("LZA7293"), "text/csv")},
+    )
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] is None, "the toll is at 11:00, four hours past the rental"
+    assert row["near_guest"] == "Dylan"
+    assert row["near_relation"] == "after"
+    assert row["near_gap_seconds"] == 4 * 3600
+
+
+def test_an_attributed_crossing_carries_no_hint(api_client, monkeypatch, session, jerry):
+    """It has its answer. A gap of zero against the trip it is billed to would
+    be a hint about nothing."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 19, 0, tzinfo=EASTERN))
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("LZA7293"), "text/csv")},
+    )
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] == "Dylan"
+    assert row["near_guest"] is None
+    assert row["near_gap_seconds"] is None
+
+
+def test_a_crossing_on_a_car_outside_the_fleet_carries_no_hint(
+    api_client, monkeypatch, session, jerry
+):
+    """It has no rentals to be near, and suggesting one of ours would be
+    actively misleading."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("EZPASS_OUTSIDE", "94979NF=Old van")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 10, 40, tzinfo=EASTERN))
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("94979NF"), "text/csv")},
+    )
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["outside_label"] == "Old van"
+    assert row["near_guest"] is None
+
+
+def test_the_hint_looks_at_the_right_car(api_client, monkeypatch, session, jerry):
+    """Another car's rental is not a hint about this one's crossing."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    other = Vehicle(nickname="Jimmy", make="Toyota", model="4Runner", year=2023,
+                    plate="LEH9892")
+    session.add(other)
+    session.flush()
+    _trip(session, other, guest="Michael",
+          starts=datetime(2026, 10, 4, 10, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 10, 50, tzinfo=EASTERN))
+    api_client.post(
+        "/api/tolls/import",
+        files={"statement": ("a.csv", _plate_statement("LZA7293"), "text/csv")},
+    )
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["vehicle_nickname"] == "Jerry"
+    assert row["near_guest"] is None, "Michael rented the other car"
+
+
+# ---------------------------------------------------------------------------
+# Late returns
+# ---------------------------------------------------------------------------
+# A guest who brings the car back late without extending the booking leaves
+# Turo's end time saying one thing and the car saying another. Their last
+# crossings fall outside every window and were being reported as money nobody
+# owed — but nobody else had the keys.
+
+
+def _toll_at(local: str, txn: str = "600", plate: str = "LZA7293") -> bytes:
+    """One crossing at a fleet-local time on 4 October."""
+    return _csv(_row(txn, f"NY {plate}", "10/04/2026", local, "-9.11"))
+
+
+def test_a_crossing_just_after_a_late_return_is_still_the_guests(
+    api_client, monkeypatch, session, jerry
+):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("01:34:00 PM"), "text/csv")})
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] == "Dylan"
+    assert row["overrun_seconds"] == 34 * 60, "and it says so, rather than billing quietly"
+
+
+def test_a_crossing_beyond_the_grace_is_not_the_guests(
+    api_client, monkeypatch, session, jerry
+):
+    """Otherwise an evening of the operator's own driving lands on whoever
+    rented the car that morning."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("07:00:00 PM"), "text/csv")})
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] is None
+    assert row["near_relation"] == "after", "still offered as a hint"
+
+
+def test_the_overrun_stops_at_the_next_rental(api_client, monkeypatch, session, jerry):
+    """Once somebody else has the keys, the crossing is plainly theirs."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "240")
+    _trip(session, jerry, guest="Morning",
+          starts=datetime(2026, 10, 4, 7, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 11, 0, tzinfo=EASTERN))
+    _trip(session, jerry, guest="Afternoon",
+          starts=datetime(2026, 10, 4, 12, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 18, 0, tzinfo=EASTERN))
+    # 11:30 is inside Morning's grace but after Afternoon collected at 12:00?
+    # No — before it. This one is Morning's.
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("11:30:00 AM", "601"), "text/csv")})
+    assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] == "Morning"
+
+    # 12:30 is inside Morning's grace too, but Afternoon has the car, and the
+    # containing window wins outright.
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("12:30:00 PM", "602"), "text/csv")})
+    rows = {r["plaza"] + r["occurred_at"]: r for r in api_client.get("/api/tolls").json()["tolls"]}
+    assert sorted(r["guest_name"] for r in rows.values()) == ["Afternoon", "Morning"]
+
+
+def test_a_crossing_after_the_handover_is_not_given_back_to_the_earlier_guest(
+    api_client, monkeypatch, session, jerry
+):
+    """The gap between two rentals, after the second has started and ended.
+
+    Morning's grace still covers this moment, but Afternoon has had the car in
+    between, so Morning cannot be billed for it.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "600")
+    _trip(session, jerry, guest="Morning",
+          starts=datetime(2026, 10, 4, 6, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 8, 0, tzinfo=EASTERN))
+    _trip(session, jerry, guest="Afternoon",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 10, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("10:30:00 AM"), "text/csv")})
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] == "Afternoon", "the most recent keys, not the earliest"
+    assert row["overrun_seconds"] == 30 * 60
+
+
+def test_a_cancelled_rental_never_claims_an_overrun(
+    api_client, monkeypatch, session, jerry
+):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
+    _trip(session, jerry, guest="Ghost",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN),
+          state=TripState.cancelled)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("01:10:00 PM"), "text/csv")})
+    assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] is None
+
+
+def test_the_grace_can_be_switched_off(api_client, monkeypatch, session, jerry):
+    """It bills a guest on an inference, so it has to be refusable."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "0")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("01:10:00 PM"), "text/csv")})
+    assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] is None
+
+
+def test_a_crossing_inside_a_window_is_not_marked_as_an_overrun(
+    api_client, monkeypatch, session, jerry
+):
+    """Only a late return gets the label, or every row would carry it."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 18, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("01:10:00 PM"), "text/csv")})
+    row = api_client.get("/api/tolls").json()["tolls"][0]
+    assert row["guest_name"] == "Dylan"
+    assert row["overrun_seconds"] is None
+
+
+def test_rematching_picks_up_overruns_imported_before_the_grace_existed(
+    api_client, monkeypatch, session, jerry
+):
+    """The statement is already on file; the fix has to reach it."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "0")
+    _trip(session, jerry, guest="Dylan",
+          starts=datetime(2026, 10, 4, 9, 0, tzinfo=EASTERN),
+          ends=datetime(2026, 10, 4, 13, 0, tzinfo=EASTERN))
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _toll_at("01:10:00 PM"), "text/csv")})
+    assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] is None
+
+    monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
+    assert api_client.post("/api/tolls/rematch").json()["matched"] == 1
+    assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] == "Dylan"

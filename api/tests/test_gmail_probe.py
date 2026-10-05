@@ -472,3 +472,24 @@ def test_a_model_name_starting_with_a_digit_is_masked():
                                    subject="Jenna trip with your Toyota 4Runner is booked!"))
     assert "4Runner" not in with_model.subject
     assert signature(plain) == signature(with_model), "same email type, one shape"
+
+
+# ---------------------------------------------------------------------------
+# Why an invoice's charge lines had to be made readable
+# ---------------------------------------------------------------------------
+
+
+def test_an_invoice_charge_label_survives_but_the_guest_does_not():
+    """"Tolls - $16.79" has to come back saying *tolls*.
+
+    The first probe of the reimbursement mail reported every charge line as
+    "<NAME> - <MONEY>", which says a charge exists and refuses to say which —
+    and the toll line is the only one that can be reconciled against an EZPass
+    statement. The charge words are Turo's vocabulary, so they stay; the guest
+    is still a guest.
+    """
+    masked = mask("Tolls - $16.79\nCleaning - $75.00\nFiled by Marguerite")
+    assert "Tolls - <MONEY>" in masked
+    assert "Cleaning - <MONEY>" in masked
+    assert "Marguerite" not in masked
+    assert "<NAME>" in masked

@@ -715,6 +715,12 @@ class Toll(Base):
     # Set when the operator has billed it back. Nullable rather than a boolean
     # so the sheet can say when, not just whether.
     recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When this crossing was asked for, as distinct from paid. Filing was
+    # tracked against the *rental* at first, which was safe against asking
+    # twice and silently wrong the other way: a crossing arriving on a later
+    # statement, for a rental already invoiced, could never be asked for at all
+    # — it had a reimbursement against its trip, so it was skipped forever.
+    filed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     imported_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

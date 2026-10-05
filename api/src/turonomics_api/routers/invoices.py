@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_svg
-from turonomics_api.ingest.invoices import Invoice, build_invoices
+from turonomics_api.ingest.invoices import Invoice, InvoiceLine, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
 
@@ -212,24 +212,50 @@ class DraftResponse(BaseModel):
     evidence_svg: str
 
 
-def _note(invoice: Invoice) -> str:
+def _note(lines: list[InvoiceLine]) -> str:
     """What the guest reads.
 
     Plain, specific, and free of anything that reads as an accusation: the
     crossings are a fact, and a sentence about them does not need to imply the
     guest was doing anything other than driving the car they rented.
     """
-    count = len(invoice.lines)
+    count = len(lines)
+    total = sum(line.amount_cents for line in lines)
     crossings = "toll" if count == 1 else "tolls"
     return (
         f"{count} {crossings} on your trip, totalling "
-        f"${invoice.total_cents / 100:,.2f}. The attached sheet lists each one "
+        f"${total / 100:,.2f}. The attached sheet lists each one "
         f"with its time and plaza, taken from the vehicle's E-ZPass account. "
         f"Happy to send the statement itself if you would like it."
     )
 
 
+def _unfiled(session: Session, invoice: Invoice) -> list[InvoiceLine]:
+    """The crossings on this rental that have not been asked for.
+
+    Per crossing, not per rental. A statement that arrives late can add a
+    crossing to a rental already invoiced, and that crossing is still owed —
+    while the ones beside it, already asked for, must not be asked for twice.
+    """
+    filed = {
+        row
+        for row in session.scalars(
+            select(Toll.id).where(
+                Toll.id.in_([line.toll_id for line in invoice.lines]),
+                Toll.filed_at.is_not(None),
+            )
+        )
+    }
+    return [line for line in invoice.lines if line.toll_id not in filed]
+
+
 def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> DraftResponse:
+    lines = _unfiled(session, invoice)
+    if not lines:
+        raise HTTPException(
+            status_code=404, detail="every crossing on that rental has been asked for"
+        )
+    total_cents = sum(line.amount_cents for line in lines)
     trip = session.get(Trip, invoice.trip_id)
     from_turo = trip.can_file_reimbursement if trip is not None else None
     left = invoice.days_left(window, now)
@@ -244,7 +270,7 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
             EvidenceRow(
                 occurred_at=line.occurred_at, plaza=line.plaza, amount_cents=line.amount_cents
             )
-            for line in invoice.lines
+            for line in lines
         ],
         imported_at=trip.detail_synced_at if trip is not None else None,
     )
@@ -262,14 +288,14 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
                 plaza=line.plaza,
                 amount_cents=line.amount_cents,
             )
-            for line in invoice.lines
+            for line in lines
         ],
-        total_cents=invoice.total_cents,
+        total_cents=total_cents,
         # Cents to dollars once, at the boundary. int / 100 is exact for any
         # cent total, and the alternative — the extension dividing — is the
         # same arithmetic somewhere nothing checks it.
-        amount_dollars=invoice.total_cents / 100,
-        message=_note(invoice),
+        amount_dollars=total_cents / 100,
+        message=_note(lines),
         days_left=left,
         # Turo's answer wins where there is one. It knows about holds and
         # disputes that a day count cannot see.
@@ -294,18 +320,22 @@ def next_draft(session: DbSession) -> DraftResponse:
     now = datetime.now(UTC)
     window = toll_filing_window_days()
     built = build_invoices(session, now=now)
-    asked = _reimbursements(session, [i.trip_id for i in built])
     fileable = []
     for invoice in built:
-        if asked.get(invoice.trip_id):
-            continue
         trip = session.get(Trip, invoice.trip_id)
         if trip is not None and trip.can_file_reimbursement is False:
             continue
         left = invoice.days_left(window, now)
         if left is None or left < 0:
             continue
-        fileable.append((left, -invoice.total_cents, invoice))
+        # Per crossing, not per rental. Skipping any rental that carried a
+        # reimbursement was safe against asking twice and wrong the other way:
+        # a crossing landing on a later statement, for a rental already
+        # invoiced, could never be asked for at all.
+        unfiled = _unfiled(session, invoice)
+        if not unfiled:
+            continue
+        fileable.append((left, -sum(line.amount_cents for line in unfiled), invoice))
     if not fileable:
         raise HTTPException(status_code=404, detail="nothing to file")
     fileable.sort(key=lambda row: (row[0], row[1]))
@@ -368,6 +398,14 @@ def filed(
         # Idempotent: a retried post, or the email having arrived first.
         return FiledResponse(recorded=False, fingerprint=fingerprint)
     now = datetime.now(UTC)
+    # Stamp the crossings themselves, so a later statement adding one to this
+    # rental can still be asked for while these cannot be asked for twice.
+    stamped = 0
+    for toll in session.scalars(
+        select(Toll).where(Toll.trip_id == trip.id, Toll.filed_at.is_(None))
+    ):
+        toll.filed_at = now
+        stamped += 1
     session.add(
         ReimbursementInvoice(
             fingerprint=fingerprint,
@@ -387,10 +425,11 @@ def filed(
     )
     session.commit()
     log.info(
-        "filed reimbursement %s for reservation %s: %dc",
+        "filed reimbursement %s for reservation %s: %dc across %d crossing(s)",
         payload.reimbursement_id,
         trip.turo_trip_id,
         payload.amount_cents,
+        stamped,
     )
     return FiledResponse(recorded=True, fingerprint=fingerprint)
 

@@ -425,3 +425,156 @@ def test_an_expired_rental_is_never_the_next_to_file(api_client, session, car) -
     session.commit()
     out = api_client.get("/api/invoices/next-draft").json()
     assert out["turo_trip_id"] == "444", "the live one, not the bigger expired one"
+
+
+# ---------------------------------------------------------------------------
+# A rental that was only partly filed
+# ---------------------------------------------------------------------------
+#
+# Filing was recorded against the rental at first. That was safe against asking
+# twice and silently wrong the other way: E-ZPass statements arrive weeks late
+# and in batches, so a crossing can land on a rental that has already been
+# invoiced — and with a reimbursement against its trip, it was skipped forever.
+
+
+@requires_db
+def test_a_crossing_that_arrives_after_filing_can_still_be_asked_for(
+    api_client, session, car, rental
+) -> None:
+    first = _crossing(session, car, rental, at=ENDS - td(hours=5))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": first.amount_cents},
+    )
+    # Nothing left to ask for, so nothing is offered.
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+    # A later statement brings another crossing on the same rental.
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100, plaza="VNB")
+    session.commit()
+
+    out = api_client.get("/api/invoices/next-draft").json()
+    assert out["trip_id"] == str(rental.id)
+    assert out["total_cents"] == 1100, "the new one only"
+    assert len(out["lines"]) == 1
+    assert out["lines"][0]["plaza"] == "VNB"
+
+
+@requires_db
+def test_an_already_filed_crossing_is_not_in_the_draft(
+    api_client, session, car, rental
+) -> None:
+    """The direct per-rental draft had no guard at all: called on its own it
+    drafted every unrecovered crossing, including ones already asked for."""
+    _crossing(session, car, rental, at=ENDS - td(hours=5))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    assert api_client.get(f"/api/invoices/{rental.id}/draft").status_code == 404
+
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100)
+    session.commit()
+    out = api_client.get(f"/api/invoices/{rental.id}/draft").json()
+    assert out["total_cents"] == 1100
+    assert out["amount_dollars"] == 11.0
+
+
+@requires_db
+def test_the_evidence_and_note_cover_only_what_is_being_asked_for(
+    api_client, session, car, rental
+) -> None:
+    """A sheet listing crossings the guest already paid for, attached to an
+    invoice that does not include them, is how a reasonable guest decides the
+    whole thing is wrong."""
+    _crossing(session, car, rental, at=ENDS - td(hours=5), plaza="ALREADYFILED")
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100, plaza="NEWONE")
+    session.commit()
+
+    out = api_client.get(f"/api/invoices/{rental.id}/draft").json()
+    assert "NEWONE" in out["evidence_svg"]
+    assert "ALREADYFILED" not in out["evidence_svg"]
+    assert "1 toll on your trip" in out["message"]
+    assert "$11.00" in out["message"]
+
+
+@requires_db
+def test_the_page_still_shows_what_was_asked_for(api_client, session, car, rental) -> None:
+    """Filed is not paid. The crossings stay on the page as outstanding — they
+    are simply not offered for filing again."""
+    _crossing(session, car, rental, at=ENDS - td(hours=5))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    body = api_client.get("/api/invoices").json()
+    assert body["billable_cents"] == 679, "still owed"
+    assert body["invoices"][0]["pending_cents"] == 679, "and already asked for"
+
+
+@requires_db
+def test_a_fully_filed_rental_does_not_shadow_a_fileable_one(
+    api_client, session, car
+) -> None:
+    """Without the skip, the fully-filed rental still sorts first on deadline
+    and then drafts to a 404 — so the endpoint reports "nothing to file" while
+    a live invoice sits behind it. Every other test passes either way, because
+    none has a second rental waiting."""
+    done = Trip(
+        vehicle_id=car.id, turo_trip_id="555", guest_name="Done",
+        starts_at=NOW - td(days=80), ends_at=NOW - td(days=79),
+        state=TripState.completed, source=TripSource.email,
+    )
+    waiting = Trip(
+        vehicle_id=car.id, turo_trip_id="666", guest_name="Waiting",
+        starts_at=NOW - td(days=10), ends_at=NOW - td(days=9),
+        state=TripState.completed, source=TripSource.email,
+    )
+    session.add_all([done, waiting])
+    session.flush()
+    _crossing(session, car, done, at=done.ends_at - td(hours=2), cents=500)
+    _crossing(session, car, waiting, at=waiting.ends_at - td(hours=2), cents=1100)
+    session.commit()
+
+    api_client.post(
+        f"/api/invoices/{done.id}/filed",
+        json={"reimbursement_id": 9002, "amount_cents": 500},
+    )
+    out = api_client.get("/api/invoices/next-draft")
+    assert out.status_code == 200, "the live one, not a 404 from the filed one"
+    assert out.json()["turo_trip_id"] == "666"
+
+
+@requires_db
+def test_filing_again_does_not_restamp_the_earlier_crossings(
+    api_client, session, car, rental
+) -> None:
+    """When each crossing was asked for is the record of what was asked and
+    when. Re-stamping on a second filing overwrites the first invoice's date
+    with the second's, which is exactly the thing to reach for in a dispute."""
+    first = _crossing(session, car, rental, at=ENDS - td(hours=5))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    session.refresh(first)
+    originally = first.filed_at
+    assert originally is not None
+
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100)
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9002, "amount_cents": 1100},
+    )
+    session.refresh(first)
+    assert first.filed_at == originally, "the first ask keeps its own date"

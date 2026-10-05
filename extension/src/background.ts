@@ -26,6 +26,7 @@ import {
   type ScrapedTable,
 } from "./tolls.js";
 import { describeEmbedded, summariseCalls, type Embedded, type SeenCall } from "./turo.js";
+import type { TuroPullResult, TuroWanted } from "./types.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -346,6 +347,61 @@ async function fetchExportInPage(url: string): Promise<string | null> {
 }
 
 /**
+ * Pull Turo's own reservation detail for the rentals the API asks about.
+ *
+ * The API decides which reservations and names the route; this fetches them
+ * with the session the browser already holds and posts the bodies back
+ * unmodified. Every judgement about what they mean — a moved booking, a plate
+ * that disagrees, whether to re-attribute crossings — is Python with tests,
+ * rather than TypeScript that has to be rebuilt and side-loaded before anyone
+ * can see whether it worked.
+ */
+async function pullTuro(tabId: number): Promise<TuroPullResult> {
+  const { apiBase, tollsToken } = await settings();
+  const wanted = await fetch(`${apiBase}/api/turo/wanted`).then(
+    (response) => response.json() as Promise<TuroWanted>
+  );
+  const details: unknown[] = [];
+  let failed = 0;
+  for (const id of wanted.reservations) {
+    const path = wanted.detail_path.replace("{id}", encodeURIComponent(id));
+    const body = await inPage(tabId, fetchJsonInPage, [path], 12, "MAIN");
+    if (body === null) failed += 1;
+    else details.push(body);
+    // Turo's own pages fire these in bursts, but a loop of forty is not a
+    // page load, and being noticed is the one failure mode that cannot be
+    // retried.
+    await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+  }
+  const response = await fetch(`${apiBase}/api/turo/details`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+    },
+    body: JSON.stringify({ details }),
+  });
+  const result: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    const detail =
+      result && typeof result === "object" && "detail" in result
+        ? String((result as { detail: unknown }).detail)
+        : `the API said ${response.status}`;
+    throw new Error(detail);
+  }
+  return { ...(result as TuroPullResult), asked: wanted.reservations.length, failed };
+}
+
+const PULL_GAP_MS = 250;
+
+/** Fetch one of Turo's own JSON endpoints, from inside the page. */
+function fetchJsonInPage(path: string): Promise<unknown | null> {
+  return fetch(path, { credentials: "include", headers: { Accept: "application/json" } })
+    .then((response) => (response.ok ? response.json() : null))
+    .catch(() => null);
+}
+
+/**
  * Every blob of JSON the document carries.
  *
  * Injected, so it runs in the page and is kept deliberately dumb: collect
@@ -624,6 +680,18 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
       (error: unknown) =>
         sendResponse({
           type: "SEND_TOLLS_ERROR",
+          error: error instanceof Error ? error.message : String(error),
+        } satisfies MessageType)
+    );
+    return true; // async response
+  }
+
+  if (message.type === "PULL_TURO") {
+    pullTuro(message.tabId).then(
+      (result) => sendResponse({ type: "PULL_TURO_RESULT", result } satisfies MessageType),
+      (error: unknown) =>
+        sendResponse({
+          type: "PULL_TURO_ERROR",
           error: error instanceof Error ? error.message : String(error),
         } satisfies MessageType)
     );

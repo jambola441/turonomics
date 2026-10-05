@@ -9,8 +9,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
+import type { TuroPullResult } from "./types.js";
 import {
   CHARGE_KEYS,
+  describePull,
   describeEmbedded,
   findByKey,
   interestingCall,
@@ -285,4 +287,57 @@ test("a status longer than a word is still vocabulary", () => {
   // Still not a licence plate, and still not a sentence.
   assert.equal(stringShape("LWH4685"), "str(7)");
   assert.equal(stringShape("Charged to the guest on Tuesday"), "str(31)");
+});
+
+test("first-party analytics is still analytics", () => {
+  // Both showed up in a real report: a Cloudflare RUM beacon and Turo's own
+  // collector, on turo.com, answering 204 and HTML respectively.
+  assert.equal(interestingCall("https://turo.com/cdn-cgi/rum"), false);
+  assert.equal(interestingCall("https://turo.com/api/tracking"), false);
+  // Not an over-broad rule: the real endpoints under /api/ stay.
+  assert.equal(interestingCall("https://turo.com/api/reservation/detail?x=1"), true);
+  assert.equal(interestingCall("https://turo.com/api/tracking/preferences"), true);
+});
+
+// ---------------------------------------------------------------------------
+// Saying what a pull did
+// ---------------------------------------------------------------------------
+
+const EMPTY: TuroPullResult = {
+  seen: 0, stored: 0, unparsed: 0, unknown: [], retimed: [], wrong_plate: [],
+  tolls_rematched: 0, grace_periods: [], asked: 0, failed: 0,
+};
+
+test("a quiet pull says only what it read", () => {
+  assert.equal(
+    describePull({ ...EMPTY, asked: 37, seen: 37, stored: 37 }),
+    "37 of 37 rental(s) read"
+  );
+});
+
+test("a moved booking and its consequence are both named", () => {
+  // These two are the point of the whole pull, so they may not be buried.
+  const out = describePull({
+    ...EMPTY,
+    asked: 37,
+    stored: 37,
+    retimed: ["58358939: 2026-07-03 14:00–18:00 -> 2026-07-03 14:00–21:00"],
+    tolls_rematched: 2,
+  });
+  assert.match(out, /1 booking\(s\) moved/);
+  assert.match(out, /2 crossing\(s\) re-attributed/);
+});
+
+test("the two kinds of failure are not conflated", () => {
+  // Turo refusing to hand a reservation over and the API being unable to read
+  // one have different causes and different fixes.
+  const out = describePull({ ...EMPTY, asked: 10, stored: 7, failed: 2, unparsed: 1 });
+  assert.match(out, /2 Turo would not return/);
+  assert.match(out, /1 unreadable/);
+});
+
+test("a rental on the wrong car is surfaced, because it bills the wrong guest", () => {
+  const out = describePull({ ...EMPTY, asked: 1, stored: 1, wrong_plate: ["58358939: Jerry"] });
+  assert.match(out, /1 on the wrong car/);
+  assert.ok(!out.includes("Jerry"), "the count belongs in the line, the detail does not");
 });

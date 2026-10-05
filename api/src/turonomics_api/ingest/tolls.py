@@ -66,7 +66,23 @@ def fingerprint(toll: EZPassToll) -> str:
         return f"txn:{toll.txn_id}"
     raw = "|".join(
         [
-            toll.timestamp.isoformat(),
+            # To the minute, not the second, and that is the whole point.
+            #
+            # The same crossing reads "05:13:32 PM" in a downloaded statement
+            # and "3:19 PM" on the account-activity page the extension scrapes
+            # — the website does not render seconds. Hashing the exact time
+            # would give one crossing two identities depending on where it came
+            # from, so scraping a page and later uploading the official CSV
+            # would bill every toll twice. That is the failure this hash exists
+            # to prevent, arriving through the front door.
+            #
+            # The cost is that two charges at one plaza, in one minute, for one
+            # amount, against one tag collapse into one. A car cannot cross the
+            # same plaza twice in sixty seconds, so such a pair is EZPass
+            # billing the same crossing twice rather than two crossings — and
+            # if it ever is real, undercounting by one toll beats double-billing
+            # a guest for every toll they incurred.
+            toll.timestamp.replace(second=0, microsecond=0).isoformat(),
             toll.plaza,
             f"{toll.amount:.2f}",
             toll.transponder_id or "",

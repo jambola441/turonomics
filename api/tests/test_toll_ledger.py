@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from turonomics_api.db.models import Toll, Trip, TripSource, TripState, Vehicle
 from turonomics_api.ingest.tolls import import_tolls, rematch_unattributed
@@ -456,3 +456,78 @@ def test_reading_the_ledger_never_needs_a_token(api_client, monkeypatch):
 def test_the_ledger_says_when_no_token_is_needed(api_client, monkeypatch):
     monkeypatch.delenv("TOLLS_TOKEN", raising=False)
     assert api_client.get("/api/tolls").json()["token_required"] is False
+
+
+# ---------------------------------------------------------------------------
+# Two sources for one crossing
+# ---------------------------------------------------------------------------
+# The website renders "3:19 PM" and the download writes "03:19:07 PM" for the
+# same toll. Before the fingerprint was cut to the minute, scraping the page and
+# then uploading the official statement billed every crossing twice.
+
+
+def _scraped(date_cell: str, amount: str = "-2.86", plaza: str = "RKB") -> bytes:
+    """A row shaped like the account-activity page: one datetime, no txn id."""
+    return (
+        f"Tag/Plate #,Exit Plaza,Date,Amount\n"
+        f'" 99900000111","{plaza}","{date_cell}","${amount}"\n'
+    ).encode()
+
+
+def test_the_same_crossing_from_both_sources_is_counted_once(session):
+    from_page = import_tolls(session, _scraped("10/4/26 3:19 PM"))
+    assert from_page.imported == 1
+
+    # The download of the same crossing, with the seconds the page did not show.
+    from_download = import_tolls(session, _scraped("10/04/2026 03:19:07 PM"))
+    assert from_download.imported == 0, "the second source must not add a toll"
+    assert from_download.already_known == 1
+    assert session.scalar(select(func.count()).select_from(Toll)) == 1
+
+
+def test_two_crossings_a_minute_apart_are_still_two(session):
+    import_tolls(session, _scraped("10/4/26 3:19 PM"))
+    import_tolls(session, _scraped("10/4/26 3:20 PM"))
+    assert session.scalar(select(func.count()).select_from(Toll)) == 2
+
+
+def test_two_tags_crossing_in_the_same_minute_do_not_collide(session):
+    import_tolls(session, _scraped("10/4/26 3:19 PM"))
+    other = (
+        b"Tag/Plate #,Exit Plaza,Date,Amount\n"
+        b'" 99900000222","RKB","10/4/26 3:19 PM","$-2.86"\n'
+    )
+    assert import_tolls(session, other).imported == 1
+    assert session.scalar(select(func.count()).select_from(Toll)) == 2
+
+
+def test_the_same_minute_at_different_plazas_is_two_crossings(session):
+    import_tolls(session, _scraped("10/4/26 3:19 PM", plaza="RKB"))
+    import_tolls(session, _scraped("10/4/26 3:19 PM", plaza="GWB"))
+    assert session.scalar(select(func.count()).select_from(Toll)) == 2
+
+
+def test_the_stored_time_keeps_its_seconds(session):
+    """Only the hash is cut to the minute. The ledger still shows when, and the
+    trip it fell inside is still decided on the real timestamp."""
+    import_tolls(session, _scraped("10/04/2026 03:19:07 PM"))
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+    assert toll.occurred_at.second == 7
+
+
+def test_a_transaction_id_still_wins_when_the_export_has_one(session):
+    """Where both sources carry EZPass's own id, the id decides and the time is
+    not consulted at all."""
+    with_id = (
+        b"Lane Txn ID,Tag/Plate #,Exit Plaza,Date,Amount\n"
+        b'"33232151931"," 99900000111","RKB","10/4/26 3:19 PM","$-2.86"\n'
+    )
+    # Same id, a different time and amount — still the same crossing.
+    restated = (
+        b"Lane Txn ID,Tag/Plate #,Exit Plaza,Date,Amount\n"
+        b'"33232151931"," 99900000111","RKB","10/4/26 9:00 PM","$-3.99"\n'
+    )
+    assert import_tolls(session, with_id).imported == 1
+    assert import_tolls(session, restated).imported == 0
+    assert session.scalar(select(func.count()).select_from(Toll)) == 1

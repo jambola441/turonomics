@@ -332,6 +332,56 @@ probeBtn.addEventListener("click", async () => {
   }
 });
 
+const watchBtn = document.getElementById("watchBtn") as HTMLButtonElement;
+const reportBtn = document.getElementById("reportBtn") as HTMLButtonElement;
+
+/** The Turo tab, or a message saying to open one. */
+async function turoTab(): Promise<chrome.tabs.Tab | null> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
+    showStatus("Open a Turo page first.", true);
+    return null;
+  }
+  return tab;
+}
+
+watchBtn.addEventListener("click", async () => {
+  reset();
+  probeReportWrap.classList.add("hidden");
+  watchBtn.disabled = true;
+  try {
+    const tab = await turoTab();
+    if (!tab?.id) return;
+    const reply = await send(null, { type: "WATCH_TURO", tabId: tab.id });
+    if (reply.type === "PROBE_TURO_ERROR") throw new Error(reply.error);
+    showStatus("Watching. Do the thing, then press report — the page reloaded, so fill the form now.");
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    watchBtn.disabled = false;
+  }
+});
+
+reportBtn.addEventListener("click", async () => {
+  reset();
+  reportBtn.disabled = true;
+  try {
+    const tab = await turoTab();
+    if (!tab?.id) return;
+    const reply = await send(null, { type: "REPORT_WATCH", tabId: tab.id });
+    if (reply.type === "PROBE_TURO_ERROR") throw new Error(reply.error);
+    if (reply.type !== "PROBE_TURO_RESULT") throw new Error("Unexpected response from the worker.");
+    statusEl.classList.add("hidden");
+    probeReportEl.textContent = reply.report;
+    probeReportWrap.classList.remove("hidden");
+    probeReportWrap.open = true;
+  } catch (error) {
+    showStatus(error instanceof Error ? error.message : String(error), true);
+  } finally {
+    reportBtn.disabled = false;
+  }
+});
+
 probeCopyBtn.addEventListener("click", async () => {
   await navigator.clipboard.writeText(probeReportEl.textContent ?? "");
   probeCopyBtn.textContent = "Copied";

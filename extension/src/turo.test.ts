@@ -341,3 +341,27 @@ test("a rental on the wrong car is surfaced, because it bills the wrong guest", 
   assert.match(out, /1 on the wrong car/);
   assert.ok(!out.includes("Jerry"), "the count belongs in the line, the detail does not");
 });
+
+test("a write is never filtered out, whatever its route", () => {
+  // The filing POST and the image upload are the two calls the probe exists to
+  // catch, and their paths cannot be guessed in advance — so a non-GET to
+  // turo.com is reported even where the same path would be skipped as noise.
+  assert.equal(interestingCall("https://turo.com/cdn-cgi/rum", "https://turo.com/", "POST"), true);
+  assert.equal(interestingCall("https://turo.com/api/tracking", "https://turo.com/", "GET"), false);
+  // Still first party only: a beacon to somebody else stays out.
+  assert.equal(interestingCall("https://api.segment.io/v1/t", "https://turo.com/", "POST"), false);
+});
+
+test("what was sent is reported before what came back", () => {
+  const report = summariseCalls([
+    {
+      method: "POST",
+      url: "https://turo.com/api/reimbursement",
+      status: 200,
+      request: { reservationId: 58626257, lineItems: [{ type: "TOLL_REIMBURSEMENT" }] },
+      body: { invoiceId: 113672232, reimbursementStatus: "FILED" },
+    },
+  ]);
+  assert.match(report, /sent: \{reservationId: int, lineItems: \[1 × \{type: TOLL_REIMBURSEMENT\}\]\}/);
+  assert.ok(report.indexOf("sent:") < report.indexOf("invoiceId"), report);
+});

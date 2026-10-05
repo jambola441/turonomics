@@ -138,6 +138,12 @@ export interface SeenCall {
   status: number;
   /** The response body, already parsed, or null when it was not JSON. */
   body: unknown;
+  /**
+   * What was sent. Null on a GET, and on anything recorded before the hook
+   * learned to keep it — which was every probe run up to 1.6.0, and is why
+   * none of them could say how an invoice is filed.
+   */
+  request?: unknown;
 }
 
 // Only Turo's own backend. Everything else on the page is somebody's
@@ -155,7 +161,11 @@ const ASSET = /\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|map)$/i;
 // Turo's own analytics collector, both of which answer 204 or HTML.
 const FIRST_PARTY_NOISE = /^\/(?:cdn-cgi\/|api\/tracking$)/i;
 
-export function interestingCall(url: string, base = "https://turo.com/"): boolean {
+export function interestingCall(
+  url: string,
+  base = "https://turo.com/",
+  method = "GET"
+): boolean {
   let parsed: URL;
   try {
     parsed = new URL(url, base);
@@ -163,6 +173,10 @@ export function interestingCall(url: string, base = "https://turo.com/"): boolea
     return false;
   }
   if (!FIRST_PARTY.test(parsed.hostname)) return false;
+  // A write to Turo is never noise, whatever its route looks like. The filing
+  // POST and the image upload are the two calls this exists to catch, and
+  // guessing their paths in advance is exactly what cannot be done.
+  if (method.toUpperCase() !== "GET") return true;
   if (FIRST_PARTY_NOISE.test(parsed.pathname)) return false;
   return !ASSET.test(parsed.pathname);
 }
@@ -174,7 +188,9 @@ export function interestingCall(url: string, base = "https://turo.com/"): boolea
  * endpoint once per card and the question is which *endpoints* exist.
  */
 export function summariseCalls(calls: SeenCall[]): string {
-  const interesting = calls.filter((call) => interestingCall(call.url));
+  const interesting = calls.filter((call) =>
+    interestingCall(call.url, "https://turo.com/", call.method)
+  );
   if (interesting.length === 0) {
     return `no data calls seen (${calls.length} request(s) in total)`;
   }
@@ -192,6 +208,11 @@ export function summariseCalls(calls: SeenCall[]): string {
   for (const [key, call] of [...byRoute.entries()].sort()) {
     lines.push("");
     lines.push(`${key} -> ${call.status}`);
+    // The request first. For a POST it is the thing being looked for, and
+    // burying it under the response is how it gets skimmed past.
+    if (call.request !== null && call.request !== undefined) {
+      lines.push(`  sent: ${jsonShape(call.request)}`);
+    }
     lines.push(call.body === null ? "  (not json)" : `  ${jsonShape(call.body)}`);
   }
   return lines.join("\n");

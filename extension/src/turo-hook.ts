@@ -20,6 +20,8 @@ interface RecordedCall {
   url: string;
   status: number;
   body: unknown;
+  /** What was *sent*. For a filing POST this is the whole point. */
+  request?: unknown;
 }
 
 (() => {
@@ -37,17 +39,62 @@ interface RecordedCall {
   const calls: RecordedCall[] = [];
   w.__turonomicsCalls = calls;
 
-  const record = (method: string, url: string, status: number, text: string) => {
-    if (calls.length >= MAX_CALLS) return;
-    let body: unknown = null;
-    if (text && text.length <= MAX_BODY_BYTES) {
-      try {
-        body = JSON.parse(text);
-      } catch {
-        body = null;
-      }
+  const parsed = (text: string): unknown => {
+    if (!text || text.length > MAX_BODY_BYTES) return null;
+    try {
+      return JSON.parse(text);
+    } catch {
+      return null;
     }
-    calls.push({ method: method.toUpperCase(), url, status, body });
+  };
+
+  /**
+   * What a request carried, without carrying it.
+   *
+   * A filing POST sends JSON; an evidence upload sends multipart with an image
+   * in it. Neither is read for its values — the worker shapes whatever this
+   * returns — but an image has to be described rather than parsed, because
+   * megabytes of base64 would be recorded, shaped and reported as a very long
+   * string for no gain.
+   */
+  const describeRequest = (value: unknown): unknown => {
+    if (value === undefined || value === null) return null;
+    if (typeof value === "string") return parsed(value) ?? `<text ${value.length}>`;
+    if (typeof FormData !== "undefined" && value instanceof FormData) {
+      const fields: Record<string, unknown> = {};
+      value.forEach((entry, key) => {
+        if (typeof entry === "string") fields[key] = parsed(entry) ?? `<text ${entry.length}>`;
+        else fields[key] = `<file ${entry.type || "unknown"} ${entry.size} bytes>`;
+      });
+      return { "<multipart>": fields };
+    }
+    if (typeof Blob !== "undefined" && value instanceof Blob) {
+      return `<blob ${value.type || "unknown"} ${value.size} bytes>`;
+    }
+    if (value instanceof ArrayBuffer) return `<binary ${value.byteLength} bytes>`;
+    if (typeof URLSearchParams !== "undefined" && value instanceof URLSearchParams) {
+      const fields: Record<string, unknown> = {};
+      value.forEach((entry, key) => (fields[key] = `<text ${entry.length}>`));
+      return { "<form>": fields };
+    }
+    return `<${typeof value}>`;
+  };
+
+  const record = (
+    method: string,
+    url: string,
+    status: number,
+    text: string,
+    request?: unknown
+  ) => {
+    if (calls.length >= MAX_CALLS) return;
+    calls.push({
+      method: method.toUpperCase(),
+      url,
+      status,
+      body: parsed(text),
+      request: request ?? null,
+    });
   };
 
   const originalFetch = w.fetch.bind(w);
@@ -66,11 +113,12 @@ interface RecordedCall {
             : input.url;
       const url = new URL(raw, location.href).href;
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+      const sent = describeRequest(init?.body);
       // A clone, so the page still gets to read its own body exactly once.
       response
         .clone()
         .text()
-        .then((text) => record(method, url, response.status, text))
+        .then((text) => record(method, url, response.status, text, sent))
         .catch(() => undefined);
     } catch {
       // Recording is best effort; the response is not.
@@ -96,6 +144,7 @@ interface RecordedCall {
     return (open as any).call(this, method, url, ...rest);
   };
   XMLHttpRequest.prototype.send = function (this: Tracked, ...args: unknown[]) {
+    const sent = describeRequest(args[0]);
     this.addEventListener("load", () => {
       try {
         const type = this.responseType;
@@ -106,7 +155,8 @@ interface RecordedCall {
           this.__turonomicsMethod ?? "GET",
           new URL(this.__turonomicsUrl ?? location.href, location.href).href,
           this.status,
-          text
+          text,
+          sent
         );
       } catch {
         // As above.

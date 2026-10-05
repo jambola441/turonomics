@@ -365,3 +365,21 @@ test("what was sent is reported before what came back", () => {
   assert.match(report, /sent: \{reservationId: int, lineItems: \[1 × \{type: TOLL_REIMBURSEMENT\}\]\}/);
   assert.ok(report.indexOf("sent:") < report.indexOf("invoiceId"), report);
 });
+
+test("an upload to a storage host is reported, a beacon is not", () => {
+  // The filing POST came back with mediaEvidenceUuids already populated and no
+  // upload call in the report: an evidence image goes to a presigned URL on a
+  // storage host, and first-party-only filtering threw it away.
+  const put = (url: string) => interestingCall(url, "https://turo.com/", "PUT");
+  const post = (url: string) => interestingCall(url, "https://turo.com/", "POST");
+  assert.equal(put("https://turo-media.s3.amazonaws.com/abc123?X-Amz-Signature=x"), true);
+  assert.equal(post("https://uploads.turo.com/media"), true);
+  assert.equal(post("https://some-cdn.example.com/upload"), true, "cannot be named in advance");
+  // Measurement stays out, however it is written to.
+  assert.equal(post("https://bam.nr-data.net/jserrors/1/abc"), false);
+  assert.equal(post("https://www.google.com/ccm/collect?en=x"), false);
+  assert.equal(post("https://cmp.osano.com/x/y/z"), false);
+  assert.equal(post("https://api.segment.io/v1/t"), false);
+  // Reads are still first party only, so a page's fonts and CDNs stay quiet.
+  assert.equal(interestingCall("https://fonts.googleapis.com/css", "https://turo.com/", "GET"), false);
+});

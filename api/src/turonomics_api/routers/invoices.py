@@ -18,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import Toll
+from turonomics_api.db.models import ReimbursementInvoice, Toll
 from turonomics_api.ingest.invoices import Invoice, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
@@ -55,10 +55,23 @@ class InvoiceRow(BaseModel):
     file_by: datetime | None = None
     days_left: int | None = None
     expired: bool = False
+    # What has already been asked of this guest through Turo, from the
+    # reimbursement notifications. charged_cents is money that arrived;
+    # pending_cents is filed but not yet paid. Both are shown because asking
+    # twice for money already paid is a dispute, not income.
+    charged_cents: int = 0
+    pending_cents: int = 0
+    # Set when an invoice was charged for this rental but its total does not
+    # match these crossings — cleaning and fuel ride on the same invoices, so
+    # it is surfaced rather than written off.
+    charged_but_different: bool = False
 
 
 class InvoicesResponse(BaseModel):
     invoices: list[InvoiceRow]
+    # Reimbursements already charged whose total matched nothing on file, so
+    # the crossings they cover could not be ticked off automatically.
+    needs_a_look_cents: int = 0
     window_days: int
     billable_cents: int
     # Still collectable, and soon. The figure to act on.
@@ -70,8 +83,32 @@ class InvoicesResponse(BaseModel):
     token_required: bool = False
 
 
-def _row(invoice: Invoice, window: int, now: datetime) -> InvoiceRow:
+def _reimbursements(
+    session: Session, trip_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, list[ReimbursementInvoice]]:
+    """Every reimbursement notification against these rentals, in one query."""
+    if not trip_ids:
+        return {}
+    rows = session.scalars(
+        select(ReimbursementInvoice).where(ReimbursementInvoice.trip_id.in_(trip_ids))
+    ).all()
+    out: dict[uuid.UUID, list[ReimbursementInvoice]] = {}
+    for row in rows:
+        if row.trip_id is not None:
+            out.setdefault(row.trip_id, []).append(row)
+    return out
+
+
+def _row(
+    invoice: Invoice,
+    window: int,
+    now: datetime,
+    asked: list[ReimbursementInvoice] | None = None,
+) -> InvoiceRow:
     left = invoice.days_left(window, now)
+    asked = asked or []
+    charged = sum(r.total_cents for r in asked if r.state == "charged")
+    pending = sum(r.total_cents for r in asked if r.state != "charged")
     return InvoiceRow(
         trip_id=invoice.trip_id,
         guest_name=invoice.guest_name,
@@ -94,6 +131,11 @@ def _row(invoice: Invoice, window: int, now: datetime) -> InvoiceRow:
         file_by=invoice.file_by(window),
         days_left=left,
         expired=left is not None and left < 0,
+        charged_cents=charged,
+        pending_cents=pending,
+        # Only interesting while something is still outstanding: once the
+        # crossings are ticked off they leave this list anyway.
+        charged_but_different=bool(charged) and charged != invoice.total_cents,
     )
 
 
@@ -101,9 +143,9 @@ def _row(invoice: Invoice, window: int, now: datetime) -> InvoiceRow:
 def list_invoices(session: DbSession, include_recovered: bool = False) -> InvoicesResponse:
     now = datetime.now(UTC)
     window = toll_filing_window_days()
-    rows = [_row(invoice, window, now) for invoice in build_invoices(
-        session, now=now, include_recovered=include_recovered
-    )]
+    built = build_invoices(session, now=now, include_recovered=include_recovered)
+    asked = _reimbursements(session, [i.trip_id for i in built])
+    rows = [_row(i, window, now, asked.get(i.trip_id)) for i in built]
     return InvoicesResponse(
         invoices=rows,
         window_days=window,
@@ -113,6 +155,7 @@ def list_invoices(session: DbSession, include_recovered: bool = False) -> Invoic
             if r.days_left is not None and 0 <= r.days_left <= URGENT_DAYS
         ),
         expired_cents=sum(r.total_cents for r in rows if r.expired),
+        needs_a_look_cents=sum(r.total_cents for r in rows if r.charged_but_different),
         off_platform_cents=sum(r.total_cents for r in rows if r.off_platform),
         token_required=token_configured(),
     )
@@ -145,5 +188,5 @@ def mark_invoice_recovered(
     # invoice that was just ticked rather than an empty one.
     for invoice in build_invoices(session, now=now, include_recovered=True):
         if invoice.trip_id == trip_id:
-            return _row(invoice, window, now)
+            return _row(invoice, window, now, _reimbursements(session, [trip_id]).get(trip_id))
     raise HTTPException(404, "no crossings are attributed to that rental")

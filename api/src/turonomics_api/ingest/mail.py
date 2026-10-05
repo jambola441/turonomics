@@ -25,13 +25,20 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import GuestMessage, Trip, Vehicle
 from turonomics_api.gmail.client import GmailClient, GmailError
-from turonomics_api.gmail.parse import TRIP_BEARING, ParseError, classify, parse_email
+from turonomics_api.gmail.parse import (
+    TRIP_BEARING,
+    ParseError,
+    classify,
+    parse_email,
+    parse_invoice,
+)
 from turonomics_api.gmail.probe import (
     SECONDS_BETWEEN_FETCHES,
     html_of,
     plain_text,
     shape_of,
 )
+from turonomics_api.ingest.reimbursements import ReimbursementResult, record_invoice
 from turonomics_api.ingest.tasks import refresh_move_task
 from turonomics_api.ingest.trips import TripSyncResult, apply_parsed_trip
 from turonomics_api.ingest.turnaround import refresh_turnaround_tasks
@@ -185,6 +192,7 @@ def sync_trips_from_mail(
     scanned = 0
     messages = 0
     not_a_trip = 0
+    reimbursements = ReimbursementResult()
     unreadable = 0
     first_skipped: str | None = None
     first_shape: object | None = None
@@ -211,6 +219,16 @@ def sync_trips_from_mail(
                 html=html_of(payload),
             )
         except ParseError as exc:
+            # A reimbursement invoice is not a trip and never will be — no
+            # dates, no reservation block — but it is the record of money
+            # already asked for, and discarding it is what had the tolls page
+            # billing a guest twice.
+            invoice = parse_invoice(
+                _header(payload, "Subject"), plain_text(payload), html_of(payload)
+            )
+            if invoice is not None:
+                record_invoice(session, invoice, now=now, result=reimbursements)
+                continue
             # Most Turo mail genuinely is not a trip — payouts, marketing,
             # inspections — so this is not per-message worthy. But the *reason*
             # for the first one is, because "every message failed to parse" and
@@ -277,6 +295,20 @@ def sync_trips_from_mail(
         not_a_trip,
         unreadable,
     )
+    if reimbursements.seen:
+        log.info(
+            "mail sync: %d reimbursement invoice(s) — %d new, %d advanced, "
+            "%d crossing(s) already charged",
+            reimbursements.seen,
+            reimbursements.created,
+            reimbursements.updated,
+            reimbursements.tolls_recovered,
+        )
+        for note in reimbursements.unmatched_totals[:5]:
+            # A charged invoice whose total does not match a rental's tolls is
+            # not written off, because it may be cleaning or fuel. Named so it
+            # can be looked at rather than silently left outstanding.
+            log.info("mail sync: invoice total did not match tolls — %s", note)
     if quota.pauses:
         log.info("gmail quota paused this run %d time(s)", quota.pauses)
     if first_skipped and not (result.created or result.updated):

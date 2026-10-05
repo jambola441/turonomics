@@ -706,3 +706,53 @@ class Toll(Base):
     trip: Mapped[Trip | None] = relationship()
 
     __table_args__ = (Index("ix_toll_unrecovered", "recovered_at", "occurred_at"),)
+
+
+class ReimbursementInvoice(Base):
+    """Money already asked of a guest through Turo.
+
+    Built from the notification mail, which is the only record of it this side
+    of the website: Turo tells the host when an invoice is filed, when the
+    guest has not responded, and when they have been charged. Three emails, one
+    invoice, collapsed onto one row by ``fingerprint``.
+
+    It exists so the tolls page does not ask twice. A crossing already charged
+    through a reimbursement is not money waiting to be collected, and showing
+    it as such is worse than not showing it at all — the guest has paid it
+    once, and a second invoice is a dispute rather than income.
+    """
+
+    __tablename__ = "reimbursement_invoice"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+
+    # Turo's invoice id where a link carried one, else the reservation and the
+    # amount. Unique either way, so the three notifications of one invoice do
+    # not become three invoices.
+    fingerprint: Mapped[str] = mapped_column(String(80), unique=True)
+
+    reservation_id: Mapped[str] = mapped_column(String(40), index=True)
+    turo_invoice_id: Mapped[str | None] = mapped_column(String(80))
+    guest_name: Mapped[str | None] = mapped_column(String(200))
+
+    # filed / unanswered / charged. Only the last means the money arrived.
+    state: Mapped[str] = mapped_column(String(20))
+    total_cents: Mapped[int] = mapped_column(Integer)
+
+    # When the "has been charged" notification was seen. Null while the invoice
+    # is only filed, which is the difference between asked and collected.
+    charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # The rental it belongs to, once one with that reservation id exists. Null
+    # when the invoice arrived before the trip mail, or for a reservation this
+    # fleet has no record of.
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"))
+
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    trip: Mapped[Trip | None] = relationship()
+
+    __table_args__ = (Index("ix_reimbursement_trip", "trip_id", "state"),)

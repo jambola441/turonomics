@@ -146,11 +146,22 @@ def main() -> int:
             owed = sum(t["amount_cents"] for t in tolls if not t["recovered_at"])
             loose = sum(t["amount_cents"] for t in tolls if not t["trip_id"])
 
-            # The stub requires a token on the writes, as the API does when
-            # TOLLS_TOKEN is set. The page has to ask for it once, keep it, and
-            # put it on every write after that — a page that prompts and then
-            # forgets the header would pass every other check here.
-            page.on("dialog", lambda d: d.accept(stub_api.TOLLS_TOKEN))
+            # One handler for both kinds of dialog the page raises, routed by
+            # type. Two handlers do not work: Playwright calls every one that
+            # is registered and the first to act wins, so a blanket "accept"
+            # for the token prompt silently confirmed the delete as well — and
+            # the test for cancelling a delete passed a page that had deleted.
+            confirm_answers: list[bool] = []
+
+            def dialog(d) -> None:
+                if d.type == "prompt":
+                    d.accept(stub_api.TOLLS_TOKEN)   # the tolls token
+                elif confirm_answers.pop(0) if confirm_answers else False:
+                    d.accept()
+                else:
+                    d.dismiss()
+
+            page.on("dialog", dialog)
 
             page.goto(f"{SITE}/tolls/?api={API}", wait_until="domcontentloaded")
             page.wait_for_timeout(700)
@@ -228,6 +239,22 @@ def main() -> int:
             check("uploading a statement reports what it read",
                   "9 rows read" in (page.locator("#import-result").text_content() or ""))
 
+            # Removing a crossing is confirmed, unlike the tick: a mis-tap
+            # loses money the operator was owed.
+            before = page.locator(".toll").count()
+            confirm_answers.append(False)
+            page.locator(".toll").first.locator(".drop").click()
+            page.wait_for_timeout(500)
+            check("cancelling the confirm keeps the crossing",
+                  page.locator(".toll").count() == before)
+
+            confirm_answers.append(True)
+            page.locator(".toll").first.locator(".drop").click()
+            page.wait_for_timeout(700)
+            check("confirming removes it", page.locator(".toll").count() == before - 1)
+            check("and the charged total drops with it",
+                  page.locator("#s-total").text_content() != _money(total))
+
             page.locator("#rematch").click()
             page.wait_for_timeout(600)
             check("re-matching says when nothing changed",
@@ -237,11 +264,13 @@ def main() -> int:
             # from the server's side too: the page could have been handed a 401
             # on each write and shown a stale figure.
             seen = json.loads(urllib.request.urlopen(f"{API}/seen-auth").read())["seen"]
-            # Four writes above: the tick, the untick, the upload, the
-            # re-match. An exact count rather than a floor, so an extra write
-            # nobody meant to add also shows up here.
+            # Five writes above: the tick, the untick, the delete, the
+            # upload, the re-match. An exact count rather than a floor, so an
+            # extra write nobody meant to add also shows up here. The cancelled
+            # delete is not among them — a dismissed confirm must not reach the
+            # API at all.
             check("the page sent the token on every write",
-                  seen == [stub_api.TOLLS_TOKEN] * 4)
+                  seen == [stub_api.TOLLS_TOKEN] * 5)
 
             # And a rejected token must be forgotten, or the page asks nobody
             # and fails the same way forever.

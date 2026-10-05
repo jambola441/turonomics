@@ -230,7 +230,17 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_OPTIONS(self) -> None:
-        self._send({})
+        # The page is on another origin, so a DELETE is preflighted. Naming the
+        # methods matters: the real API allows GET, POST and DELETE, and a stub
+        # that waved everything through would hide a missing one.
+        body = b"{}"
+        self.send_response(200)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, DELETE")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_GET(self) -> None:
         if self.path.startswith("/seen-auth"):
@@ -280,6 +290,18 @@ class Handler(BaseHTTPRequestHandler):
                         "matched": 0, "unmatched": 3, "unknown_tags": []})
         else:
             self._send(FLEET["vehicles"][0])
+
+    def do_DELETE(self) -> None:
+        path, _, _query = self.path.partition("?")
+        if path.startswith("/api/tolls") and not self._authorized():
+            return
+        toll_id = path.rsplit("/", 1)[-1]
+        for index, toll in enumerate(TOLLS):
+            if toll["id"] == toll_id:
+                TOLLS.pop(index)
+                self._send({"deleted": 1})
+                return
+        self._send({"deleted": 0})
 
     def _read_body(self) -> None:
         length = int(self.headers.get("Content-Length") or 0)

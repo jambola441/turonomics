@@ -400,14 +400,40 @@ _TOTAL_CHARGE = re.compile(r"Total\s+charge\s*[-–—:]\s*\$?\s*([\d,]+\.\d{2})
 # enough: of eight charged invoices on the live account, not one total equalled
 # the rental's tolls, because a reimbursement bundles cleaning, fuel and damage
 # onto the same invoice. The toll line is the part that can be reconciled.
+# Digits and brackets allowed in the label, because a reimbursement also
+# carries lines like "Additional mileage (120 mi)" and "250 miles over". The
+# amount is still anchored to the end of its own line, which is what keeps
+# prose out.
 _LINE_ITEM = re.compile(
-    r"^\s*([A-Za-z][A-Za-z /&'-]{1,40}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
+    r"^\s*([A-Za-z][A-Za-z0-9 /&'.,()+-]{1,60}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
     re.MULTILINE,
 )
+
 # What Turo might call the toll line. Deliberately loose on the label and strict
 # about everything else: a label this does not recognise means no line matched,
 # which falls back to the total and changes nothing.
 _TOLL_LABEL = re.compile(r"\btolls?\b", re.IGNORECASE)
+
+# The other things a reimbursement invoice charges for. Not parsed in order to
+# reconcile them — nothing here knows what the mileage or the fuel should have
+# been — but to recognise a line that is about more than tolls. "Tolls and
+# fuel - $55.55" names two charges, and taking the whole amount as tolls would
+# write off the fuel as though a guest had paid it.
+# Each word earns its place by one test: when it sits *beside* "toll" in a
+# label, does the amount stop being toll-only? That is the only thing this
+# pattern ever does, since a label without "toll" in it is not a candidate
+# anyway.
+#
+# "fee" and "fees" failed that test and were removed. "Toll fees - $15.55" is
+# plainly the toll line, and refusing it would leave money uncollected for the
+# sake of a word — whereas "Tolls and fuel" genuinely does not say what the
+# toll share was.
+_OTHER_CHARGE = re.compile(
+    r"\b(?:mileage|miles|fuel|gas|petrol|ticket|tickets|citation|citations|"
+    r"violation|violations|cleaning|smoking|damage|overage|pet|delivery|"
+    r"parking)\b",
+    re.IGNORECASE,
+)
 
 
 @dataclass(frozen=True)
@@ -428,16 +454,25 @@ class ParsedInvoice:
 
     @property
     def toll_cents(self) -> int | None:
-        """What this invoice charged for tolls specifically, if it says.
+        """What this invoice charged for tolls alone, if it says so plainly.
 
-        None when no line is recognisable as tolls, which is the common case
-        for an invoice that is entirely cleaning or damage. The caller falls
-        back to comparing the total, so an unrecognised label loses nothing.
+        None in three cases, all of which fall back to comparing the total and
+        so refuse rather than guess:
+
+        * no line is recognisable as tolls — the common case for an invoice
+          that is entirely cleaning, damage or a ticket;
+        * a line names tolls *and* something else ("Tolls and fuel"), where the
+          toll share is not stated and taking the whole amount would write off
+          the fuel as though the guest had paid it;
+        * more than one line names tolls, which is not a shape seen in the wild
+          and not one to improvise on.
         """
-        for label, cents in self.lines:
-            if _TOLL_LABEL.search(label):
-                return cents
-        return None
+        found = [
+            cents
+            for label, cents in self.lines
+            if _TOLL_LABEL.search(label) and not _OTHER_CHARGE.search(label)
+        ]
+        return found[0] if len(found) == 1 else None
 
     @property
     def fingerprint(self) -> str:

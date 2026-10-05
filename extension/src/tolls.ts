@@ -35,8 +35,16 @@ export interface ScrapedPage {
   tables: ScrapedTable[];
   /** Hrefs that look like a CSV/Excel export, best first. */
   downloadLinks: string[];
-  /** Set when the content script fetched a download link itself. */
+  /** Set when the worker fetched a download link itself. */
   downloadedCsv?: string;
+  /**
+   * The activity table assembled from every page that was read, when more than
+   * one was. Preferred over `tables` so a paged statement arrives whole.
+   */
+  merged?: ScrapedTable;
+  /** How many pages were read, and why reading stopped. */
+  pagesRead?: number;
+  pagingStopped?: string;
 }
 
 /** What `chooseStatement` concluded, so the popup can say something useful. */
@@ -187,7 +195,7 @@ export function chooseStatement(page: ScrapedPage): StatementChoice {
     };
   }
 
-  const table = pickActivityTable(page.tables);
+  const table = page.merged ?? pickActivityTable(page.tables);
   if (!table) {
     return { csv: null, source: "none", headers: [], rowCount: 0, amountsLookPositive: false };
   }
@@ -209,6 +217,188 @@ export function chooseStatement(page: ScrapedPage): StatementChoice {
     rowCount: rows.length,
     amountsLookPositive: amountsLookPositive(headers, rows),
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Paging
+// ---------------------------------------------------------------------------
+// An account-activity page shows a few weeks at a time. Reading only what is on
+// screen meant a statement had to be sent a page at a time, by hand, and a page
+// missed was money never billed.
+//
+// The decisions live here; the clicking lives in the service worker, because a
+// "next" link that navigates tears down a content script half way through the
+// loop. These functions see descriptors of the controls, never elements, which
+// is what makes them testable without a browser.
+
+export interface ControlDescriptor {
+  text: string;
+  rel?: string;
+  ariaLabel?: string;
+  /** Disabled by attribute, aria-disabled, or a class saying so. */
+  disabled?: boolean;
+  className?: string;
+}
+
+export interface PageSizeOption {
+  value: string;
+  label: string;
+}
+
+// Jumps to the last page rather than the next one, so paging would skip every
+// page in between and the crossings on them.
+//
+// Checked before anything scores, so it beats an aria-label claiming "next".
+// That is a deliberate asymmetry: treating a real next as last stops paging
+// early, which is reported and can be finished by hand, while treating a real
+// last as next silently skips pages and reads as a complete statement.
+//
+// Two patterns, because the symbols have to be exact and the words must not be.
+// Anchoring the words meant a control labelled "Last page" was not recognised
+// at all — and since ">" on its own scores as next, an arrow with that label
+// would have been clicked. Every test here had the text and the label agreeing,
+// so nothing noticed.
+const SKIPS_SYMBOL = /^(?:>>|\u00bb)$/;
+const SKIPS_WORDS = /\b(?:last|jump to last|go to last)\b/i;
+
+function skipsPages(value: string): boolean {
+  const text = value.trim();
+  return SKIPS_SYMBOL.test(text) || SKIPS_WORDS.test(text);
+}
+
+const NEXT_TEXT = /^(?:next|next page|next >|>|\u203a|\u2192)$/i;
+const BACKWARDS = /prev|previous|back|first|earlier|<|\u2039|\u2190/i;
+
+function disabledLooking(control: ControlDescriptor): boolean {
+  if (control.disabled) return true;
+  return /\b(?:disabled|inactive|is-disabled|pagination-disabled)\b/i.test(
+    control.className ?? ""
+  );
+}
+
+/**
+ * Indices of the controls that plausibly advance one page, best first.
+ *
+ * Ranked rather than chosen, so the worker can try the next candidate when a
+ * click changes nothing. Anything that reads as backwards is excluded, and so
+ * is anything that jumps to the last page: paging one at a time is slower and
+ * cannot skip a page of crossings.
+ */
+export function rankNextControls(controls: ControlDescriptor[]): number[] {
+  const scored: { index: number; score: number }[] = [];
+  controls.forEach((control, index) => {
+    const text = control.text.trim();
+    const label = (control.ariaLabel ?? "").trim();
+    if (disabledLooking(control)) return;
+    if (skipsPages(text) || skipsPages(label)) return;
+    if (BACKWARDS.test(text) || BACKWARDS.test(label)) {
+      // "<" and "previous" are not next, whatever else they match.
+      if (!NEXT_TEXT.test(text) && !/next/i.test(label)) return;
+    }
+    let score = 0;
+    if ((control.rel ?? "").toLowerCase() === "next") score = 100;
+    else if (/^next\b|\bnext page\b/i.test(label)) score = 90;
+    else if (NEXT_TEXT.test(text)) score = 80;
+    else if (/next/i.test(text)) score = 50;
+    else return;
+    scored.push({ index, score });
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.map((entry) => entry.index);
+}
+
+/**
+ * The option that shows the most rows at once, or null to leave it alone.
+ *
+ * Worth doing before any clicking: a page-size control that offers "All" turns
+ * a twelve-page statement into one, and every page not loaded is a page that
+ * cannot go wrong.
+ */
+export function pickPageSize(options: PageSizeOption[]): string | null {
+  let bestAll: PageSizeOption | null = null;
+  let bestNumber: { option: PageSizeOption; n: number } | null = null;
+  for (const option of options) {
+    if (/^\s*(?:all|show all|everything)\s*$/i.test(option.label)) {
+      bestAll = bestAll ?? option;
+      continue;
+    }
+    const n = parseInt(option.label.replace(/[^\d]/g, ""), 10);
+    if (!isNaN(n) && (bestNumber === null || n > bestNumber.n)) {
+      bestNumber = { option, n };
+    }
+  }
+  if (bestAll) return bestAll.value;
+  return bestNumber ? bestNumber.option.value : null;
+}
+
+/**
+ * A short string that changes when the table does.
+ *
+ * Used to tell "the next page loaded" from "the click did nothing", and to
+ * notice a control that cycles back to the first page. Built from the ends and
+ * the count rather than the whole table: enough to distinguish pages, cheap
+ * enough to compare on every iteration.
+ */
+export function tableSignature(table: ScrapedTable | null): string {
+  if (!table || !table.rows.length) return "empty";
+  const first = (table.rows[0] ?? []).map(cleanCell).join("|");
+  const last = (table.rows[table.rows.length - 1] ?? []).map(cleanCell).join("|");
+  return `${table.rows.length}#${first}#${last}`;
+}
+
+/** Beyond this many pages something is wrong, and it is not worth finding out
+ * by clicking three hundred times on somebody's tolling account. */
+export const MAX_PAGES = 40;
+
+/**
+ * Why to stop paging, or null to continue.
+ *
+ * A reason rather than a boolean, because the popup should be able to say "read
+ * 9 pages" differently from "gave up after 40" — the second means rows may be
+ * missing, and a reconciliation that silently stops early is worse than one
+ * that says it stopped.
+ */
+export function shouldStopPaging(signatures: string[], maxPages = MAX_PAGES): string | null {
+  if (signatures.length >= maxPages) return `stopped at ${maxPages} pages`;
+  const latest = signatures[signatures.length - 1];
+  if (latest === "empty" && signatures.length > 1) return "the next page was empty";
+  if (signatures.indexOf(latest) < signatures.length - 1) {
+    // Seen before: the control wrapped around, or stopped advancing.
+    return "the page stopped changing";
+  }
+  return null;
+}
+
+/**
+ * One table out of the pages read, or null if none of them was a statement.
+ *
+ * Pages whose headers disagree with the first are dropped rather than
+ * concatenated: a different shape is a different table, and appending its rows
+ * would put a plaza where an amount should be. Identical rows are collapsed —
+ * paging controls re-render the same rows more often than an account is charged
+ * twice in the same second, and the server's own fingerprint is the authority
+ * either way.
+ */
+export function mergeActivityPages(pages: ScrapedTable[]): ScrapedTable | null {
+  let headers: string[] | null = null;
+  const rows: string[][] = [];
+  const seen = new Set<string>();
+  for (const page of pages) {
+    const table = pickActivityTable([page]);
+    if (!table) continue;
+    const cleaned = table.headers.map(cleanCell);
+    if (headers === null) headers = cleaned;
+    else if (cleaned.join("|") !== headers.join("|")) continue;
+    for (const row of usableRows(table)) {
+      const key = row.join("\u0000");
+      if (seen.has(key)) continue;
+      seen.add(key);
+      rows.push(row);
+    }
+  }
+  if (headers === null || !rows.length) return null;
+  return { headers, rows };
 }
 
 // ---------------------------------------------------------------------------

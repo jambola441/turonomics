@@ -29,9 +29,18 @@ Nothing stores your E-ZPass credentials — this extension never sees them.
    bound to a car.
 
 It prefers a CSV the site generates (there is usually a download link on that
-page) and falls back to scraping the activity table. Re-sending the same page is
-harmless: the API fingerprints each crossing and skips the ones it already has,
-so paging through a long statement and sending each page works.
+page) and falls back to scraping the activity table — **paging through it
+itself**. If the page has a rows-per-page control it asks for the largest option
+first, because a page not loaded is a page that cannot go wrong, then clicks
+through what remains and merges the result. It stops when a page repeats, when
+the click changes nothing, or at 40 pages — and the last of those is reported as
+a warning, because rows may be missing.
+
+Re-sending is harmless either way: the API fingerprints each crossing and skips
+the ones it has.
+
+The paging is driven from the service worker rather than a content script, since
+a "next" link that navigates would tear a content script down mid-loop.
 
 ### If it cannot find the activity
 
@@ -97,10 +106,11 @@ npm test             # compile, then node --test over dist/
 ```
 
 `src/tolls.ts` holds everything the E-ZPass side decides, and nothing that
-touches the DOM. That split is deliberate: a content script cannot be an ES
-module, so anything inside one is untestable without a browser. `src/ezpass.ts`
-reads tables and candidate links into plain data and makes no decisions;
-`src/tolls.ts` decides what the data meant and is covered by `npm test`.
+touches the DOM: which table is the statement, which control advances a page,
+which page size to ask for, when paging has finished, and how to merge the
+pages. The functions injected into the page live in `src/background.ts` and do
+the least possible — read the DOM, click a thing, set a select — so that every
+judgement is reachable by `npm test` without a browser.
 
 `examples/ezpass/scraped-from-page.csv` is a contract between this extension and
 the Python importer: `tolls.test.ts` asserts the scraper still produces it byte
@@ -108,6 +118,11 @@ for byte, and `api/tests/test_parsing_ezpass.py` asserts the importer still
 reads it. Changing the CSV shape on one side fails on the other.
 
 ## Loading in Chrome
+
+**Already have it loaded?** Version 1.1.0 changed the manifest (the E-ZPass
+content script is gone, since the worker injects what it needs), so this one
+needs `npm run build` and then **Reload** on the extension card — earlier
+updates were server-side and needed neither.
 
 1. Run `npm run build`
 2. Open Chrome → `chrome://extensions/`

@@ -139,6 +139,7 @@ SPOTS = {
 # for.
 STUB_TAG_A = "99900000001"
 STUB_TAG_B = "99900000002"
+STUB_TAG_C = "99900000003"
 
 
 def _toll(**over: object) -> dict:
@@ -153,6 +154,7 @@ def _toll(**over: object) -> dict:
         "guest_name": None,
         "trip_id": None,
         "recovered_at": None,
+        "outside_label": None,
     }
     row.update(over)
     return row
@@ -182,6 +184,10 @@ TOLLS = [
           transponder_id=STUB_TAG_B),
     _toll(id="dddd0000-0000-0000-0000-00000000006a", plaza="HBT", amount_cents=1700,
           license_plate="ABC1234"),
+    # A crossing on the account that is not the fleet's — a family car. Real
+    # money out, nobody's to repay, and no binding will fix it.
+    _toll(id="dddd0000-0000-0000-0000-00000000008a", plaza="GSP", amount_cents=925,
+          transponder_id=STUB_TAG_C, outside_label="Mum's car"),
     _toll(id="dddd0000-0000-0000-0000-00000000007a", plaza="WDG", amount_cents=150,
           license_plate="LZA7293", vehicle_nickname="Jerry", guest_name="Dana",
           trip_id="eeee0000-0000-0000-0000-00000000000b",
@@ -204,15 +210,25 @@ def _tolls_payload() -> dict:
     response apart from one that re-renders from the tap, which is the bug the
     smoke test is there to catch.
     """
+    # The real API leaves a labelled tag out of this list: it is not waiting
+    # for a car, so asking for a binding every month would be noise.
     unknown = sorted(
         {t["transponder_id"] for t in TOLLS
-         if t["vehicle_nickname"] is None and t["transponder_id"]}
+         if t["vehicle_nickname"] is None and t["transponder_id"]
+         and not t["outside_label"]}
     )
     return {
         "tolls": TOLLS,
         "total_cents": sum(t["amount_cents"] for t in TOLLS),
         "unrecovered_cents": sum(t["amount_cents"] for t in TOLLS if not t["recovered_at"]),
-        "unattributed_cents": sum(t["amount_cents"] for t in TOLLS if not t["trip_id"]),
+        "unattributed_cents": sum(
+            t["amount_cents"] for t in TOLLS
+            if not t["trip_id"] and not t["outside_label"]
+        ),
+        "outside_cents": sum(
+            t["amount_cents"] for t in TOLLS
+            if not t["trip_id"] and t["outside_label"]
+        ),
         "unknown_tags": unknown,
         "token_required": True,
     }

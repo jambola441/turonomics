@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import Toll
 from turonomics_api.ingest.tolls import import_tolls, rematch_unattributed
+from turonomics_api.settings import outside_fleet
 
 log = logging.getLogger("turonomics.routers.tolls")
 
@@ -70,6 +71,9 @@ class TollRow(BaseModel):
     guest_name: str | None = None
     trip_id: uuid.UUID | None = None
     recovered_at: datetime | None = None
+    # Whose car it is, when the crossing belongs to one that is not this
+    # fleet's. None for everything else.
+    outside_label: str | None = None
 
 
 class TollsResponse(BaseModel):
@@ -80,6 +84,10 @@ class TollsResponse(BaseModel):
     unrecovered_cents: int
     unattributed_cents: int
     unknown_tags: list[str]
+    # Money on this account that is not this fleet's — a family car, a van that
+    # has left. Real money out, but not a guest's to repay and not a gap to be
+    # fixed, so it is reported apart from both.
+    outside_cents: int = 0
     # Whether the writes need a token. The page asks for one up front rather
     # than discovering it from a failed upload.
     token_required: bool = False
@@ -94,8 +102,22 @@ class ImportResponse(BaseModel):
     unknown_tags: list[str]
 
 
-def _row(toll: Toll) -> TollRow:
+def _identifier(toll: Toll) -> str:
+    """How a statement names this crossing: its tag, or its plate.
+
+    Not upper-cased. The parser already uppercases a plate and a tag is all
+    digits, so there is no case left to normalise — a mutation removing an
+    ``.upper()`` here passed every test, which is what dead code looks like.
+    The variable's own keys are upper-cased where they are read, because those
+    are typed by a person.
+    """
+    return toll.transponder_id or toll.license_plate or ""
+
+
+def _row(toll: Toll, outside: dict[str, str] | None = None) -> TollRow:
+    outside = outside if outside is not None else outside_fleet()
     return TollRow(
+        outside_label=outside.get(_identifier(toll)),
         id=toll.id,
         occurred_at=toll.occurred_at,
         plaza=toll.plaza,
@@ -125,6 +147,7 @@ def list_tolls(
     if unrecovered_only:
         query = query.where(Toll.recovered_at.is_(None))
     rows = session.scalars(query).all()
+    outside = outside_fleet()
 
     total = session.scalar(select(func.coalesce(func.sum(Toll.amount_cents), 0))) or 0
     unrecovered = (
@@ -138,12 +161,19 @@ def list_tolls(
     # Money that cannot be billed to anyone yet, because nothing says whose
     # crossing it was. Reported separately so it is not mistaken for revenue
     # waiting to be collected.
-    unattributed = (
-        session.scalar(
-            select(func.coalesce(func.sum(Toll.amount_cents), 0)).where(Toll.trip_id.is_(None))
-        )
-        or 0
+    # Summed in Python rather than SQL because which identifiers are outside
+    # the fleet lives in the environment, not the database — so that changing
+    # whose car a tag is does not mean re-importing a statement.
+    loose = session.scalars(
+        select(Toll).where(Toll.trip_id.is_(None))
+    ).all()
+    unattributed = sum(
+        t.amount_cents for t in loose if _identifier(t) not in outside
     )
+    outside_total = sum(
+        t.amount_cents for t in loose if _identifier(t) in outside
+    )
+
     unknown = session.scalars(
         select(Toll.transponder_id)
         .where(Toll.vehicle_id.is_(None), Toll.transponder_id.is_not(None))
@@ -151,11 +181,14 @@ def list_tolls(
     ).all()
 
     return TollsResponse(
-        tolls=[_row(t) for t in rows],
+        tolls=[_row(t, outside) for t in rows],
         total_cents=int(total),
         unrecovered_cents=int(unrecovered),
         unattributed_cents=int(unattributed),
-        unknown_tags=sorted(t for t in unknown if t),
+        # A tag whose owner is known is not an unbound tag. Listing it would
+        # ask the operator, every month, to bind a car that does not exist.
+        unknown_tags=sorted(t for t in unknown if t and t.upper() not in outside),
+        outside_cents=int(outside_total),
         token_required=token_configured(),
     )
 

@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
+from collections import Counter
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -150,39 +152,102 @@ def parse_tag_map(raw: str) -> dict[str, str]:
 
 
 def apply_tags(session: Session, tag_map: dict[str, str]) -> list[str]:
-    """Bind EZPass transponders to vehicles by nickname. Returns what changed."""
+    """Bind EZPass transponders to vehicles by nickname. Returns what changed.
+
+    ``EZPASS_TAGS`` is the only record of which tag is in which car, so it wins
+    over what is already stored. It used to be write-once: a car that had a tag
+    kept it and the variable was ignored, which meant a typo could only be
+    undone with database access and a replaced transponder could not be
+    recorded at all. Transponders do get replaced — one car in this fleet is on
+    its second — so that was not hypothetical.
+
+    Resolved in two passes, every car the variable names cleared before any is
+    assigned. One pass cannot express a reassignment: moving a tag from one car
+    to another only worked if the database happened to return the losing car
+    first, so the same variable applied to the same fleet could bind or refuse
+    depending on row order. Clearing first also lets two cars swap tags, which
+    is a real thing to have to record after the stickers go in the wrong
+    windscreens.
+
+    Still refused: a tag claimed by two of the named cars at once, since the
+    variable cannot say which should win, and a tag held by a car the variable
+    does not mention, since taking it would silently unbind that car.
+
+    Crossings already attributed under the old tag are left alone. They cannot
+    be told apart: a corrected typo makes them wrong, a replaced transponder
+    makes them right, and the old tag genuinely was in that car at the time.
+    """
     changed: list[str] = []
     if not tag_map:
         return changed
 
-    held = {v.ezpass_tag: v for v in session.scalars(select(Vehicle)) if v.ezpass_tag}
-    for vehicle in session.scalars(select(Vehicle)):
+    vehicles = list(session.scalars(select(Vehicle)))
+    by_id = {v.id: v for v in vehicles}
+
+    # Pass one: what the variable asks for, by vehicle.
+    wanted: dict[uuid.UUID, str] = {}
+    for vehicle in vehicles:
         for name in filter(None, (vehicle.nickname, vehicle.bouncie_nickname)):
             tag = tag_map.get(name.lower())
-            if tag is None:
-                continue
-            if vehicle.ezpass_tag == tag:
+            if tag is not None:
+                wanted[vehicle.id] = tag
                 break
-            holder = held.get(tag)
-            if holder is not None and holder.id != vehicle.id:
-                # A transponder is in one car. Two claiming it would attribute
-                # the same crossing to both, and the unique index would reject
-                # it with a stack trace at boot.
+
+    # Two named cars cannot share a transponder, and nothing here can say which
+    # of them is right, so both are left as they were.
+    counts = Counter(wanted.values())
+    for vehicle_id, tag in list(wanted.items()):
+        if counts[tag] > 1:
+            log.warning(
+                "transponder %s is claimed by %s — binding none of them",
+                tag,
+                ", ".join(
+                    sorted(by_id[vid].nickname or str(vid)
+                           for vid, t in wanted.items() if t == tag)
+                ),
+            )
+            del wanted[vehicle_id]
+
+    # A tag in a car the variable does not mention stays there. Reassigning it
+    # would unbind that car without saying so, and its crossings would start
+    # landing on nobody.
+    for vehicle in vehicles:
+        if not vehicle.ezpass_tag or vehicle.id in wanted:
+            continue
+        for vehicle_id, tag in list(wanted.items()):
+            if tag == vehicle.ezpass_tag:
                 log.warning(
                     "transponder %s already belongs to %s — not binding it to %s",
-                    tag, holder.nickname, vehicle.nickname,
+                    tag, vehicle.nickname, by_id[vehicle_id].nickname,
                 )
-                break
-            if vehicle.ezpass_tag is not None:
-                log.info(
-                    "%s already has transponder %s — leaving it",
-                    vehicle.nickname, vehicle.ezpass_tag,
-                )
-                break
-            vehicle.ezpass_tag = tag
-            held[tag] = vehicle
-            changed.append(f"{vehicle.nickname}={tag}")
-            break
+                del wanted[vehicle_id]
+
+    moving = {vid: tag for vid, tag in wanted.items() if by_id[vid].ezpass_tag != tag}
+    if not moving:
+        return changed
+
+    # Clear, flush, then assign. The unique index is checked per statement, so
+    # assigning before the old holder has been cleared would fail on a swap.
+    previous: dict[uuid.UUID, str | None] = {}
+    for vehicle_id in moving:
+        previous[vehicle_id] = by_id[vehicle_id].ezpass_tag
+        by_id[vehicle_id].ezpass_tag = None
+    session.flush()
+
+    for vehicle_id, tag in moving.items():
+        vehicle = by_id[vehicle_id]
+        vehicle.ezpass_tag = tag
+        was = previous[vehicle_id]
+        if was is not None:
+            # Loud, not silent: a tag changing under a car is either a replaced
+            # transponder or a mistake being corrected, and both are worth
+            # seeing in the boot log.
+            log.warning("%s: transponder %s -> %s", vehicle.nickname, was, tag)
+        changed.append(
+            f"{vehicle.nickname}={tag}" if was is None
+            else f"{vehicle.nickname}={was}->{tag}"
+        )
+    session.flush()
     return changed
 
 

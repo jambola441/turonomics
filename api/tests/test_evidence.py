@@ -243,3 +243,13 @@ def test_a_rental_past_the_window_cannot_be_filed(
 @requires_db
 def test_an_unknown_rental_is_a_404_not_an_empty_draft(api_client) -> None:
     assert api_client.get(f"/api/invoices/{uuid.uuid4()}/draft").status_code == 404
+
+
+def test_both_ends_of_the_trip_window_are_written_the_same_way() -> None:
+    """It read "9 Jul 2026, 7:00 AM — Sun 12 Jul 2026, 2:00 PM" at first: a
+    weekday on one end and not the other, on a document a guest reads."""
+    svg = evidence_svg(_sheet())
+    window = svg.split("Trip: ")[1].split("</text>")[0]
+    before, after = window.split(" — ")
+    assert before.split()[0].rstrip(",").isalpha(), window
+    assert after.split()[0].rstrip(",").isalpha(), window

@@ -81,10 +81,10 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
     height = _HEADER_HEIGHT + _ROW_HEIGHT * (len(sheet.rows) + 1) + _FOOTER_HEIGHT
     who = sheet.guest_name or "the guest"
     plate = f" · {sheet.plate}" if sheet.plate else ""
-    window = (
-        f"{sheet.starts_at.astimezone(fleet_timezone()):%-d %b %Y, %-I:%M %p}"
-        f" — {_local(sheet.ends_at)}"
-    )
+    # Both ends through the same formatter. Written differently at first, so
+    # the sheet read "9 Jul 2026, 7:00 AM — Sun 12 Jul 2026, 2:00 PM", with a
+    # weekday on one end and not the other.
+    window = f"{_local(sheet.starts_at)} — {_local(sheet.ends_at)}"
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{_WIDTH}" height="{height}" '
         f'viewBox="0 0 {_WIDTH} {height}" font-family="Helvetica, Arial, sans-serif">',

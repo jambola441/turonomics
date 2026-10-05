@@ -347,7 +347,13 @@ class LedgerResponse(BaseModel):
 
 
 def _ledger_state(
-    *, tolls: int, unfiled: int, filed: int, recovered: int, charged: int, left: int | None
+    *,
+    tolls: int,
+    unfiled: int,
+    filed: int,
+    recovered: int,
+    toll_line: int | None,
+    left: int | None,
 ) -> tuple[str, str | None]:
     """What this rental's crossings amount to, in a word.
 
@@ -360,10 +366,36 @@ def _ledger_state(
         return "settled", None
     if unfiled == 0 and filed > 0:
         return "awaiting payment", None
-    if unfiled > 0 and (filed > 0 or recovered > 0 or charged > 0):
+    if unfiled > 0 and (filed > 0 or recovered > 0):
         # The case the per-crossing tracking exists for: a statement arriving
         # after the first invoice went out.
-        return "partly billed", f"{unfiled / 100:,.2f} arrived after the first invoice"
+        #
+        # `unfiled > 0` here survives mutation and cannot be tested away: the
+        # three columns sum to the rental's tolls, so `unfiled == 0` with
+        # anything filed is already "awaiting payment" above, and with nothing
+        # filed it is "settled". It stays as a statement of what this branch
+        # means, since the arithmetic that makes it redundant lives elsewhere
+        # and could change.
+        #
+        # Turo having charged something is deliberately *not* part of this
+        # condition, and including it was wrong on real data: six rentals read
+        # as "partly billed" with nothing ever filed, because Turo had charged
+        # them for refuelling or a ticket. Its invoice totals say nothing about
+        # whose tolls are outstanding — only its toll line does, and these had
+        # none.
+        return (
+            "partly billed",
+            f"${unfiled / 100:,.2f} of these crossings has not been asked for",
+        )
+    if unfiled > 0 and toll_line is not None:
+        # Turo charged a toll line of its own and recovery could not reconcile
+        # it, so somebody has billed for tolls on this rental and it was not
+        # this app. Worth a person's eye before asking the guest again.
+        return (
+            "check Turo's toll line",
+            f"Turo charged ${toll_line / 100:,.2f} of tolls against "
+            f"${unfiled / 100:,.2f} still outstanding here",
+        )
     if unfiled > 0 and left is not None and left < 0:
         return "expired", "past the 90-day window, so this cannot be filed"
     if unfiled > 0:
@@ -407,7 +439,7 @@ def ledger(session: DbSession) -> LedgerResponse:
             unfiled=unfiled,
             filed=filed,
             recovered=recovered,
-            charged=charged,
+            toll_line=sum(toll_lines) if toll_lines else None,
             left=left,
         )
         rows.append(

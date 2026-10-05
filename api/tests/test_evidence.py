@@ -606,7 +606,7 @@ def test_the_ledger_splits_a_rental_into_asked_and_not(
     assert row["unfiled_cents"] == 1100, "arrived afterwards"
     assert row["recovered_cents"] == 0
     assert row["state"] == "partly billed"
-    assert "arrived after the first invoice" in row["note"]
+    assert "has not been asked for" in row["note"]
 
 
 @requires_db
@@ -700,3 +700,56 @@ def test_a_fully_asked_rental_reads_as_awaiting_payment(
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert row["state"] == "awaiting payment"
     assert row["unfiled_cents"] == 0
+
+
+@requires_db
+def test_turo_charging_for_something_else_is_not_these_tolls_being_billed(
+    api_client, session, car, rental
+) -> None:
+    """Found on real data: six rentals read as "partly billed" with nothing
+    ever filed, because Turo had charged them for refuelling or a ticket. Its
+    invoice totals say nothing about whose tolls are outstanding — the note
+    even claimed the full amount "arrived after the first invoice" when there
+    had been no first invoice.
+    """
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:888", reservation_id=rental.turo_trip_id,
+            guest_name="Dylan", state="charged", total_cents=19040,
+            lines=[["Tickets", 19040]], toll_cents=None,
+            trip_id=rental.id, last_seen_at=NOW, charged_at=NOW,
+        )
+    )
+    session.commit()
+
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "to bill", "none of these tolls has been asked for"
+    assert row["note"] is None
+    assert row["unfiled_cents"] == 4071
+    # Turo's charge is still shown, because it is true and worth seeing.
+    assert row["charged_cents"] == 19040
+    assert row["turo_toll_line_cents"] is None
+
+
+@requires_db
+def test_a_turo_toll_line_that_did_not_reconcile_is_flagged(
+    api_client, session, car, rental
+) -> None:
+    """Somebody has billed for tolls on this rental and it was not this app.
+    Worth a person's eye before asking the guest again."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=7051)
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:999", reservation_id=rental.turo_trip_id,
+            guest_name="Dylan", state="charged", total_cents=3631,
+            lines=[["Tolls", 3631]], toll_cents=3631,
+            trip_id=rental.id, last_seen_at=NOW, charged_at=NOW,
+        )
+    )
+    session.commit()
+
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "check Turo's toll line"
+    assert "$36.31 of tolls" in row["note"]
+    assert "$70.51 still outstanding" in row["note"]

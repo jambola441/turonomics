@@ -74,6 +74,13 @@ QUOTA_BACKOFF_SECONDS = 20.0
 
 # Words that are structure rather than content, so they survive masking. Losing
 # these would hide the labels the parser has to match on.
+#
+# The charge words earn their place the hard way. A reimbursement invoice's
+# charge lines came back as "<NAME> - <MONEY>", which says there is a label and
+# an amount but not which charge it is — and "which charge" is the entire
+# question, because the toll line is the only one that can be reconciled
+# against a statement. Every one of them is a noun out of Turo's own invoice,
+# not a thing a person is called.
 VOCABULARY = frozenset(
     # Split from a block rather than written as a list: the point is that it is
     # easy to add a word to when a label comes back over-masked.
@@ -89,6 +96,11 @@ VOCABULARY = frozenset(
     view send reply earn earns earned mileage included miles note
     profile deposit payment business week once per within three days
     by about your has have question questions answers common concerns
+    toll cleaning fuel gas ticket tickets citation citations violation
+    violations damage smoking pet parking charge charges charged additional
+    reimbursement reimbursements invoice invoices late overage prepaid refuel
+    mile distance deductible cancellation incidental incidentals other misc
+    subtotal tax taxes young driver unlimited responded not
     """.split()  # noqa: SIM905
 )
 

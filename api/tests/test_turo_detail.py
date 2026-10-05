@@ -450,3 +450,52 @@ def test_an_empty_pull_is_not_an_error(api_client, monkeypatch, body) -> None:
     response = api_client.post("/api/turo/details", json={"details": [], **body})
     assert response.status_code == 200
     assert response.json()["seen"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Saying what actually moved
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_an_overnight_move_is_legible(session, trip) -> None:
+    """From a real pull: "2026-08-29 13:00–19:00 -> 2026-08-29 13:00–19:00".
+
+    The rental had genuinely moved — its end shifted by a whole day — and the
+    report hid the only part that changed, because the end was formatted
+    without its date. A report of what moved has to say what moved.
+    """
+    result = DetailResult()
+    parsed = parse_detail(
+        _detail(
+            reservation=trip.turo_trip_id,
+            start=trip.starts_at,
+            end=trip.ends_at + timedelta(days=1),
+        )
+    )
+    assert parsed is not None
+    apply_detail(session, parsed, now=NOW, result=result)
+    line = result.retimed[0]
+    before, after = line.split(" -> ")
+    assert before != after, line
+    # Both ends carry a date, because the days differ on both sides.
+    assert before.count("2026-") == 2 and after.count("2026-") == 2, line
+
+
+@requires_db
+def test_a_same_day_move_stays_short(session, trip) -> None:
+    """The end's date is kept when it adds something, not always: a rental
+    inside one day reads better as "13:00–19:00"."""
+    inside = trip.starts_at.replace(hour=9)
+    result = DetailResult()
+    parsed = parse_detail(
+        _detail(
+            reservation=trip.turo_trip_id,
+            start=inside,
+            end=inside + timedelta(hours=6),
+        )
+    )
+    assert parsed is not None
+    apply_detail(session, parsed, now=NOW, result=result)
+    _, after = result.retimed[0].split(" -> ")
+    assert after.count("2026-") == 1, after

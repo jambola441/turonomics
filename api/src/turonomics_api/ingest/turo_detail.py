@@ -74,6 +74,22 @@ class ReservationDetail:
     license_plate: str | None = None
 
 
+def _interval(starts: datetime, ends: datetime) -> str:
+    """A rental's interval, with the end's date kept when it is a different day.
+
+    The first version wrote the end as ``%H:%M`` alone, and on a real pull that
+    produced lines reading "2026-08-29 13:00–19:00 -> 2026-08-29 13:00–19:00"
+    for a rental that had genuinely moved, and "19:00–19:00" for one that had
+    not become zero-length. Both were multi-day rentals whose end had shifted
+    by a whole day, and the format hid the only part that changed. A report of
+    what moved is worth having only if it says what moved.
+    """
+    same_day = starts.date() == ends.date()
+    return f"{starts:%Y-%m-%d %H:%M}–{ends:%H:%M}" if same_day else (
+        f"{starts:%Y-%m-%d %H:%M}–{ends:%Y-%m-%d %H:%M}"
+    )
+
+
 def parse_detail(payload: Mapping[str, Any]) -> ReservationDetail | None:
     """One ``/api/reservation/detail`` response, or None if it is not one.
 
@@ -149,8 +165,8 @@ def apply_detail(
         and ends > starts
         and (trip.starts_at, trip.ends_at) != (starts, ends)
     ):
-        was = f"{trip.starts_at:%Y-%m-%d %H:%M}–{trip.ends_at:%H:%M}"
-        now_is = f"{starts:%Y-%m-%d %H:%M}–{ends:%H:%M}"
+        was = _interval(trip.starts_at, trip.ends_at)
+        now_is = _interval(starts, ends)
         result.retimed.append(f"{detail.reservation_id}: {was} -> {now_is}")
         trip.starts_at = starts
         trip.ends_at = ends

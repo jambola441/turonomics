@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Turonomics",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Export Turo host trip history, read what Turo's pages fetch, and send an E-ZPass statement to Turonomics",
   "permissions": [
     "downloads",

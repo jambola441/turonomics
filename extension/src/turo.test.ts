@@ -286,3 +286,13 @@ test("a status longer than a word is still vocabulary", () => {
   assert.equal(stringShape("LWH4685"), "str(7)");
   assert.equal(stringShape("Charged to the guest on Tuesday"), "str(31)");
 });
+
+test("first-party analytics is still analytics", () => {
+  // Both showed up in a real report: a Cloudflare RUM beacon and Turo's own
+  // collector, on turo.com, answering 204 and HTML respectively.
+  assert.equal(interestingCall("https://turo.com/cdn-cgi/rum"), false);
+  assert.equal(interestingCall("https://turo.com/api/tracking"), false);
+  // Not an over-broad rule: the real endpoints under /api/ stay.
+  assert.equal(interestingCall("https://turo.com/api/reservation/detail?x=1"), true);
+  assert.equal(interestingCall("https://turo.com/api/tracking/preferences"), true);
+});

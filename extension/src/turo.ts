@@ -151,6 +151,9 @@ export interface SeenCall {
 // never on the query string, which is where the borrowed words live.
 const FIRST_PARTY = /^(?:[a-z0-9-]+\.)*turo\.com$/i;
 const ASSET = /\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|map)$/i;
+// First party by host and still not Turo's data: Cloudflare's RUM beacon and
+// Turo's own analytics collector, both of which answer 204 or HTML.
+const FIRST_PARTY_NOISE = /^\/(?:cdn-cgi\/|api\/tracking$)/i;
 
 export function interestingCall(url: string, base = "https://turo.com/"): boolean {
   let parsed: URL;
@@ -160,6 +163,7 @@ export function interestingCall(url: string, base = "https://turo.com/"): boolea
     return false;
   }
   if (!FIRST_PARTY.test(parsed.hostname)) return false;
+  if (FIRST_PARTY_NOISE.test(parsed.pathname)) return false;
   return !ASSET.test(parsed.pathname);
 }
 
@@ -194,15 +198,20 @@ export function summariseCalls(calls: SeenCall[]): string {
 }
 
 // ---------------------------------------------------------------------------
-// The data is in the HTML
+// Whatever JSON the document carries
 // ---------------------------------------------------------------------------
 //
-// The first real probe of a trip page and of an invoice page found no call
-// carrying either. Both are server-rendered: the payload ships inside the
-// document, in a JSON script tag or on a global, and the page hydrates from
-// it. So the endpoints were the wrong thing to look for, and the document is
-// the thing to read — which is also the more stable of the two, since it
-// cannot change without the page changing.
+// Written on a conclusion that turned out to be wrong, and kept because the
+// next page may yet need it. The first probe of a trip page found no call
+// carrying a trip, and "the pages are server-rendered" was read off that. They
+// are not: the data comes over XHR, and the probe was hiding it — a relative
+// URL was reported as the bare word "url", and six analytics beacons were
+// outranking the two calls that mattered. With both fixed, the trip page shows
+// `/api/reservation/detail` plainly and the document holds nothing but
+// schema.org markup.
+//
+// The lesson is the one this file keeps relearning: an absence reported by a
+// tool is a claim about the tool first.
 
 /** A blob of JSON found in the document. */
 export interface Embedded {

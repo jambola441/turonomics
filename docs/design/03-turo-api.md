@@ -11,6 +11,15 @@ These endpoints carry the same data typed, with ids, and in epoch millis.
 Everything here is fetched with the session the browser already holds, so the
 extension can call it directly. None of it needs a key.
 
+**The pages are not server-rendered.** An earlier read of a broken probe said
+they were: the trip page appeared to fetch nothing, so the data "must" have
+shipped inside the document. It does not. With the probe's two bugs fixed — a
+relative URL reported as the bare word `url`, and analytics beacons outranking
+real calls because the filter read their query strings — the trip page shows
+`/api/reservation/detail` plainly, and the only JSON in the document is 892
+characters of schema.org markup for search engines. An absence reported by a
+tool is a claim about the tool first.
+
 ## The two that matter
 
 ### `GET /api/reservation/detail?reservationId=<id>&oppTermsAware=true`
@@ -122,7 +131,8 @@ minutes; this is where a guest message actually arrives from.
 ## What this does not answer
 
 - Whether a check-out *time* (as opposed to an odometer reading) is in the
-  `+38 more` of reservation detail. The next probe run will say.
+  `+38 more` of reservation detail. Still unanswered: the two clean reports
+  were taken on 1.3.0, before the probe started naming the keys it drops.
 - How an invoice is filed. The invoice page here is a finished invoice; the
   filing form is a different route, and its POST has not been observed.
 - Whether the conversation feed lists reservations with no messages.

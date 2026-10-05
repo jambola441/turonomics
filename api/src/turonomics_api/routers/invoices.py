@@ -18,7 +18,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import ReimbursementInvoice, Toll
+from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
+from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_svg
 from turonomics_api.ingest.invoices import Invoice, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
@@ -163,6 +164,96 @@ def _row(
         # is the part that can be reconciled at all.
         charged_but_different=bool(charged)
         and (charged_tolls if charged_tolls is not None else charged) != invoice.total_cents,
+    )
+
+
+class DraftLine(BaseModel):
+    toll_id: uuid.UUID
+    occurred_at: datetime
+    plaza: str
+    amount_cents: int
+
+
+class DraftResponse(BaseModel):
+    """Everything needed to file one toll invoice, assembled in one place.
+
+    The extension is what talks to Turo, and it should not have to decide what
+    to claim. This says which reservation, which crossings, how much, whether
+    Turo will still take it, and carries the evidence sheet to attach.
+    """
+
+    trip_id: uuid.UUID
+    turo_trip_id: str | None
+    guest_name: str | None
+    vehicle_nickname: str | None
+    starts_at: datetime
+    ends_at: datetime
+    lines: list[DraftLine]
+    total_cents: int
+    days_left: int | None
+    # Turo's own answer where the pull has fetched it, and the 90-day window
+    # otherwise. Named so the caller can tell which it got, because one is a
+    # fact about this reservation and the other is arithmetic.
+    can_file: bool
+    can_file_from_turo: bool
+    # The evidence to attach, as SVG. The extension rasterises it: Turo wants
+    # an image, and a browser is already the thing holding one.
+    evidence_svg: str
+
+
+@router.get("/{trip_id}/draft", response_model=DraftResponse)
+def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
+    now = datetime.now(UTC)
+    window = toll_filing_window_days()
+    built = build_invoices(session, now=now)
+    invoice = next((i for i in built if i.trip_id == trip_id), None)
+    if invoice is None:
+        # 404 rather than an empty draft: filing nothing is not a thing to do,
+        # and a rental whose crossings are all recovered has no invoice to
+        # draft rather than an invoice for zero.
+        raise HTTPException(status_code=404, detail="no outstanding crossings on that rental")
+
+    trip = session.get(Trip, trip_id)
+    from_turo = trip.can_file_reimbursement if trip is not None else None
+    left = invoice.days_left(window, now)
+    sheet = EvidenceSheet(
+        reservation_id=invoice.turo_trip_id,
+        guest_name=invoice.guest_name,
+        vehicle=invoice.vehicle_nickname or "the car",
+        plate=trip.vehicle.plate if trip is not None and trip.vehicle else None,
+        starts_at=invoice.starts_at,
+        ends_at=invoice.ends_at,
+        rows=[
+            EvidenceRow(
+                occurred_at=line.occurred_at, plaza=line.plaza, amount_cents=line.amount_cents
+            )
+            for line in invoice.lines
+        ],
+        imported_at=trip.detail_synced_at if trip is not None else None,
+    )
+    return DraftResponse(
+        trip_id=invoice.trip_id,
+        turo_trip_id=invoice.turo_trip_id,
+        guest_name=invoice.guest_name,
+        vehicle_nickname=invoice.vehicle_nickname,
+        starts_at=invoice.starts_at,
+        ends_at=invoice.ends_at,
+        lines=[
+            DraftLine(
+                toll_id=line.toll_id,
+                occurred_at=line.occurred_at,
+                plaza=line.plaza,
+                amount_cents=line.amount_cents,
+            )
+            for line in invoice.lines
+        ],
+        total_cents=invoice.total_cents,
+        days_left=left,
+        # Turo's answer wins where there is one. It knows about holds and
+        # disputes that a day count cannot see.
+        can_file=from_turo if from_turo is not None else (left is not None and left >= 0),
+        can_file_from_turo=from_turo is not None,
+        evidence_svg=evidence_svg(sheet),
     )
 
 

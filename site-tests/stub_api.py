@@ -280,6 +280,9 @@ def _invoice(**over: object) -> dict:
         "file_by": _iso(days=51),
         "days_left": 51,
         "expired": False,
+        "charged_cents": 0,
+        "pending_cents": 0,
+        "charged_but_different": False,
     }
     row.update(over)
     return row
@@ -292,6 +295,13 @@ INVOICES = [
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000003", guest_name="Priya",
              off_platform=True, turo_trip_id=None, days_left=None, file_by=None,
              total_cents=2200),
+    # Turo charged a different amount on this rental: cleaning or fuel rode on
+    # the same invoice, so it cannot be ticked off automatically.
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000005", guest_name="Katherine",
+             days_left=30, file_by=_iso(days=30), total_cents=911,
+             charged_cents=1555, charged_but_different=True),
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000006", guest_name="Austin",
+             days_left=33, file_by=_iso(days=33), total_cents=4071, pending_cents=4071),
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000004", guest_name="Brandon",
              days_left=-5, file_by=_iso(days=-5), expired=True, total_cents=1679),
 ]
@@ -306,6 +316,8 @@ def _invoices_payload() -> dict:
                             if i["days_left"] is not None and 0 <= i["days_left"] <= 21),
         "expired_cents": sum(i["total_cents"] for i in INVOICES if i["expired"]),
         "off_platform_cents": sum(i["total_cents"] for i in INVOICES if i["off_platform"]),
+        "needs_a_look_cents": sum(i["total_cents"] for i in INVOICES
+                                  if i["charged_but_different"]),
         "token_required": True,
     }
 

@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import Toll, Trip, TripState
+from turonomics_api.ingest.reimbursements import relink_invoices
 from turonomics_api.ingest.tolls import (
     import_tolls,
     nearest_trip,
@@ -270,6 +271,10 @@ async def import_statement(
         # The parser's message names the missing column and lists what it did
         # find, which is the difference between "fix your file" and "fix what".
         raise HTTPException(422, str(exc)) from exc
+    # An invoice may already be on file from before the crossings were: a
+    # reimbursement charged in August says nothing until the August statement
+    # is imported in October.
+    relink_invoices(session, now=datetime.now(UTC))
     session.commit()
     return ImportResponse(
         rows=result.rows,
@@ -294,6 +299,7 @@ def rematch(
     """
     require_token(authorization)
     fixed = rematch_unattributed(session)
+    relink_invoices(session, now=datetime.now(UTC))
     session.commit()
     still_loose = (
         session.scalar(

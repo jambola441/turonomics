@@ -365,3 +365,100 @@ def is_active(trip: ParsedTrip, *, now: datetime) -> bool:
     reset its state to upcoming; the dates are more trustworthy than the label.
     """
     return trip.starts_at <= now < trip.ends_at + timedelta(0)
+
+# ---------------------------------------------------------------------------
+# Reimbursement invoices
+# ---------------------------------------------------------------------------
+# A reimbursement invoice is not a trip: no dates, no reservation block, so
+# parse_email rightly refuses it. But it is the record of money already asked
+# for, and without it the tolls page asks for the same money twice — which is
+# worse than not asking, because the guest has already paid it once.
+#
+# Three subjects, which are three states of the same invoice. All of them carry
+# the reservation in a link and the amount in a "Total charge" line.
+
+INVOICE_FILED = "filed"
+INVOICE_CHARGED = "charged"
+INVOICE_UNANSWERED = "unanswered"
+
+_INVOICE_SUBJECTS: tuple[tuple[str, str], ...] = (
+    # Order matters: "has not responded to your reimbursement invoice" also
+    # contains "reimbursement invoice".
+    (r"has not responded to your reimbursement invoice", INVOICE_UNANSWERED),
+    (r"has been charged for your reimbursement invoice", INVOICE_CHARGED),
+    (r"\binvoice\b", INVOICE_FILED),
+)
+
+# turo.com/reservation/<id>/receipt, and .../invoice-hub?invoiceId=<id>
+_INVOICE_RESERVATION = re.compile(
+    r"turo\.com/(?:[a-z]{2}/[a-z]{2}/)?reservation/(\d{4,})(?:/|\b)", re.IGNORECASE
+)
+_INVOICE_ID = re.compile(r"invoiceId=([A-Za-z0-9_-]{4,})", re.IGNORECASE)
+_TOTAL_CHARGE = re.compile(r"Total\s+charge\s*[-–—:]\s*\$?\s*([\d,]+\.\d{2})", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class ParsedInvoice:
+    """A reimbursement invoice as the notification describes it."""
+
+    state: str
+    reservation_id: str
+    guest_name: str | None
+    total_cents: int
+    # Turo's own id, where the link carries one. The "charged" notification
+    # links the receipt rather than the invoice hub, so it often does not.
+    turo_invoice_id: str | None
+
+    @property
+    def fingerprint(self) -> str:
+        """One identity across the three notifications of one invoice.
+
+        Turo's invoice id when a link carries it. Otherwise the reservation and
+        the amount, which is what the three emails have in common — keyed this
+        way so "filed", "unanswered" and "charged" collapse onto one record
+        rather than counting as three invoices for the same money.
+        """
+        if self.turo_invoice_id:
+            return f"inv:{self.turo_invoice_id}"
+        return f"res:{self.reservation_id}:{self.total_cents}"
+
+
+def classify_invoice(subject: str) -> str | None:
+    for pattern, state in _INVOICE_SUBJECTS:
+        if re.search(pattern, subject, re.IGNORECASE):
+            return state
+    return None
+
+
+def parse_invoice(subject: str, body: str, html: str | None = None) -> ParsedInvoice | None:
+    """A reimbursement invoice, or None if this email is not one.
+
+    None rather than raising: most Turo mail is not an invoice, and the caller
+    is a loop over everything in the mailbox.
+    """
+    state = classify_invoice(subject)
+    if state is None:
+        return None
+    haystack = f"{body}\n{html or ''}"
+    reservation = _INVOICE_RESERVATION.search(haystack)
+    total = _TOTAL_CHARGE.search(body)
+    if reservation is None or total is None:
+        return None
+    invoice_id = _INVOICE_ID.search(haystack)
+    return ParsedInvoice(
+        state=state,
+        reservation_id=reservation.group(1),
+        guest_name=_guest_from_subject(subject),
+        total_cents=int(round(float(total.group(1).replace(",", "")) * 100)),
+        turo_invoice_id=invoice_id.group(1) if invoice_id else None,
+    )
+
+
+def _guest_from_subject(subject: str) -> str | None:
+    """"Dylan has been charged for your reimbursement invoice" -> "Dylan".
+
+    Only for display beside the matched rental; the reservation id is what
+    actually identifies it.
+    """
+    match = re.match(r"\s*([^\d]{1,60}?)\s+has (?:been charged|not responded)", subject)
+    return match.group(1).strip() or None if match else None

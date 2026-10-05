@@ -415,6 +415,20 @@ def main() -> int:
             check("marking it billed back removes it from the list",
                   page.locator(".inv").count() == before_count - 1)
 
+            # Money Turo has already charged. Asking twice for what a guest has
+            # paid is a dispute rather than income, so it is on the row.
+            text = page.locator("#groups").text_content() or ""
+            check("a rental charged a different amount is flagged",
+                  "Turo already charged" in text and "check before asking again" in text)
+            check("an invoice filed but unpaid is distinguished from one paid",
+                  "filed and unpaid" in text)
+            look = page.locator("#look")
+            check("and the total needing a look is called out",
+                  look.is_visible()
+                  and _money(sum(i["total_cents"] for i in invoices
+                                 if i["charged_but_different"]))
+                      in (look.text_content() or ""))
+
             check("no uncaught errors on the invoices page", not errors)
 
             if errors:

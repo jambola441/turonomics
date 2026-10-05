@@ -61,6 +61,11 @@
   .inv .clock.soon{color:var(--amber)}
   .inv .clock.gone{color:var(--red)}
   .inv .clock.off{color:var(--blue)}
+  /* Already asked for. Amber when the amounts disagree, because that is a
+     judgement call; blue when an invoice is merely filed and unpaid. */
+  .inv .asked{font-family:var(--mono);font-size:10.5px;margin-top:3px;color:var(--blue)}
+  .inv .asked.odd{color:var(--amber)}
+  .note{font-size:12.5px;color:var(--amber);line-height:1.5;margin:-6px 0 14px}
   .inv .amt{font-family:var(--mono);font-size:16px;font-weight:600;flex-shrink:0}
 
   .lines{border-top:1px solid var(--border);padding:4px 13px 10px}
@@ -104,6 +109,8 @@
     <div class="stat gone"><div class="k">past the window</div><div class="v" id="s-gone">—</div>
       <div class="n">cannot be filed</div></div>
   </div>
+
+  <div class="note" id="look" hidden></div>
 
   <div id="groups"></div>
 </main>
@@ -240,6 +247,21 @@
         when(invoice.starts_at) + " → " + when(invoice.ends_at));
     var clock = clockNote(invoice);
     if (clock) add(body, "div", "clock " + clock.kind, clock.text);
+
+    // What Turo has already been asked for on this rental. Shown because
+    // invoicing money the guest has paid is a dispute, not income.
+    if (invoice.charged_but_different) {
+      add(body, "div", "asked odd",
+          "Turo already charged " + money(invoice.charged_cents) +
+          " here — these crossings are " + money(invoice.total_cents) +
+          ", so check before asking again");
+    } else if (invoice.charged_cents) {
+      add(body, "div", "asked",
+          money(invoice.charged_cents) + " already charged on this rental");
+    } else if (invoice.pending_cents) {
+      add(body, "div", "asked",
+          "an invoice for " + money(invoice.pending_cents) + " is filed and unpaid");
+    }
     add(head, "div", "amt", money(invoice.total_cents));
 
     // Collapsed by default: the list is for deciding what to do next, and the
@@ -266,6 +288,18 @@
     el("s-gone").textContent = money(data.expired_cents);
     el("s-urgent-note").textContent = "within 3 weeks of the " +
       data.window_days + "-day deadline";
+
+    // Charged invoices whose totals matched nothing on file. Not written off,
+    // because an invoice covers cleaning and fuel as readily as tolls.
+    var look = el("look");
+    if (data.needs_a_look_cents) {
+      look.textContent = money(data.needs_a_look_cents) +
+        " of crossings sit on rentals Turo has already charged for a different amount. " +
+        "Those could be paid already — worth checking before billing again.";
+      look.hidden = false;
+    } else {
+      look.hidden = true;
+    }
 
     var groups = el("groups");
     clear(groups);

@@ -531,3 +531,109 @@ def test_a_transaction_id_still_wins_when_the_export_has_one(session):
     assert import_tolls(session, with_id).imported == 1
     assert import_tolls(session, restated).imported == 0
     assert session.scalar(select(func.count()).select_from(Toll)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Undoing an import
+# ---------------------------------------------------------------------------
+# A ledger that can only grow is a ledger you cannot trust: a wrong file, or a
+# page the scraper misread, inflates what you think you are owed with no way
+# back. One fabricated row reached production before this existed.
+
+
+def test_deleting_a_toll_removes_it_from_the_ledger(api_client, session, monkeypatch):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", _statement(), "text/csv")}
+    )
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+
+    response = api_client.delete(f"/api/tolls/{toll.id}")
+    assert response.status_code == 200
+    assert response.json()["deleted"] == 1
+    assert session.scalar(select(func.count()).select_from(Toll)) == 0
+    assert api_client.get("/api/tolls").json()["total_cents"] == 0
+
+
+def test_deleting_the_same_toll_twice_is_not_an_error(api_client, session, monkeypatch):
+    """A retried delete must not fail.
+
+    A dropped connection on the first attempt is far more likely than a delete
+    aimed at a row that never existed, and a 404 on the retry teaches the
+    operator to distrust a delete that actually worked.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", _statement(), "text/csv")}
+    )
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+
+    assert api_client.delete(f"/api/tolls/{toll.id}").json()["deleted"] == 1
+    again = api_client.delete(f"/api/tolls/{toll.id}")
+    assert again.status_code == 200
+    assert again.json()["deleted"] == 0
+
+
+def test_a_deleted_crossing_can_be_imported_again(api_client, session, monkeypatch):
+    """Deleting releases the fingerprint.
+
+    Otherwise a delete would be permanent in the worst way: the row gone and
+    the statement unable to put it back.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", _statement(), "text/csv")}
+    )
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+    api_client.delete(f"/api/tolls/{toll.id}")
+
+    again = api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", _statement(), "text/csv")}
+    )
+    assert again.json()["imported"] == 1
+
+
+def test_deleting_leaves_the_vehicle_and_the_trip_alone(api_client, session, monkeypatch, jerry):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    trip = Trip(
+        vehicle_id=jerry.id,
+        guest_name="Dana",
+        starts_at=datetime(2026, 10, 1, 8, 0, tzinfo=UTC),
+        ends_at=datetime(2026, 10, 1, 20, 0, tzinfo=UTC),
+        state=TripState.completed,
+        source=TripSource.email,
+    )
+    session.add(trip)
+    session.flush()
+    statement = _csv(_row("9", "NY LZA7293", "10/01/2026", "09:00:00 AM", "-9.11")).encode()
+    api_client.post("/api/tolls/import", files={"statement": ("a.csv", statement, "text/csv")})
+
+    toll = session.scalar(select(Toll))
+    assert toll is not None and toll.trip_id == trip.id
+    api_client.delete(f"/api/tolls/{toll.id}")
+
+    session.expire_all()
+    assert session.get(Trip, trip.id) is not None
+    assert session.get(Vehicle, jerry.id) is not None
+
+
+def test_deleting_needs_the_token(api_client, session, monkeypatch):
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post(
+        "/api/tolls/import", files={"statement": ("a.csv", _statement(), "text/csv")}
+    )
+    toll = session.scalar(select(Toll))
+    assert toll is not None
+
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    assert api_client.delete(f"/api/tolls/{toll.id}").status_code == 401
+    assert session.scalar(select(func.count()).select_from(Toll)) == 1
+
+    ok = api_client.delete(
+        f"/api/tolls/{toll.id}", headers={"Authorization": "Bearer letmein"}
+    )
+    assert ok.status_code == 200
+    assert session.scalar(select(func.count()).select_from(Toll)) == 0

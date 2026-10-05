@@ -220,6 +220,40 @@ def rematch(
     )
 
 
+class DeleteResponse(BaseModel):
+    deleted: int
+
+
+@router.delete("/{toll_id}", response_model=DeleteResponse)
+def delete_toll(
+    toll_id: uuid.UUID,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> DeleteResponse:
+    """Remove one crossing from the ledger.
+
+    Until this existed an import could not be undone. Uploading the wrong file,
+    or a page the scraper read badly, left rows that inflate what the operator
+    thinks they are owed and nothing short of database access to get rid of
+    them — the one direction a money ledger must always have.
+
+    Only the toll row goes. The vehicle and the trip it pointed at are
+    untouched, and the crossing can be imported again afterwards because
+    deleting the row releases its fingerprint.
+    """
+    require_token(authorization)
+    toll = session.get(Toll, toll_id)
+    if toll is None:
+        # Deliberately not a 404. A delete is retried after a dropped
+        # connection more often than it is sent for a row that never existed,
+        # and failing the retry teaches the operator to doubt the first one.
+        return DeleteResponse(deleted=0)
+    session.delete(toll)
+    session.commit()
+    log.info("deleted toll %s (%s, %d cents)", toll_id, toll.plaza, toll.amount_cents)
+    return DeleteResponse(deleted=1)
+
+
 @router.post("/{toll_id}/recovered", response_model=TollRow)
 def mark_recovered(
     toll_id: uuid.UUID,

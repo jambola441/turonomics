@@ -99,6 +99,11 @@
         color:var(--dim);display:flex;align-items:center;justify-content:center}
   .tick:hover{border-color:var(--green);color:var(--green)}
   .tick[aria-pressed=true]{color:var(--green);border-color:#2b4a3c;background:#15241d}
+  /* Quieter than the tick on purpose. Ticking is the daily action; deleting is
+     for having imported the wrong file, and should not sit under the thumb. */
+  .drop{flex-shrink:0;width:28px;height:34px;border:none;background:none;cursor:pointer;
+        color:var(--border2);font:inherit;font-size:16px;line-height:1}
+  .drop:hover{color:var(--red)}
 
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px;line-height:1.55}
   .err{padding:12px 14px;border-radius:9px;background:#1a1214;border:1px solid #4a2a29;
@@ -348,6 +353,10 @@
       tick.setAttribute("aria-pressed", toll.recovered_at ? "true" : "false");
       tick.title = toll.recovered_at ? "Billed back — tap to undo" : "Mark billed back";
       tick.addEventListener("click", function () { recover(toll); });
+
+      var drop = add(card, "button", "drop", "\u00d7");
+      drop.title = "Remove this crossing from the ledger";
+      drop.addEventListener("click", function () { discard(toll); });
     });
   }
 
@@ -392,6 +401,28 @@
       })
       .then(function () { return load(); })
       .catch(function (e) { fail("Could not update that toll: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  // Confirmed, unlike the tick. A mis-tapped tick is undone by tapping it
+  // again; a mis-tapped delete loses a charge the operator was owed, and the
+  // only way back is to find it in the statement and import it a second time.
+  function discard(toll) {
+    if (state.busy || !ensureToken()) return;
+    var sure = window.confirm(
+      "Remove this " + money(toll.amount_cents) + " crossing at " + toll.plaza + "?\n\n" +
+      "It will come back if you import a statement that still contains it."
+    );
+    if (!sure) return;
+    state.busy = true;
+    fetch(API + "/api/tolls/" + toll.id, { method: "DELETE", headers: authHeaders() })
+      .then(handleStatus)
+      .then(function (r) {
+        if (!r.ok) throw new Error("the API said " + r.status);
+        return r.json();
+      })
+      .then(function () { return load(); })
+      .catch(function (e) { fail("Could not remove that toll: " + e.message); })
       .then(function () { state.busy = false; });
   }
 

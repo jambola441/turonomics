@@ -119,12 +119,29 @@ reads it. Changing the CSV shape on one side fails on the other.
 
 ## Loading in Chrome
 
-**Already have it loaded?** Version 1.1.0 changed the manifest (the E-ZPass
-content script is gone, since the worker injects what it needs), so this one
-needs `npm run build` and then **Reload** on the extension card — earlier
-updates were server-side and needed neither.
+**Already have it loaded?** `dist/` is gitignored, so pulling is never enough
+on its own — the manifest points at `dist/background.js`, and Chrome runs
+whatever was built last:
 
-1. Run `npm run build`
+```sh
+git pull origin main
+cd extension && npm install && npm run build
+```
+
+Then **Reload** on the extension card at `chrome://extensions/`, and check the
+version on it. Chrome only re-prompts when permissions change, so a release
+that adds a capability without adding a permission looks identical until you
+reload.
+
+| version | needs | why |
+|---|---|---|
+| 1.2.0 | build + reload | manifest version and description changed; `dist/turo-hook.js` is new and is registered by filename at runtime, so a stale `dist/` fails at the moment you click the button rather than at load |
+| 1.1.0 | build + reload | the E-ZPass content script was removed; the worker injects what it needs |
+| earlier | neither | server-side only |
+
+First time:
+
+1. Run `npm install && npm run build`
 2. Open Chrome → `chrome://extensions/`
 3. Enable **Developer mode**
 4. Click **Load unpacked** → select this `extension/` directory

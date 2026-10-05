@@ -87,6 +87,8 @@ def record_invoice(
             guest_name=parsed.guest_name,
             state=parsed.state,
             total_cents=parsed.total_cents,
+            lines=[[label, cents] for label, cents in parsed.lines],
+            toll_cents=parsed.toll_cents,
             last_seen_at=now,
         )
         session.add(invoice)
@@ -99,6 +101,12 @@ def record_invoice(
             invoice.state = parsed.state
             result.updated += 1
         invoice.last_seen_at = now
+        # The three notifications of one invoice do not all itemise. Keep
+        # whichever sighting said the most rather than the most recent.
+        if parsed.lines and not invoice.lines:
+            invoice.lines = [[label, cents] for label, cents in parsed.lines]
+        if parsed.toll_cents is not None and invoice.toll_cents is None:
+            invoice.toll_cents = parsed.toll_cents
         invoice.turo_invoice_id = invoice.turo_invoice_id or parsed.turo_invoice_id
         invoice.guest_name = invoice.guest_name or parsed.guest_name
 
@@ -144,6 +152,12 @@ def _recover(
         # recovered_at from anything else would need them.
         return
 
+    # What this invoice says it charged for tolls, falling back to its total
+    # when it does not itemise. Of eight charged invoices on the live account,
+    # not one total equalled the rental's crossings — they bundle cleaning,
+    # fuel and damage — so comparing the total alone reconciles almost nothing.
+    asked = invoice.toll_cents if invoice.toll_cents is not None else invoice.total_cents
+
     total = _toll_total(session, invoice.trip_id)
     if total == 0:
         # A rental with no crossings is not a mismatch. Most reimbursement
@@ -151,10 +165,10 @@ def _recover(
         # reporting each one as "did not match" would bury the handful that are
         # worth looking at.
         return
-    if total != invoice.total_cents:
+    if total != asked:
+        which = "toll line" if invoice.toll_cents is not None else "invoice total"
         result.unmatched_totals.append(
-            f"{invoice.reservation_id}: invoice {invoice.total_cents}c "
-            f"vs tolls {total}c"
+            f"{invoice.reservation_id}: {which} {asked}c vs tolls {total}c"
         )
         return
     outstanding = session.scalars(

@@ -396,6 +396,19 @@ _INVOICE_RESERVATION = re.compile(
 _INVOICE_ID = re.compile(r"invoiceId=([A-Za-z0-9_-]{4,})", re.IGNORECASE)
 _TOTAL_CHARGE = re.compile(r"Total\s+charge\s*[-–—:]\s*\$?\s*([\d,]+\.\d{2})", re.IGNORECASE)
 
+# "Tolls - $16.79", one per charge on the invoice. Matching the total was not
+# enough: of eight charged invoices on the live account, not one total equalled
+# the rental's tolls, because a reimbursement bundles cleaning, fuel and damage
+# onto the same invoice. The toll line is the part that can be reconciled.
+_LINE_ITEM = re.compile(
+    r"^\s*([A-Za-z][A-Za-z /&'-]{1,40}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
+    re.MULTILINE,
+)
+# What Turo might call the toll line. Deliberately loose on the label and strict
+# about everything else: a label this does not recognise means no line matched,
+# which falls back to the total and changes nothing.
+_TOLL_LABEL = re.compile(r"\btolls?\b", re.IGNORECASE)
+
 
 @dataclass(frozen=True)
 class ParsedInvoice:
@@ -408,6 +421,23 @@ class ParsedInvoice:
     # Turo's own id, where the link carries one. The "charged" notification
     # links the receipt rather than the invoice hub, so it often does not.
     turo_invoice_id: str | None
+    # Every charge on the invoice, as (label, cents). Stored as well as used,
+    # because the labels are Turo's words and nobody here can see them
+    # otherwise — the masked probe reports them as <NAME>.
+    lines: tuple[tuple[str, int], ...] = ()
+
+    @property
+    def toll_cents(self) -> int | None:
+        """What this invoice charged for tolls specifically, if it says.
+
+        None when no line is recognisable as tolls, which is the common case
+        for an invoice that is entirely cleaning or damage. The caller falls
+        back to comparing the total, so an unrecognised label loses nothing.
+        """
+        for label, cents in self.lines:
+            if _TOLL_LABEL.search(label):
+                return cents
+        return None
 
     @property
     def fingerprint(self) -> str:
@@ -445,7 +475,14 @@ def parse_invoice(subject: str, body: str, html: str | None = None) -> ParsedInv
     if reservation is None or total is None:
         return None
     invoice_id = _INVOICE_ID.search(haystack)
+    lines = tuple(
+        (label.strip(), int(round(float(amount.replace(",", "")) * 100)))
+        for label, amount in _LINE_ITEM.findall(body)
+        # The total is not one of the charges it totals.
+        if not re.fullmatch(r"total\s+charge", label.strip(), re.IGNORECASE)
+    )
     return ParsedInvoice(
+        lines=lines,
         state=state,
         reservation_id=reservation.group(1),
         guest_name=_guest_from_subject(subject),

@@ -12,14 +12,14 @@ posts it here. Two fields beyond the times are worth storing:
 * ``allowedToRequestReimbursement`` — Turo answering whether an invoice can
   still be filed for this reservation, rather than ``TOLL_FILING_WINDOW_DAYS``,
   which is a number read off a help page.
-* ``booking.gracePeriodEnd`` — stored and **not** used, because which grace
-  period it is has not been established. It sits beside a cancellation policy
-  block, and the policy endpoint next to it returns ``gracePeriodHours`` and
-  ``leadTimeDays``, so it is quite likely the free-cancellation deadline
-  measured from booking. The toll matcher's own two-hour grace is a guess, and
-  replacing one guess with a field that might mean something else entirely
-  would only make the guess harder to see. :func:`describe_grace_periods`
-  prints where it actually falls, which settles it with one pull.
+* ``booking.gracePeriodEnd`` — stored and **not** used, and now for a measured
+  reason rather than a cautious one. Across all 57 reservations on the live
+  account every one falls before the trip *starts*, clustering at exactly 24
+  hours before pickup: it is the free-cancellation deadline. Wiring it into
+  attribution would have moved the toll window to a day before the rental
+  began. The matcher keeps its two-hour guess, and keeps calling it a guess.
+  :func:`read_grace` states the reading and :func:`describe_grace_periods`
+  shows the offsets it was read from.
 """
 
 from __future__ import annotations

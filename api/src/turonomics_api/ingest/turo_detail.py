@@ -74,6 +74,22 @@ class ReservationDetail:
     license_plate: str | None = None
 
 
+def _interval(starts: datetime, ends: datetime) -> str:
+    """A rental's interval, with the end's date kept when it is a different day.
+
+    The first version wrote the end as ``%H:%M`` alone, and on a real pull that
+    produced lines reading "2026-08-29 13:00–19:00 -> 2026-08-29 13:00–19:00"
+    for a rental that had genuinely moved, and "19:00–19:00" for one that had
+    not become zero-length. Both were multi-day rentals whose end had shifted
+    by a whole day, and the format hid the only part that changed. A report of
+    what moved is worth having only if it says what moved.
+    """
+    same_day = starts.date() == ends.date()
+    return f"{starts:%Y-%m-%d %H:%M}–{ends:%H:%M}" if same_day else (
+        f"{starts:%Y-%m-%d %H:%M}–{ends:%Y-%m-%d %H:%M}"
+    )
+
+
 def parse_detail(payload: Mapping[str, Any]) -> ReservationDetail | None:
     """One ``/api/reservation/detail`` response, or None if it is not one.
 
@@ -149,8 +165,8 @@ def apply_detail(
         and ends > starts
         and (trip.starts_at, trip.ends_at) != (starts, ends)
     ):
-        was = f"{trip.starts_at:%Y-%m-%d %H:%M}–{trip.ends_at:%H:%M}"
-        now_is = f"{starts:%Y-%m-%d %H:%M}–{ends:%H:%M}"
+        was = _interval(trip.starts_at, trip.ends_at)
+        now_is = _interval(starts, ends)
         result.retimed.append(f"{detail.reservation_id}: {was} -> {now_is}")
         trip.starts_at = starts
         trip.ends_at = ends
@@ -204,3 +220,51 @@ def describe_grace_periods(session: Session) -> list[str]:
             f"{from_end:+.1f}h from end"
         )
     return lines
+
+
+# What a grace period has to be after the end by before it is worth calling a
+# return grace. Under this and it is indistinguishable from rounding.
+_RETURN_GRACE_MINIMUM_HOURS = 0.25
+
+
+def read_grace(lines: list[str]) -> str:
+    """Say which grace period Turo's ``gracePeriodEnd`` is.
+
+    The lines from :func:`describe_grace_periods` carry both offsets, and a
+    person reading thirty of them will see the pattern. Stating it saves them
+    doing that, and — more to the point — means the conclusion is written down
+    somewhere a test can hold it still.
+    """
+    if not lines:
+        return "nothing pulled yet"
+    after_end = 0
+    before_end = 0
+    for line in lines:
+        _, _, tail = line.partition("from start, ")
+        hours = tail.removesuffix("h from end").strip()
+        try:
+            offset = float(hours)
+        except ValueError:  # pragma: no cover - the format is ours
+            continue
+        if offset >= _RETURN_GRACE_MINIMUM_HOURS:
+            after_end += 1
+        else:
+            before_end += 1
+    total = after_end + before_end
+    if total == 0:  # pragma: no cover - as above
+        return "unreadable"
+    if after_end == total:
+        return (
+            f"all {total} fall after the rental ends: this is the return grace, "
+            "and the toll matcher should use it instead of its fixed two hours"
+        )
+    if before_end == total:
+        return (
+            f"all {total} fall at or before the rental ends: this is a "
+            "cancellation deadline, not a return grace — the matcher keeps its "
+            "own window"
+        )
+    return (
+        f"{after_end} of {total} fall after the end and {before_end} do not, "
+        "so it is not one thing and nothing should be built on it yet"
+    )

@@ -20,6 +20,7 @@ from turonomics_api.ingest.turo_detail import (
     apply_detail,
     describe_grace_periods,
     parse_detail,
+    read_grace,
     wanted_reservations,
 )
 
@@ -450,3 +451,128 @@ def test_an_empty_pull_is_not_an_error(api_client, monkeypatch, body) -> None:
     response = api_client.post("/api/turo/details", json={"details": [], **body})
     assert response.status_code == 200
     assert response.json()["seen"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Saying what actually moved
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_an_overnight_move_is_legible(session, trip) -> None:
+    """From a real pull: "2026-08-29 13:00–19:00 -> 2026-08-29 13:00–19:00".
+
+    The rental had genuinely moved — its end shifted by a whole day — and the
+    report hid the only part that changed, because the end was formatted
+    without its date. A report of what moved has to say what moved.
+    """
+    result = DetailResult()
+    parsed = parse_detail(
+        _detail(
+            reservation=trip.turo_trip_id,
+            start=trip.starts_at,
+            end=trip.ends_at + timedelta(days=1),
+        )
+    )
+    assert parsed is not None
+    apply_detail(session, parsed, now=NOW, result=result)
+    line = result.retimed[0]
+    before, after = line.split(" -> ")
+    assert before != after, line
+    # Both ends carry a date, because the days differ on both sides.
+    assert before.count("2026-") == 2 and after.count("2026-") == 2, line
+
+
+@requires_db
+def test_a_same_day_move_stays_short(session, trip) -> None:
+    """The end's date is kept when it adds something, not always: a rental
+    inside one day reads better as "13:00–19:00"."""
+    inside = trip.starts_at.replace(hour=9)
+    result = DetailResult()
+    parsed = parse_detail(
+        _detail(
+            reservation=trip.turo_trip_id,
+            start=inside,
+            end=inside + timedelta(hours=6),
+        )
+    )
+    assert parsed is not None
+    apply_detail(session, parsed, now=NOW, result=result)
+    _, after = result.retimed[0].split(" -> ")
+    assert after.count("2026-") == 1, after
+
+
+# ---------------------------------------------------------------------------
+# Which grace period it actually is
+# ---------------------------------------------------------------------------
+
+
+def test_a_grace_period_after_every_end_is_the_return_grace() -> None:
+    lines = [
+        "58358939: grace +52.0h from start, +4.0h from end",
+        "58322522: grace +28.0h from start, +4.0h from end",
+    ]
+    verdict = read_grace(lines)
+    assert "return grace" in verdict
+    assert "all 2" in verdict
+
+
+def test_a_grace_period_near_every_start_is_a_cancellation_deadline() -> None:
+    """Which is the likelier reading, given it sits beside a cancellation
+    policy block — and means the toll matcher keeps its own window."""
+    lines = [
+        "58358939: grace +3.0h from start, -49.0h from end",
+        "58322522: grace +3.0h from start, -25.0h from end",
+    ]
+    verdict = read_grace(lines)
+    assert "cancellation deadline" in verdict
+    assert "keeps its own window" in verdict
+
+
+def test_a_mixture_is_not_resolved_into_a_conclusion() -> None:
+    """The one answer that must not be rounded off. If the field means two
+    different things, nothing should be built on it."""
+    lines = [
+        "58358939: grace +52.0h from start, +4.0h from end",
+        "58322522: grace +3.0h from start, -25.0h from end",
+    ]
+    verdict = read_grace(lines)
+    assert "not one thing" in verdict
+    assert "1 of 2" in verdict
+
+
+def test_no_pull_yet_says_so_rather_than_concluding() -> None:
+    assert read_grace([]) == "nothing pulled yet"
+
+
+def test_a_grace_period_at_the_end_to_the_minute_is_not_a_return_window() -> None:
+    """Exactly at the end is Turo restating the end, not granting anything."""
+    assert "cancellation deadline" in read_grace(
+        ["58358939: grace +48.0h from start, +0.0h from end"]
+    )
+
+
+@requires_db
+def test_the_grace_report_is_readable_without_the_token(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """The POST carries the same report, but it is gated and arrives once in a
+    popup. Whether the matcher can stop guessing is worth asking twice."""
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    result = DetailResult()
+    parsed = parse_detail(
+        _detail(
+            reservation=trip.turo_trip_id,
+            start=trip.starts_at,
+            end=trip.ends_at,
+            grace=trip.ends_at + timedelta(hours=4),
+        )
+    )
+    assert parsed is not None
+    apply_detail(session, parsed, now=NOW, result=result)
+    session.commit()
+
+    out = api_client.get("/api/turo/grace").json()
+    assert len(out["lines"]) == 1
+    assert "+4.0h from end" in out["lines"][0]
+    assert "return grace" in out["verdict"]

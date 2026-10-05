@@ -208,3 +208,57 @@ def test_a_statement_scraped_from_the_website_parses() -> None:
     assert plate_read.transponder_id is None
     assert plate_read.plaza == "Yonkers, NY"
     assert plate_read.amount == pytest.approx(9.11)
+
+
+# ---------------------------------------------------------------------------
+# The website's own date format
+# ---------------------------------------------------------------------------
+# The account-activity page renders one column reading "10/4/26 3:19 PM" where
+# the download writes "12/29/2025" and "05:13:32 PM" in two. The first scrape
+# of the real page was rejected on exactly this.
+
+
+@pytest.mark.parametrize(
+    ("date_cell", "expected"),
+    [
+        ("10/4/26 3:19 PM", datetime(2026, 10, 4, 15, 19)),
+        ("10/4/26 3:19:07 PM", datetime(2026, 10, 4, 15, 19, 7)),
+        ("10/4/26 15:19", datetime(2026, 10, 4, 15, 19)),
+        ("10/4/26", datetime(2026, 10, 4)),
+        # Midnight and noon are where a 12-hour clock goes wrong.
+        ("1/1/26 12:00 AM", datetime(2026, 1, 1, 0, 0)),
+        ("1/1/26 12:00 PM", datetime(2026, 1, 1, 12, 0)),
+        # Still reads the download's format.
+        ("12/29/2025 5:13:32 PM", datetime(2025, 12, 29, 17, 13, 32)),
+    ],
+)
+def test_the_website_date_format_parses(date_cell: str, expected: datetime) -> None:
+    header = "Tag/Plate #,Exit Plaza,Date,Amount\n"
+    tolls = parse_ezpass_csv(header + f'" 99900000111","19","{date_cell}","$-2.86"\n')
+    assert len(tolls) == 1
+    assert tolls[0].timestamp == expected
+
+
+def test_a_two_digit_year_is_not_read_as_the_year_26() -> None:
+    """``%m/%d/%Y`` must not claim "10/4/26".
+
+    If it did, the toll would be dated in the year 26 and the import would
+    report success — a wrong answer rather than a refusal, which is the worse
+    of the two by a long way. Python happens to refuse it; this pins that,
+    because the format list now has both widths in it and the order is only
+    safe while that holds.
+    """
+    tolls = parse_ezpass_csv(
+        "Tag/Plate #,Exit Plaza,Date,Amount\n" '" 99900000111","19","10/4/26","$-2.86"\n'
+    )
+    assert tolls[0].timestamp.year == 2026
+
+
+def test_a_date_in_no_known_format_still_names_itself() -> None:
+    """The refusal has to carry the value, because that is how the next format
+    gets added. A scraped page nobody here can open is only debuggable through
+    this message."""
+    with pytest.raises(ValueError, match=r"4th October '26"):
+        parse_ezpass_csv(
+            "Tag/Plate #,Exit Plaza,Date,Amount\n" "\" 99900000111\",\"19\",\"4th October '26\",\"$-2.86\"\n"
+        )

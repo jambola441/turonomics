@@ -81,6 +81,20 @@ def _parse_amount(value: str) -> float:
 
 
 def _parse_datetime(date_str: str, time_str: str = "") -> datetime:
+    """Parse the date and time an EZPass row carries, in any shape seen so far.
+
+    The download and the website do not agree. A downloaded statement writes
+    "12/29/2025" and "05:13:32 PM" in two columns; the account-activity page
+    writes one column reading "10/4/26 3:19 PM" — two-digit year, no padding,
+    no seconds. Both are the same crossing described differently, so both parse
+    here rather than in two places.
+
+    The two-digit-year formats are safe to sit beside the four-digit ones in any
+    order: ``%Y`` refuses to match "26", and ``%y`` refuses to match "2026", so
+    neither can quietly claim the other's dates. That was worth checking —
+    ``%m/%d/%Y`` silently reading "10/4/26" as the year 26 would have put a
+    toll in the Roman empire and still called it a success.
+    """
     combined = f"{date_str.strip()} {time_str.strip()}".strip()
     for fmt in (
         "%m/%d/%Y %I:%M:%S %p",
@@ -88,6 +102,12 @@ def _parse_datetime(date_str: str, time_str: str = "") -> datetime:
         "%m/%d/%Y %H:%M:%S",
         "%m/%d/%Y %H:%M",
         "%m/%d/%Y",
+        # As the website renders it.
+        "%m/%d/%y %I:%M:%S %p",
+        "%m/%d/%y %I:%M %p",
+        "%m/%d/%y %H:%M:%S",
+        "%m/%d/%y %H:%M",
+        "%m/%d/%y",
         "%Y-%m-%dT%H:%M:%SZ",
         "%Y-%m-%dT%H:%M:%S",
         "%Y-%m-%d %H:%M:%S",

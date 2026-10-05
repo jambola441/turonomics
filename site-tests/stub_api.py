@@ -258,6 +258,58 @@ def _tolls_payload() -> dict:
     }
 
 
+# Invoices: one of each case the page groups differently, because the grouping
+# is the whole point of the view — what to file this week, what can wait, what
+# has to be invoiced directly, and what is already lost.
+def _invoice(**over: object) -> dict:
+    row = {
+        "trip_id": "ffff0000-0000-0000-0000-000000000001",
+        "guest_name": "Dylan",
+        "vehicle_nickname": "Jolene",
+        "starts_at": _iso(days=-40),
+        "ends_at": _iso(days=-39),
+        "off_platform": False,
+        "turo_trip_id": "54958910",
+        "total_cents": 1555,
+        "lines": [
+            {"toll_id": "dddd0000-0000-0000-0000-00000000001a", "occurred_at": _iso(days=-39),
+             "plaza": "RKB", "amount_cents": 911, "overrun_seconds": None},
+            {"toll_id": "dddd0000-0000-0000-0000-00000000002a", "occurred_at": _iso(days=-39),
+             "plaza": "GWB", "amount_cents": 644, "overrun_seconds": 34 * 60},
+        ],
+        "file_by": _iso(days=51),
+        "days_left": 51,
+        "expired": False,
+    }
+    row.update(over)
+    return row
+
+
+INVOICES = [
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000002", guest_name="Samuel",
+             days_left=6, file_by=_iso(days=6), total_cents=1666),
+    _invoice(),
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000003", guest_name="Priya",
+             off_platform=True, turo_trip_id=None, days_left=None, file_by=None,
+             total_cents=2200),
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000004", guest_name="Brandon",
+             days_left=-5, file_by=_iso(days=-5), expired=True, total_cents=1679),
+]
+
+
+def _invoices_payload() -> dict:
+    return {
+        "invoices": INVOICES,
+        "window_days": 90,
+        "billable_cents": sum(i["total_cents"] for i in INVOICES),
+        "urgent_cents": sum(i["total_cents"] for i in INVOICES
+                            if i["days_left"] is not None and 0 <= i["days_left"] <= 21),
+        "expired_cents": sum(i["total_cents"] for i in INVOICES if i["expired"]),
+        "off_platform_cents": sum(i["total_cents"] for i in INVOICES if i["off_platform"]),
+        "token_required": True,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     def _send(self, payload: dict) -> None:
         body = json.dumps(payload).encode()
@@ -283,7 +335,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/api/trips"):
+        if self.path.startswith("/api/invoices"):
+            self._send(_invoices_payload())
+        elif self.path.startswith("/api/trips"):
             self._send({"trips": TRIPS})
         elif self.path.startswith("/seen-auth"):
             self._send({"seen": SEEN_AUTH})
@@ -310,8 +364,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path, _, query = self.path.partition("?")
-        if (path.startswith("/api/tolls") or path.startswith("/api/trips")) \
-                and not self._authorized():
+        if (path.startswith("/api/tolls") or path.startswith("/api/trips")
+                or path.startswith("/api/invoices")) and not self._authorized():
+            return
+        if path.startswith("/api/invoices/") and path.endswith("/recovered"):
+            trip_id = path.split("/")[-2]
+            for index, invoice in enumerate(INVOICES):
+                if invoice["trip_id"] == trip_id:
+                    self._send(INVOICES.pop(index))
+                    return
+            self._send({})
             return
         if path.endswith("/recovered"):
             toll_id = path.split("/")[-2]

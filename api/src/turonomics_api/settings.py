@@ -62,6 +62,26 @@ def outside_fleet() -> dict[str, str]:
     }
 
 
+def toll_filing_window_days() -> int:
+    """How long after a rental ends a toll can still be billed through Turo.
+
+    Ninety days. A figure that belongs to Turo rather than to this fleet, so it
+    is configurable — if they change it, nobody should have to find this
+    constant in a diff.
+
+    It is the only deadline in this system that loses money by passing
+    quietly: an unbilled toll inside the window is a reminder, and the same
+    toll outside it is gone.
+    """
+    raw = os.environ.get("TOLL_FILING_WINDOW_DAYS", "").strip()
+    if not raw:
+        return 90
+    try:
+        return max(int(raw), 0)
+    except ValueError:
+        return 90
+
+
 def toll_overrun_minutes() -> int:
     """How long after a rental ends a crossing is still that guest's.
 

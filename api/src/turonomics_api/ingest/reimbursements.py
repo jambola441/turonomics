@@ -30,7 +30,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
-from turonomics_api.gmail.parse import INVOICE_CHARGED, ParsedInvoice
+from turonomics_api.gmail.parse import INVOICE_CHARGED, ParsedInvoice, names_tolls
 
 log = logging.getLogger("turonomics.ingest.reimbursements")
 
@@ -132,12 +132,16 @@ def record_invoice(
 def _recover(
     session: Session, invoice: ReimbursementInvoice, result: ReimbursementResult
 ) -> None:
-    """Mark a rental's crossings recovered, if this invoice is plainly them.
+    """Mark a rental's crossings recovered, if this invoice plainly charged them.
 
-    Plainly: the invoice total equals the rental's tolls to the cent. Anything
-    else — an invoice that also covers cleaning, or one for only some of the
-    crossings — is reported and left alone, because writing off a toll nobody
-    paid for loses the money silently.
+    Plainly means two things, and only together: the invoice says on a line of
+    its own what it charged for tolls, and that line is at least what this
+    fleet has attributed to the rental.
+
+    The first half is what keeps a ticket from paying off a toll. The second is
+    a deliberate asymmetry — covering too little leaves money uncollected and
+    is reported; covering what was never charged bills a guest twice, which is
+    a dispute rather than income.
     """
     if invoice.state != INVOICE_CHARGED or invoice.charged_at is None:
         # Both guards survive mutation, and the reason is worth knowing rather
@@ -152,12 +156,6 @@ def _recover(
         # recovered_at from anything else would need them.
         return
 
-    # What this invoice says it charged for tolls, falling back to its total
-    # when it does not itemise. Of eight charged invoices on the live account,
-    # not one total equalled the rental's crossings — they bundle cleaning,
-    # fuel and damage — so comparing the total alone reconciles almost nothing.
-    asked = invoice.toll_cents if invoice.toll_cents is not None else invoice.total_cents
-
     total = _toll_total(session, invoice.trip_id)
     if total == 0:
         # A rental with no crossings is not a mismatch. Most reimbursement
@@ -165,12 +163,70 @@ def _recover(
         # reporting each one as "did not match" would bury the handful that are
         # worth looking at.
         return
-    if total != asked:
-        which = "toll line" if invoice.toll_cents is not None else "invoice total"
+
+    asked = invoice.toll_cents
+    if asked is None and invoice.lines:
+        # Itemised, and no single readable toll line. The total is emphatically
+        # not a substitute here, and this is the case that used to be able to
+        # write off the wrong thing: "Tickets - $50.00" on a rental with
+        # exactly $50.00 of crossings matched on the total and ticked them off
+        # against a parking fine. An itemised invoice has already said what it
+        # charged for; if tolls are not on it, it did not charge for tolls.
+        if any(
+            isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and names_tolls(entry[0])
+            for entry in invoice.lines
+        ):
+            # "Tolls and fuel", or two toll lines: it charged *something* for
+            # tolls and will not say how much.
+            result.unmatched_totals.append(
+                f"{invoice.reservation_id}: names tolls but not on a line of its "
+                f"own, against {total}c of crossings"
+            )
+        # Otherwise: a cleaning or refuelling invoice on a rental that happens
+        # to have crossings too. Nothing to reconcile and nothing wrong, so it
+        # is not reported either — six of the eight charged invoices on the
+        # live account are this, and reporting them would bury the rest.
+        return
+
+    if asked is None:
+        # Nothing itemised at all, so the total is the only number there is.
+        # Weak evidence, and held to the strictest test because of it: equal to
+        # the cent or nothing. The real invoices all itemise, so reaching this
+        # means a notification shape that does not — and being wrong here is
+        # bounded by that coincidence.
+        if invoice.total_cents != total:
+            result.unmatched_totals.append(
+                f"{invoice.reservation_id}: invoice total {invoice.total_cents}c "
+                f"vs tolls {total}c"
+            )
+            return
+    elif asked < total:
+        # Part of the crossings, or a toll this fleet has not imported. Either
+        # way some of the money is still owed and guessing which part is not
+        # this function's business.
         result.unmatched_totals.append(
-            f"{invoice.reservation_id}: {which} {asked}c vs tolls {total}c"
+            f"{invoice.reservation_id}: toll line {asked}c covers only part of {total}c"
         )
         return
+
+    # At least everything attributed to this rental. Equal is the clean case;
+    # more happens because Turo bills tolls this fleet has no statement for —
+    # the July rentals were charged $25.00 and $27.04 against $9.79 and $16.79
+    # of imported crossings. Refusing those left money the guest had already
+    # paid sitting on the page as owed, which is the mistake that invites a
+    # second invoice.
+    if asked is not None and asked > total:
+        log.info(
+            "reimbursement %s charged %dc of tolls, %dc more than reservation %s "
+            "has crossings for",
+            invoice.turo_invoice_id or invoice.fingerprint,
+            asked,
+            asked - total,
+            invoice.reservation_id,
+        )
     outstanding = session.scalars(
         select(Toll).where(Toll.trip_id == invoice.trip_id, Toll.recovered_at.is_(None))
     ).all()

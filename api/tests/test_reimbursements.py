@@ -36,7 +36,11 @@ from turonomics_api.gmail.parse import (
     classify_invoice,
     parse_invoice,
 )
-from turonomics_api.ingest.reimbursements import record_invoice, relink_invoices
+from turonomics_api.ingest.reimbursements import (
+    ReimbursementResult,
+    record_invoice,
+    relink_invoices,
+)
 
 from .conftest import requires_db
 
@@ -376,8 +380,6 @@ def test_an_invoice_on_a_rental_with_no_crossings_is_not_a_mismatch(session, tri
 
     Reporting each as "did not match" would bury the handful worth looking at.
     """
-    from turonomics_api.ingest.reimbursements import ReimbursementResult
-
     parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", CHARGED_BODY)
     assert parsed is not None
     result = ReimbursementResult()
@@ -714,11 +716,18 @@ def test_a_bundled_invoice_reconciles_only_its_toll_line(
 def test_the_other_charges_are_shown_not_discarded(
     api_client, monkeypatch, session, trip
 ) -> None:
-    """So a $161.30 invoice against $15.55 of tolls reads as a bundle rather
-    than as a figure that makes no sense."""
+    """So a $161.30 invoice against $20.11 of tolls reads as a bundle rather
+    than as a figure that makes no sense.
+
+    The crossings here deliberately exceed the invoice's $15.55 toll line, so
+    the rental is still outstanding and still on the page. When the toll line
+    covers them the rental leaves the list entirely, which is the point of
+    `test_a_toll_line_covering_more_than_ours_ticks_the_crossings_off` below
+    and was what this test used to assert by accident.
+    """
     monkeypatch.delenv("TOLLS_TOKEN", raising=False)
     api_client.post("/api/tolls/import",
-                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+                    files={"statement": ("a.csv", _statement("-9.11", "-11.00"), "text/csv")})
     parsed = parse_invoice(
         "Dylan has been charged for your reimbursement invoice", BUNDLED_BODY
     )
@@ -726,7 +735,7 @@ def test_the_other_charges_are_shown_not_discarded(
     record_invoice(session, parsed, now=NOW)
     session.commit()
     row = api_client.get("/api/invoices").json()["invoices"][0]
-    assert row["charged_but_different"] is True, "$15.55 of tolls against $9.11 of crossings"
+    assert row["charged_but_different"] is True, "$15.55 of tolls against $20.11 of crossings"
     assert "Parking ticket $65.00" in row["charged_lines"]
     assert "Fuel $38.75" in row["charged_lines"]
 
@@ -769,12 +778,18 @@ def test_a_plain_toll_label_is_still_reconciled(label: str) -> None:
 # ---------------------------------------------------------------------------
 #
 # Everything above this line was written against a guess at the format, and the
-# guess passed. A probe of the real mailbox then read 149 reimbursement
-# invoices and stored line items for *none* of them, because Turo writes the
-# quantity before the label — "22 mi additional distance" — and the pattern
-# required a leading letter. The heading is "Incidental charges", not the
-# "Reimbursement charges" invented above, and each charge carries a sentence of
-# explanation underneath it.
+# guess passed — which is the whole lesson. Turo writes the quantity before the
+# label ("22 mi additional distance"), the pattern required a leading letter,
+# and so every quantified charge was dropped in silence.
+#
+# Not the claim made at first: a sync that read 149 invoices and stored line
+# items for none of them predated line items being parsed at all, and was no
+# evidence of this. The bug cost three of the eight charged invoices on the
+# live account; the plain labels ("Tolls", "Tickets", "Refueling") matched all
+# along.
+#
+# The heading is "Incidental charges", not the "Reimbursement charges" invented
+# above, and each charge carries a sentence of explanation underneath it.
 
 OBSERVED_BODY = """Reimbursement invoice
 
@@ -858,3 +873,105 @@ def test_a_sentence_that_happens_to_quote_an_amount_is_not_a_charge() -> None:
     assert parsed is not None
     assert all("Charged because" not in label for label, _ in parsed.lines)
     assert parsed.lines == (("22 mi additional distance", 1100), ("7 tolls", 4071))
+
+
+# ---------------------------------------------------------------------------
+# A toll line that charged more than this fleet attributed
+# ---------------------------------------------------------------------------
+#
+# The live account's two rentals with a toll line were charged $25.00 and
+# $27.04 against $9.79 and $16.79 of imported crossings. Demanding equality
+# left both listed as owed — the two rentals whose 90-day window had already
+# closed, so the page was asking for money the guest had paid, on invoices
+# that could no longer be filed. That is the mistake worth being asymmetric
+# about: covering too little is reported and recoverable, billing twice is a
+# dispute.
+
+
+@requires_db
+def test_a_toll_line_covering_more_than_ours_ticks_the_crossings_off(
+    api_client, monkeypatch, session, trip
+) -> None:
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911
+
+    # $15.55 of tolls charged, against $9.11 of crossings this fleet has.
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None and parsed.toll_cents == 1555
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 0
+    assert api_client.get("/api/invoices").json()["invoices"] == [], "nothing left to bill"
+
+
+@requires_db
+def test_a_toll_line_covering_less_than_ours_is_reported_not_applied(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """Part of the crossings is not all of them, and which part is unknowable
+    from a single figure."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11", "-11.00"), "text/csv")})
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None
+    result = ReimbursementResult()
+    record_invoice(session, parsed, now=NOW, result=result)
+    session.commit()
+
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 2011, "untouched"
+    assert result.tolls_recovered == 0
+    assert any("covers only part" in entry for entry in result.unmatched_totals)
+
+
+@requires_db
+def test_an_itemised_invoice_with_no_toll_line_never_covers_a_crossing(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """The case that made the old exact-total rule dangerous.
+
+    A $9.11 ticket on a rental with $9.11 of crossings matched on the total and
+    ticked them off against a parking fine. An itemised invoice has already
+    said what it charged for.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    body = ITEMISED_BODY.replace(
+        "Tolls - $15.55\nCleaning - $40.00", "Parking ticket - $9.11"
+    ).replace("Total charge - $55.55", "Total charge - $9.11")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents is None
+    assert parsed.total_cents == 911, "equal to the crossings, which used to be enough"
+    result = ReimbursementResult()
+    record_invoice(session, parsed, now=NOW, result=result)
+    session.commit()
+
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911
+    assert result.tolls_recovered == 0
+    assert result.unmatched_totals == [], "not a mismatch either — it charged no tolls"
+
+
+@requires_db
+def test_an_invoice_naming_tolls_without_a_line_of_their_own_is_surfaced(
+    api_client, monkeypatch, session, trip
+) -> None:
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    body = ITEMISED_BODY.replace("Tolls - $15.55", "Tolls and fuel - $15.55")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents is None
+    result = ReimbursementResult()
+    record_invoice(session, parsed, now=NOW, result=result)
+    session.commit()
+
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911, "untouched"
+    assert any("names tolls but not on a line of its own" in e for e in result.unmatched_totals)

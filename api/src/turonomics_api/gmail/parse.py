@@ -402,16 +402,21 @@ _TOTAL_CHARGE = re.compile(r"Total\s+charge\s*[-–—:]\s*\$?\s*([\d,]+\.\d{2})
 # reimbursement bundles cleaning, fuel and damage onto the same invoice. The
 # toll line is the part that can be reconciled.
 #
-# The label may *begin* with a digit, and that is the whole reason this pattern
-# was wrong for a year of mail. Turo writes the quantity first —
-# "22 mi additional distance - $11.00" — so a pattern anchored on a leading
-# letter dropped every quantified line, which is most of them. A probe of the
-# real invoices read 149 of them and stored line items for none.
+# The label may *begin* with a digit. Turo writes the quantity first —
+# "22 mi additional distance - $11.00", "7 tolls - $40.71" — so a pattern
+# anchored on a leading letter silently dropped every quantified line. On the
+# live account that was three of the eight charged invoices: the plain labels
+# ("Tolls", "Tickets", "Refueling") matched all along.
+#
+# Said wrongly once and worth stating correctly: a sync that read 149 invoices
+# and stored line items for none of them is *not* evidence of this bug. That
+# run predated line items being parsed at all. This bug was found by reading
+# one invoice whose only charge was quantified, and seeing nothing.
 #
 # The first version of this was written against a guess at the format
 # ("Additional mileage (120 mi)"), and the guess parsed while the real thing
 # did not. The amount is still anchored to the end of its own line, which is
-# what keeps the description underneath each charge out.
+# what keeps the sentence underneath each charge out.
 _LINE_ITEM = re.compile(
     r"^\s*([A-Za-z0-9][A-Za-z0-9 /&'.,()+-]{1,60}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
     re.MULTILINE,
@@ -494,6 +499,18 @@ class ParsedInvoice:
         if self.turo_invoice_id:
             return f"inv:{self.turo_invoice_id}"
         return f"res:{self.reservation_id}:{self.total_cents}"
+
+
+def names_tolls(label: str) -> bool:
+    """Whether a charge label is about tolls at all.
+
+    Public because the recovery rule needs a distinction `toll_cents` cannot
+    make: it is None both for an invoice that charged no tolls and for one
+    whose toll line is unreadable ("Tolls and fuel", or two toll lines). The
+    first charged nothing and must never cover a crossing; the second charged
+    something unknown and has to be looked at by a person.
+    """
+    return bool(_TOLL_LABEL.search(label))
 
 
 def classify_invoice(subject: str) -> str | None:

@@ -66,8 +66,12 @@ is the real boundary" — and building on it would have moved the toll window to
 a day before the rental began. `GET /api/turo/grace` reports the offsets and
 states the reading, so this is a measurement rather than an impression.
 
-The toll matcher keeps `TOLL_OVERRUN_GRACE_MINUTES`, and it keeps being a
-guess. Turo does not appear to publish a return grace anywhere in this payload.
+The toll matcher keeps `TOLL_OVERRUN_GRACE_MINUTES` as a **ceiling**, and Turo
+does not appear to publish a return grace anywhere in this payload. What does
+settle it is the fleet's own trackers: Bouncie reports engine state on every
+poll, so the moment a car came to rest and stayed at rest is recorded already.
+`ingest/returns.py` reads it, and narrows the window to the car's actual
+return — see the note there for why it narrows only.
 
 **`allowedToRequestReimbursement`** is the filing window, authoritatively.
 `TOLL_FILING_WINDOW_DAYS = 90` is a number from the help pages; this is Turo

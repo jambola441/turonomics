@@ -149,7 +149,9 @@ def test_a_handover_in_between_ends_the_overrun(session):
     trip("Afternoon", NOON - td(hours=3), NOON - td(hours=1))
     session.flush()
 
-    found = _trip_overrunning(session, car.id, NOON - td(minutes=90), td(hours=6))
+    found = _trip_overrunning(
+        session, car.id, NOON - td(minutes=90), td(hours=6), now=NOON
+    )
     assert found is None, "Morning cannot be billed while Afternoon has the car"
 
 
@@ -170,5 +172,7 @@ def test_without_a_handover_the_overrun_stands(session):
                      state=TripState.completed, source=TripSource.manual))
     session.flush()
 
-    found = _trip_overrunning(session, car.id, NOON - td(minutes=90), td(hours=6))
+    found = _trip_overrunning(
+        session, car.id, NOON - td(minutes=90), td(hours=6), now=NOON
+    )
     assert found is not None and found.guest_name == "Morning"

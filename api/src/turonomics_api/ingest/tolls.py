@@ -30,6 +30,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import Toll, Trip, TripState, Vehicle
+from turonomics_api.ingest.returns import settled_at
 from turonomics_api.models import EZPassToll
 from turonomics_api.parsing.ezpass import parse_ezpass_csv
 from turonomics_api.settings import outside_fleet, toll_overrun_minutes
@@ -186,7 +187,12 @@ def nearest_trip(
 
 
 def _trip_overrunning(
-    session: Session, vehicle_id: uuid.UUID, when: datetime, grace: timedelta
+    session: Session,
+    vehicle_id: uuid.UUID,
+    when: datetime,
+    grace: timedelta,
+    *,
+    now: datetime,
 ) -> Trip | None:
     """The rental this crossing belongs to because the car came back late.
 
@@ -220,6 +226,28 @@ def _trip_overrunning(
     )
     if candidate is None:
         return None
+
+    # The tracker, where it has something to say. The car came back when it came
+    # to rest and stayed at rest, and a crossing after that is not the guest's
+    # however much of the grace is left. This only ever narrows the window —
+    # `settled_at` is bounded by the grace — because billing a guest for the
+    # operator's own driving is the expensive direction and no tracker can say
+    # who is holding the keys.
+    came_back = settled_at(
+        session, vehicle_id, ends_at=candidate.ends_at, grace=grace, now=now
+    )
+    if when > came_back.at:
+        if came_back.from_tracker:
+            log.info(
+                "crossing at %s is past %s coming to rest at %s — not billed to "
+                "reservation %s",
+                when.isoformat(),
+                candidate.vehicle.nickname if candidate.vehicle else vehicle_id,
+                came_back.at.isoformat(),
+                candidate.turo_trip_id,
+            )
+        return None
+
     # Somebody else took the car in between, so the overrun is over.
     #
     # Unreachable through `_claim`, which tries exact containment first and
@@ -242,10 +270,16 @@ def _trip_overrunning(
     return None if handed_over is not None else candidate
 
 
-def _claim(session: Session, vehicle_id: uuid.UUID, when: datetime) -> Trip | None:
+def _claim(
+    session: Session, vehicle_id: uuid.UUID, when: datetime, *, now: datetime | None = None
+) -> Trip | None:
     """The rental a crossing is billed to: containing it, or overrun into."""
     return _trip_at(session, vehicle_id, when) or _trip_overrunning(
-        session, vehicle_id, when, timedelta(minutes=toll_overrun_minutes())
+        session,
+        vehicle_id,
+        when,
+        timedelta(minutes=toll_overrun_minutes()),
+        now=now or datetime.now(UTC),
     )
 
 

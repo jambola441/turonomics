@@ -131,14 +131,20 @@ line    : 7 tolls - <MONEY>
 line    : Total charge - <MONEY>
 ```
 
-Two things here cost a year of mail:
+**The quantity comes first.** `22 mi additional distance`, `124 mi additional
+distance` — the label begins with a digit. A line pattern anchored on a leading
+letter dropped every quantified charge. On the live account that was three of
+the eight charged invoices; the plain labels matched all along.
 
-**The quantity comes first.** `22 mi additional distance`, `7 tolls` — the
-label begins with a digit. A line pattern anchored on a leading letter dropped
-every quantified charge, which is most of them, and the parser stored line
-items for none of 149 invoices while reporting nothing wrong. It had been
-written and tested against a *guess* at the format (`Additional mileage
-(120 mi) - $42.00`), and the guess parsed.
+A correction, because the wrong version of this was written down first: a sync
+that read 149 invoices and stored line items for *none* of them is not evidence
+of that bug. That run predated line items being parsed at all. The bug was
+found by reading one invoice whose only charge was quantified and seeing an
+empty list. What it cost was three invoices, not a year of mail.
+
+What did cost a year was the pattern being written and tested against a *guess*
+at the format (`Additional mileage (120 mi) - $42.00`) — the guess parsed, so
+nothing looked wrong until the real labels were visible.
 
 **Each charge has a sentence under it** explaining why it was charged. That is
 what the end-of-line anchor on the amount is for: the explanation is prose, and
@@ -146,7 +152,30 @@ prose containing both a dash and an amount would otherwise be invoiced.
 
 The heading is `Incidental charges`, not "Reimbursement charges". Nothing
 matches on it — the charge lines are found by shape — but it is what Turo calls
-the section, and the invoice page should use the same word.
+the section, and the invoice page uses the same word.
+
+### The labels, as observed
+
+Across the eight charged invoices on the live account:
+
+| label | notes |
+|---|---|
+| `Tolls` | plain, no quantity. The only one that reconciles against a statement. |
+| `Tickets` | a flat amount; `$50.00` twice |
+| `Refueling` | always paired with the line below |
+| `Refueling convenience fee` | `$10.00`, flat |
+| `<n> mi additional distance` | quantity first |
+| `Total charge` | the total, and not one of the charges it totals |
+
+**The total is net of Turo's cut on distance, and only on distance.** `$45.88`
+of additional distance totals as `$41.29`, and `$7.70` as `$6.93` — ×0.9 both
+times. Tolls, tickets and refueling total to the cent. So the toll *line* is
+gross and comparable to a statement; the total never was.
+
+Two of the eight carried a `Tolls` line, and both charged more than this fleet
+had imported for the rental: `$25.00` against `$9.79`, and `$27.04` against
+`$16.79`. Turo bills crossings this fleet has no statement row for, which is
+why recovery compares with `>=` rather than `==`.
 
 Every one of these labels came back as `<NAME>` until the invoice's own nouns
 joined the probe's vocabulary. A shape that masks the one field worth reading

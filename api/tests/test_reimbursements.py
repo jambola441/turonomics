@@ -579,3 +579,157 @@ def test_a_line_amount_is_not_truncated_by_a_cent() -> None:
     assert parsed is not None
     assert parsed.toll_cents == 201
     assert ("Tolls", 201) in parsed.lines
+
+
+# ---------------------------------------------------------------------------
+# The other things on an invoice
+# ---------------------------------------------------------------------------
+# A reimbursement also charges for additional mileage, fuel and tickets. None
+# of those is reconcilable here — nothing knows what the mileage should have
+# been — but they have to parse, so the page can show what the invoice was for,
+# and they must not be mistaken for the toll line.
+
+BUNDLED_BODY = """Dylan invoice
+
+Your guest has been charged.
+
+View receipt (https://turo.com/reservation/54958910/receipt)
+
+Reimbursement charges
+
+Tolls - $15.55
+Additional mileage (120 mi) - $42.00
+Fuel - $38.75
+Parking ticket - $65.00
+
+Total charge - $161.30
+"""
+
+
+def test_mileage_fuel_and_tickets_all_parse() -> None:
+    """Labels with digits and brackets included: "Additional mileage (120 mi)"
+    did not match the first version of the line pattern at all."""
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", BUNDLED_BODY
+    )
+    assert parsed is not None
+    assert parsed.lines == (
+        ("Tolls", 1555),
+        ("Additional mileage (120 mi)", 4200),
+        ("Fuel", 3875),
+        ("Parking ticket", 6500),
+    )
+    assert parsed.total_cents == 16130
+
+
+def test_the_toll_line_is_still_found_among_them() -> None:
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", BUNDLED_BODY
+    )
+    assert parsed is not None and parsed.toll_cents == 1555
+
+
+@pytest.mark.parametrize(
+    "label",
+    ["Additional mileage", "Fuel", "Gas", "Parking ticket", "Citation",
+     "Cleaning", "Smoking", "Damage", "Late return fee"],
+)
+def test_no_other_charge_is_read_as_tolls(label: str) -> None:
+    body = BUNDLED_BODY.replace("Tolls - $15.55\n", "").replace("Fuel -", f"{label} -")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert parsed.toll_cents is None, f"{label!r} was taken as a toll charge"
+
+
+def test_a_line_naming_tolls_and_something_else_is_refused() -> None:
+    """"Tolls and fuel - $55.55" does not say what the toll share was.
+
+    Taking the whole amount would write off the fuel as though the guest had
+    paid it, so this falls back to the total and refuses.
+    """
+    body = BUNDLED_BODY.replace("Tolls - $15.55", "Tolls and fuel - $54.30")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert any("Tolls and fuel" in label for label, _ in parsed.lines), "still listed"
+    assert parsed.toll_cents is None, "but not reconciled"
+
+
+def test_two_toll_lines_are_refused_rather_than_improvised_on() -> None:
+    """Not a shape seen in the wild, and not one to guess at: summing them
+    assumes they are both this rental's, and taking the first assumes an order.
+    """
+    body = BUNDLED_BODY.replace("Fuel - $38.75", "Tolls - $38.75")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents is None
+
+
+@requires_db
+def test_a_bundled_invoice_reconciles_only_its_toll_line(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """$161.30 charged across four categories, $15.55 of it tolls, against
+    $15.55 of crossings. The other $145.75 is not this ledger's business."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11", "-6.44"), "text/csv")})
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", BUNDLED_BODY
+    )
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 0
+
+
+@requires_db
+def test_the_other_charges_are_shown_not_discarded(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """So a $161.30 invoice against $15.55 of tolls reads as a bundle rather
+    than as a figure that makes no sense."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", BUNDLED_BODY
+    )
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+    row = api_client.get("/api/invoices").json()["invoices"][0]
+    assert row["charged_but_different"] is True, "$15.55 of tolls against $9.11 of crossings"
+    assert "Parking ticket $65.00" in row["charged_lines"]
+    assert "Fuel $38.75" in row["charged_lines"]
+
+
+# Each word in the other-charges list only ever acts when it sits beside
+# "toll", so that is how each is tested. Without this the list was untested:
+# the parametrised test above passes whether or not the word is in it, because
+# "Fuel" does not match the toll pattern in the first place — which is why
+# dropping "delivery" from the list survived mutation.
+@pytest.mark.parametrize(
+    "other",
+    ["mileage", "miles", "fuel", "gas", "petrol", "ticket", "tickets", "citation",
+     "citations", "violation", "violations", "cleaning", "smoking", "damage",
+     "overage", "pet", "delivery", "parking"],
+)
+def test_tolls_combined_with_another_charge_is_refused(other: str) -> None:
+    body = BUNDLED_BODY.replace("Tolls - $15.55", f"Tolls and {other} - $54.30")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert parsed.toll_cents is None, f"'Tolls and {other}' was reconciled as tolls"
+
+
+@pytest.mark.parametrize("label", ["Toll fees", "Toll charges", "Toll reimbursement",
+                                   "Tolls", "Toll"])
+def test_a_plain_toll_label_is_still_reconciled(label: str) -> None:
+    """The other side of the list, and the reason "fee" is not in it.
+
+    "Toll fees - $15.55" is the toll line. Refusing it over a word would leave
+    money uncollected, which is the mistake in the opposite direction from
+    writing off money nobody paid.
+    """
+    body = BUNDLED_BODY.replace("Tolls - $15.55", f"{label} - $15.55")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert parsed.toll_cents == 1555, f"{label!r} was not recognised as the toll line"

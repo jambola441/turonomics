@@ -274,3 +274,17 @@ def test_the_first_durable_rest_wins_not_the_last(session, car) -> None:
     found = settled_at(session, car.id, ends_at=ENDS, grace=GRACE, now=NOW)
     assert found.at == ENDS + td(minutes=20)
     assert found.from_tracker is True
+
+
+@requires_db
+def test_a_statement_imported_weeks_later_still_reads_the_return(
+    session, car
+) -> None:
+    """The normal case, not an edge one: E-ZPass statements arrive weeks after
+    the crossings. An open parking session from the night of the rental is the
+    strongest evidence there is, however long ago it opened."""
+    _parked(session, car, at=ENDS + td(minutes=25), until=None)
+    much_later = NOW + td(days=30)
+    found = settled_at(session, car.id, ends_at=ENDS, grace=GRACE, now=much_later)
+    assert found.at == ENDS + td(minutes=25)
+    assert found.from_tracker is True

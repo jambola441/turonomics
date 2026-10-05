@@ -89,10 +89,15 @@ def settled_at(
 
     for parked in candidates:
         if parked.ended_at is None:
-            # Still parked. Either it came back and nobody has moved it, or the
-            # tracker has gone quiet — and a session that has been open longer
-            # than the grace is not evidence of anything recent, so it only
-            # counts while `now` is still inside the window it would set.
+            # Still parked, so its length is measured against `now` instead of
+            # against an end it does not have. A session opened months ago and
+            # never closed is the strongest evidence there is — the car came to
+            # rest then and nothing has moved it since.
+            #
+            # The comment here used to claim this only counted while `now` was
+            # inside the window the session would set, which the code never did
+            # and should not: a crossing being attributed long after the fact is
+            # the normal case, because statements arrive weeks late.
             if now - parked.started_at >= SETTLED_FOR:
                 return Return(at=parked.started_at, from_tracker=True)
             continue

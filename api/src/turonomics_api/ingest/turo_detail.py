@@ -220,3 +220,51 @@ def describe_grace_periods(session: Session) -> list[str]:
             f"{from_end:+.1f}h from end"
         )
     return lines
+
+
+# What a grace period has to be after the end by before it is worth calling a
+# return grace. Under this and it is indistinguishable from rounding.
+_RETURN_GRACE_MINIMUM_HOURS = 0.25
+
+
+def read_grace(lines: list[str]) -> str:
+    """Say which grace period Turo's ``gracePeriodEnd`` is.
+
+    The lines from :func:`describe_grace_periods` carry both offsets, and a
+    person reading thirty of them will see the pattern. Stating it saves them
+    doing that, and — more to the point — means the conclusion is written down
+    somewhere a test can hold it still.
+    """
+    if not lines:
+        return "nothing pulled yet"
+    after_end = 0
+    before_end = 0
+    for line in lines:
+        _, _, tail = line.partition("from start, ")
+        hours = tail.removesuffix("h from end").strip()
+        try:
+            offset = float(hours)
+        except ValueError:  # pragma: no cover - the format is ours
+            continue
+        if offset >= _RETURN_GRACE_MINIMUM_HOURS:
+            after_end += 1
+        else:
+            before_end += 1
+    total = after_end + before_end
+    if total == 0:  # pragma: no cover - as above
+        return "unreadable"
+    if after_end == total:
+        return (
+            f"all {total} fall after the rental ends: this is the return grace, "
+            "and the toll matcher should use it instead of its fixed two hours"
+        )
+    if before_end == total:
+        return (
+            f"all {total} fall at or before the rental ends: this is a "
+            "cancellation deadline, not a return grace — the matcher keeps its "
+            "own window"
+        )
+    return (
+        f"{after_end} of {total} fall after the end and {before_end} do not, "
+        "so it is not one thing and nothing should be built on it yet"
+    )

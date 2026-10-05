@@ -30,6 +30,7 @@ from turonomics_api.ingest.turo_detail import (
     apply_detail,
     describe_grace_periods,
     parse_detail,
+    read_grace,
     wanted_reservations,
 )
 from turonomics_api.routers.tolls import require_token, token_configured
@@ -79,6 +80,29 @@ def wanted(session: DbSession) -> WantedResponse:
         reservations=wanted_reservations(session),
         token_required=token_configured(),
     )
+
+
+class GraceResponse(BaseModel):
+    """Where Turo's ``gracePeriodEnd`` falls, per rental."""
+
+    lines: list[str]
+    # The reading, stated rather than left to the eye: a grace period a few
+    # hours after the *start* is a cancellation deadline and no use for
+    # attributing a late crossing; one after the *end* is the return grace the
+    # toll matcher currently guesses at with a fixed two hours.
+    verdict: str
+
+
+@router.get("/grace", response_model=GraceResponse)
+def grace(session: DbSession) -> GraceResponse:
+    """A GET, because the answer is the point of having pulled it.
+
+    The same report rides on the POST response, but that is gated behind the
+    tolls token and arrives once, in a popup. This question — whether the
+    matcher can stop guessing — is worth being able to ask again.
+    """
+    lines = describe_grace_periods(session)
+    return GraceResponse(lines=lines, verdict=read_grace(lines))
 
 
 @router.post("/details", response_model=DetailsResponse)

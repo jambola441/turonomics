@@ -431,6 +431,24 @@ def main() -> int:
             check("the charges are listed the way the invoice words them",
                   "incidental charges: 7 tolls $15.55" in text
                   and "22 mi additional distance $40.00" in text)
+            # The ledger: the second look at the same money.
+            page.locator("#ledgerWrap > summary").click()
+            # Lowercased: the state cells are uppercased by CSS, and
+            # inner_text returns what is rendered rather than what is in the
+            # DOM. Asserting on the source casing fails for a page that is
+            # working perfectly.
+            ledger = page.locator("#ledgerWrap").inner_text().lower()
+            check("the ledger splits a rental into asked and not yet asked",
+                  "$11.00" in ledger and "$6.79" in ledger and "partly billed" in ledger)
+            check("and says what arrived after the first invoice",
+                  "arrived after the first invoice" in ledger)
+            check("a settled rental appears in the ledger though not in the list",
+                  "settled" in ledger and "$9.79" in ledger)
+            check("Turo's own charge is shown beside ours, not merged into it",
+                  "$25.00" in ledger)
+            check("the ledger totals are stated",
+                  "tolls $27.58" in ledger and "to bill $11.00" in ledger)
+
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
             look = page.locator("#look")

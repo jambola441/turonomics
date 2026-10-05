@@ -305,6 +305,142 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
     )
 
 
+class LedgerRow(BaseModel):
+    """One rental, with both ledgers side by side."""
+
+    trip_id: uuid.UUID
+    turo_trip_id: str | None
+    guest_name: str | None
+    vehicle_nickname: str | None
+    starts_at: datetime
+    ends_at: datetime
+    days_left: int | None
+
+    # What this app worked out from the statements, and what became of it.
+    # These three sum to `tolls_cents`.
+    tolls_cents: int
+    unfiled_cents: int
+    filed_cents: int
+    recovered_cents: int
+
+    # What Turo says, which is a different ledger rather than a check on the
+    # same one: its totals bundle refuelling and tickets, and only the toll
+    # line is comparable.
+    asked_cents: int
+    charged_cents: int
+    turo_toll_line_cents: int | None
+
+    # A word for the row, so a page does not have to re-derive one and two
+    # readers do not reach different conclusions from the same numbers.
+    state: str
+    # Set when the two ledgers disagree in a way worth a person's attention.
+    note: str | None = None
+
+
+class LedgerResponse(BaseModel):
+    rows: list[LedgerRow]
+    tolls_cents: int
+    unfiled_cents: int
+    filed_cents: int
+    recovered_cents: int
+    charged_cents: int
+
+
+def _ledger_state(
+    *, tolls: int, unfiled: int, filed: int, recovered: int, charged: int, left: int | None
+) -> tuple[str, str | None]:
+    """What this rental's crossings amount to, in a word.
+
+    Ordered by what a person would do about it, not by the data: the rows
+    worth acting on are the ones where money is still collectable.
+    """
+    if tolls == 0:
+        return "no crossings", None
+    if recovered == tolls:
+        return "settled", None
+    if unfiled == 0 and filed > 0:
+        return "awaiting payment", None
+    if unfiled > 0 and (filed > 0 or recovered > 0 or charged > 0):
+        # The case the per-crossing tracking exists for: a statement arriving
+        # after the first invoice went out.
+        return "partly billed", f"{unfiled / 100:,.2f} arrived after the first invoice"
+    if unfiled > 0 and left is not None and left < 0:
+        return "expired", "past the 90-day window, so this cannot be filed"
+    if unfiled > 0:
+        return "to bill", None
+    return "settled", None
+
+
+@router.get("/ledger", response_model=LedgerResponse)
+def ledger(session: DbSession) -> LedgerResponse:
+    """Every rental with crossings, and what has become of each.
+
+    Deliberately separate from the invoices list, which answers "what should I
+    do next" and so leaves out everything already dealt with. This answers
+    "where did it all go", which needs the settled ones in it or the totals do
+    not add up.
+    """
+    now = datetime.now(UTC)
+    window = toll_filing_window_days()
+    built = build_invoices(session, now=now, include_recovered=True)
+    asked = _reimbursements(session, [i.trip_id for i in built])
+
+    rows: list[LedgerRow] = []
+    for invoice in built:
+        states = {line.toll_id: line for line in invoice.lines}
+        tolls = session.scalars(
+            select(Toll).where(Toll.id.in_(list(states)))
+        ).all()
+        unfiled = sum(
+            t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is None
+        )
+        filed = sum(
+            t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
+        )
+        recovered = sum(t.amount_cents for t in tolls if t.recovered_at is not None)
+        theirs = asked.get(invoice.trip_id) or []
+        charged = sum(r.total_cents for r in theirs if r.state == "charged")
+        toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
+        left = invoice.days_left(window, now)
+        state, note = _ledger_state(
+            tolls=invoice.total_cents,
+            unfiled=unfiled,
+            filed=filed,
+            recovered=recovered,
+            charged=charged,
+            left=left,
+        )
+        rows.append(
+            LedgerRow(
+                trip_id=invoice.trip_id,
+                turo_trip_id=invoice.turo_trip_id,
+                guest_name=invoice.guest_name,
+                vehicle_nickname=invoice.vehicle_nickname,
+                starts_at=invoice.starts_at,
+                ends_at=invoice.ends_at,
+                days_left=left,
+                tolls_cents=invoice.total_cents,
+                unfiled_cents=unfiled,
+                filed_cents=filed,
+                recovered_cents=recovered,
+                asked_cents=sum(r.total_cents for r in theirs),
+                charged_cents=charged,
+                turo_toll_line_cents=sum(toll_lines) if toll_lines else None,
+                state=state,
+                note=note,
+            )
+        )
+    rows.sort(key=lambda row: row.ends_at, reverse=True)
+    return LedgerResponse(
+        rows=rows,
+        tolls_cents=sum(r.tolls_cents for r in rows),
+        unfiled_cents=sum(r.unfiled_cents for r in rows),
+        filed_cents=sum(r.filed_cents for r in rows),
+        recovered_cents=sum(r.recovered_cents for r in rows),
+        charged_cents=sum(r.charged_cents for r in rows),
+    )
+
+
 @router.get("/next-draft", response_model=DraftResponse)
 def next_draft(session: DbSession) -> DraftResponse:
     """The rental most worth filing for, drafted.

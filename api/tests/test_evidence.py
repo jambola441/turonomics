@@ -17,6 +17,7 @@ from datetime import timedelta as td
 import pytest
 
 from turonomics_api.db.models import (
+    ReimbursementInvoice,
     Toll,
     Trip,
     TripSource,
@@ -578,3 +579,124 @@ def test_filing_again_does_not_restamp_the_earlier_crossings(
     )
     session.refresh(first)
     assert first.filed_at == originally, "the first ask keeps its own date"
+
+
+# ---------------------------------------------------------------------------
+# The ledger: both sides, per rental
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_the_ledger_splits_a_rental_into_asked_and_not(
+    api_client, session, car, rental
+) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=5))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100)
+    session.commit()
+
+    out = api_client.get("/api/invoices/ledger").json()
+    row = out["rows"][0]
+    assert row["tolls_cents"] == 1779
+    assert row["filed_cents"] == 679, "asked for"
+    assert row["unfiled_cents"] == 1100, "arrived afterwards"
+    assert row["recovered_cents"] == 0
+    assert row["state"] == "partly billed"
+    assert "arrived after the first invoice" in row["note"]
+
+
+@requires_db
+def test_the_three_parts_always_sum_to_the_whole(
+    api_client, session, car, rental
+) -> None:
+    """The property that makes the view worth looking at: every crossing is in
+    exactly one of the three columns, so a reader can trust the row."""
+    _crossing(session, car, rental, at=ENDS - td(hours=5))
+    _crossing(session, car, rental, at=ENDS - td(hours=4), cents=1100)
+    _crossing(session, car, rental, at=ENDS - td(hours=3), cents=250)
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 2029},
+    )
+    out = api_client.get("/api/invoices/ledger").json()
+    for row in out["rows"]:
+        assert row["unfiled_cents"] + row["filed_cents"] + row["recovered_cents"] == (
+            row["tolls_cents"]
+        )
+    assert out["unfiled_cents"] + out["filed_cents"] + out["recovered_cents"] == (
+        out["tolls_cents"]
+    )
+
+
+@requires_db
+def test_a_settled_rental_is_in_the_ledger_but_not_the_invoice_list(
+    api_client, monkeypatch, session, car, rental
+) -> None:
+    """The invoice list answers "what next" and leaves out what is done. The
+    ledger answers "where did it go", which needs the done ones or the totals
+    do not add up."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    toll = _crossing(session, car, rental, at=ENDS - td(hours=2))
+    toll.recovered_at = NOW
+    session.commit()
+
+    assert api_client.get("/api/invoices").json()["invoices"] == []
+    out = api_client.get("/api/invoices/ledger").json()
+    assert len(out["rows"]) == 1
+    assert out["rows"][0]["state"] == "settled"
+    assert out["rows"][0]["recovered_cents"] == 679
+
+
+@requires_db
+def test_turos_side_is_shown_beside_ours_not_merged_into_it(
+    api_client, session, car, rental
+) -> None:
+    """Turo's totals bundle refuelling and tickets, so only its toll line is
+    comparable. Both are reported; neither is corrected by the other."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:777", reservation_id=rental.turo_trip_id,
+            guest_name="Dylan", state="charged", total_cents=5000,
+            lines=[["Tolls", 2500], ["Refueling", 2500]], toll_cents=2500,
+            trip_id=rental.id, last_seen_at=NOW, charged_at=NOW,
+        )
+    )
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["tolls_cents"] == 679, "ours"
+    assert row["charged_cents"] == 5000, "the whole invoice Turo charged"
+    assert row["turo_toll_line_cents"] == 2500, "the part of it that was tolls"
+
+
+@requires_db
+def test_an_expired_rental_says_so_rather_than_reading_as_to_do(
+    api_client, session, car, rental
+) -> None:
+    rental.starts_at = NOW - td(days=200)
+    rental.ends_at = NOW - td(days=199)
+    _crossing(session, car, rental, at=rental.ends_at - td(hours=2))
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "expired"
+    assert "cannot be filed" in row["note"]
+
+
+@requires_db
+def test_a_fully_asked_rental_reads_as_awaiting_payment(
+    api_client, session, car, rental
+) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "awaiting payment"
+    assert row["unfiled_cents"] == 0

@@ -41,6 +41,24 @@
   .stat .v{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em}
   .stat .n{font-size:11px;color:var(--dim);line-height:1.35}
   .stat.urgent .v{color:var(--amber)}
+  .ledger{margin-top:26px;border-top:1px solid var(--line);padding-top:14px}
+  .ledger>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:4px 0}
+  .ledger-totals{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 14px;
+    font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .ledger-totals b{font-weight:600;color:var(--ink)}
+  .ledger-table{width:100%;border-collapse:collapse;font-size:12px}
+  .ledger-table th{text-align:left;font-family:var(--mono);font-size:9.5px;
+    letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
+    padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500}
+  .ledger-table td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+  .ledger-table .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  .ledger-table .zero{color:var(--dim)}
+  .ledger-table .who{font-size:11px;color:var(--dim)}
+  .ledger-state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+    text-transform:uppercase;white-space:nowrap}
+  .ledger-state.tobill{color:var(--amber)}
+  .ledger-state.expired{color:var(--dim)}
+  .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
   .stat.gone .v{color:var(--red)}
 
   h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
@@ -113,6 +131,28 @@
   <div class="note" id="look" hidden></div>
 
   <div id="groups"></div>
+
+  <!-- Every rental with crossings, including the ones already dealt with. The
+       groups above answer "what next" and so leave those out; this answers
+       "where did it all go", which needs them or the totals do not add up. -->
+  <details id="ledgerWrap" class="ledger">
+    <summary>Every rental, and what became of its crossings</summary>
+    <div class="ledger-totals" id="ledgerTotals"></div>
+    <table class="ledger-table">
+      <thead>
+        <tr>
+          <th>Rental</th>
+          <th class="num">Tolls</th>
+          <th class="num">To bill</th>
+          <th class="num">Asked</th>
+          <th class="num">Settled</th>
+          <th class="num">Turo charged</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="ledgerBody"></tbody>
+    </table>
+  </details>
 </main>
 
 <script>
@@ -359,7 +399,63 @@
       .then(function () { state.busy = false; });
   }
 
+  function renderLedger(data) {
+    var body = el("ledgerBody");
+    body.textContent = "";
+    (data.rows || []).forEach(function (row) {
+      var tr = document.createElement("tr");
+      var who = document.createElement("td");
+      var name = document.createElement("div");
+      name.textContent = (row.vehicle_nickname || "—") + " · " + (row.guest_name || "—");
+      var when = document.createElement("div");
+      when.className = "who";
+      when.textContent = String(row.ends_at).slice(0, 10) +
+        (row.turo_trip_id ? " · " + row.turo_trip_id : " · off-platform");
+      who.appendChild(name);
+      who.appendChild(when);
+      if (row.note) {
+        var note = document.createElement("div");
+        note.className = "ledger-note";
+        note.textContent = row.note;
+        who.appendChild(note);
+      }
+      tr.appendChild(who);
+      [row.tolls_cents, row.unfiled_cents, row.filed_cents, row.recovered_cents,
+       row.charged_cents].forEach(function (cents) {
+        var td = document.createElement("td");
+        td.className = "num" + (cents ? "" : " zero");
+        td.textContent = money(cents);
+        tr.appendChild(td);
+      });
+      var state = document.createElement("td");
+      state.className = "ledger-state " +
+        (row.state === "to bill" || row.state === "partly billed" ? "tobill" :
+         row.state === "expired" ? "expired" : "");
+      state.textContent = row.state;
+      tr.appendChild(state);
+      body.appendChild(tr);
+    });
+    el("ledgerTotals").textContent =
+      "tolls " + money(data.tolls_cents) +
+      " · to bill " + money(data.unfiled_cents) +
+      " · asked " + money(data.filed_cents) +
+      " · settled " + money(data.recovered_cents);
+    el("ledgerWrap").hidden = !(data.rows || []).length;
+  }
+
+  function loadLedger() {
+    return fetch(API + "/api/invoices/ledger")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderLedger(data); })
+      .catch(function () {
+        // The ledger is a second look at the same money, not the page's job.
+        // A page that fails to load entirely because the extra view is down
+        // would be worse than one without it.
+      });
+  }
+
   function load() {
+    loadLedger();
     return fetch(API + "/api/invoices")
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);

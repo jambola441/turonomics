@@ -396,16 +396,24 @@ _INVOICE_RESERVATION = re.compile(
 _INVOICE_ID = re.compile(r"invoiceId=([A-Za-z0-9_-]{4,})", re.IGNORECASE)
 _TOTAL_CHARGE = re.compile(r"Total\s+charge\s*[-–—:]\s*\$?\s*([\d,]+\.\d{2})", re.IGNORECASE)
 
-# "Tolls - $16.79", one per charge on the invoice. Matching the total was not
-# enough: of eight charged invoices on the live account, not one total equalled
-# the rental's tolls, because a reimbursement bundles cleaning, fuel and damage
-# onto the same invoice. The toll line is the part that can be reconciled.
-# Digits and brackets allowed in the label, because a reimbursement also
-# carries lines like "Additional mileage (120 mi)" and "250 miles over". The
-# amount is still anchored to the end of its own line, which is what keeps
-# prose out.
+# "Tolls - $16.79", one per charge under the invoice's "Incidental charges"
+# heading. Matching the total was not enough: of eight charged invoices on the
+# live account, not one total equalled the rental's tolls, because a
+# reimbursement bundles cleaning, fuel and damage onto the same invoice. The
+# toll line is the part that can be reconciled.
+#
+# The label may *begin* with a digit, and that is the whole reason this pattern
+# was wrong for a year of mail. Turo writes the quantity first —
+# "22 mi additional distance - $11.00" — so a pattern anchored on a leading
+# letter dropped every quantified line, which is most of them. A probe of the
+# real invoices read 149 of them and stored line items for none.
+#
+# The first version of this was written against a guess at the format
+# ("Additional mileage (120 mi)"), and the guess parsed while the real thing
+# did not. The amount is still anchored to the end of its own line, which is
+# what keeps the description underneath each charge out.
 _LINE_ITEM = re.compile(
-    r"^\s*([A-Za-z][A-Za-z0-9 /&'.,()+-]{1,60}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
+    r"^\s*([A-Za-z0-9][A-Za-z0-9 /&'.,()+-]{1,60}?)\s*[-–—]\s*\$\s*([\d,]+\.\d{2})\s*$",
     re.MULTILINE,
 )
 
@@ -430,8 +438,8 @@ _TOLL_LABEL = re.compile(r"\btolls?\b", re.IGNORECASE)
 # toll share was.
 _OTHER_CHARGE = re.compile(
     r"\b(?:mileage|miles|fuel|gas|petrol|ticket|tickets|citation|citations|"
-    r"violation|violations|cleaning|smoking|damage|overage|pet|delivery|"
-    r"parking)\b",
+    r"violation|violations|cleaning|smoking|damage|overage|distance|pet|"
+    r"delivery|parking)\b",
     re.IGNORECASE,
 )
 

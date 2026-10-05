@@ -303,7 +303,7 @@ INVOICES = [
              days_left=30, file_by=_iso(days=30), total_cents=911,
              charged_cents=5555, charged_but_different=True,
              charged_tolls_cents=1555,
-             charged_lines=["Tolls $15.55", "Cleaning $40.00"]),
+             charged_lines=["7 tolls $15.55", "22 mi additional distance $40.00"]),
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000006", guest_name="Austin",
              days_left=33, file_by=_iso(days=33), total_cents=4071, pending_cents=4071),
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000004", guest_name="Brandon",

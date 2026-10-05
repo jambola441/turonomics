@@ -111,6 +111,47 @@ Notes that shape the parser:
 - **Cancellations say `requested by <GUEST>`** where bookings say `booked by`,
   and drop the `you earn` and `mileage included` labels.
 
+## The reimbursement-invoice shape
+
+All three invoice notifications (filed, not responded, charged) carry the same
+body. Observed 2026-10-05, from a probe narrowed to `subject:"reimbursement
+invoice"`:
+
+```
+from    : Turo <<EMAIL>>
+subject : <GUEST> has been charged for your reimbursement invoice
+
+line    : View invoice (https://turo.com/reservation/<NUM>/invoice-hub?invoiceId=<VALUE>)
+line    : <NUM> <VEHICLE>
+line    : <PROSE> by <GUEST>
+line    : Incidental charges
+line    : 22 mi additional distance - <MONEY>
+line    : <PROSE 29w>
+line    : 7 tolls - <MONEY>
+line    : Total charge - <MONEY>
+```
+
+Two things here cost a year of mail:
+
+**The quantity comes first.** `22 mi additional distance`, `7 tolls` — the
+label begins with a digit. A line pattern anchored on a leading letter dropped
+every quantified charge, which is most of them, and the parser stored line
+items for none of 149 invoices while reporting nothing wrong. It had been
+written and tested against a *guess* at the format (`Additional mileage
+(120 mi) - $42.00`), and the guess parsed.
+
+**Each charge has a sentence under it** explaining why it was charged. That is
+what the end-of-line anchor on the amount is for: the explanation is prose, and
+prose containing both a dash and an amount would otherwise be invoiced.
+
+The heading is `Incidental charges`, not "Reimbursement charges". Nothing
+matches on it — the charge lines are found by shape — but it is what Turo calls
+the section, and the invoice page should use the same word.
+
+Every one of these labels came back as `<NAME>` until the invoice's own nouns
+joined the probe's vocabulary. A shape that masks the one field worth reading
+is true and useless; see the charge-word block in `gmail/probe.py`.
+
 ## Known weakness in the probe itself
 
 Shapes over-split. "4Runner" starts with a digit, so the capitalised-word mask

@@ -424,8 +424,13 @@ def main() -> int:
             # like a mystery, its lines explain it.
             check("the bundled invoice's toll line is quoted",
                   "its toll line was $15.55" in text)
-            check("and its other charges are listed",
-                  "Cleaning $40.00" in text)
+            # Turo's own word for the section, and its own quantified labels.
+            # The page used to say "that invoice:" and the labels used to be
+            # invented, which is how a parser that read none of them went a
+            # year unnoticed.
+            check("the charges are listed the way the invoice words them",
+                  "incidental charges: 7 tolls $15.55" in text
+                  and "22 mi additional distance $40.00" in text)
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
             look = page.locator("#look")

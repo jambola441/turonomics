@@ -185,7 +185,16 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
       isError: true,
     };
   }
-  const parts = [`${rows} rows read`, `${imported} new`];
+  const parts: string[] = [];
+  if (result.pagesRead && result.pagesRead > 1) {
+    parts.push(`${result.pagesRead} pages`);
+  }
+  // "stopped at 40 pages" means rows may be missing, which has to reach the
+  // operator rather than looking like a clean read.
+  if (result.pagingStopped && /stopped at/.test(result.pagingStopped)) {
+    parts.push(`⚠ ${result.pagingStopped}`);
+  }
+  parts.push(`${rows} rows read`, `${imported} new`);
   if (already_known) parts.push(`${already_known} already on file`);
   parts.push(`${matched} attributed`);
   if (unmatched) parts.push(`${unmatched} with nobody to bill`);
@@ -209,19 +218,11 @@ tollsBtn.addEventListener("click", async () => {
       return;
     }
 
-    // The tab may predate the extension being installed, in which case the
-    // manifest's content script never ran in it.
-    await chrome.scripting
-      .executeScript({ target: { tabId: tab.id }, files: ["dist/ezpass.js"] })
-      .catch(() => undefined);
-
-    showStatus("Reading the page...");
-    const page = await send(tab.id, { type: "SCRAPE_TOLLS" });
-    if (page.type === "TOLLS_PAGE_ERROR") throw new Error(page.error);
-    if (page.type !== "TOLLS_PAGE") throw new Error("Unexpected response from the page.");
-
-    showStatus("Sending the statement...");
-    const sent = await send(null, { type: "SEND_TOLLS", page: page.page });
+    // The worker reads every page of the statement and posts it. Driven from
+    // there rather than from a content script, because a "next" link that
+    // navigates would tear a content script down mid-loop.
+    showStatus("Reading the statement — this pages through it...");
+    const sent = await send(null, { type: "SEND_TOLLS", tabId: tab.id });
     if (sent.type === "SEND_TOLLS_ERROR") throw new Error(sent.error);
     if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");
 

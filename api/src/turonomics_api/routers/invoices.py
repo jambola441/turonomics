@@ -65,6 +65,13 @@ class InvoiceRow(BaseModel):
     # match these crossings — cleaning and fuel ride on the same invoices, so
     # it is surfaced rather than written off.
     charged_but_different: bool = False
+    # What a charged invoice said it took for tolls specifically, where it
+    # itemised. The figure worth comparing: a reimbursement bundles cleaning,
+    # fuel and damage, so its total rarely equals a rental's crossings.
+    charged_tolls_cents: int | None = None
+    # Every charge on the invoices against this rental, as "label $amount",
+    # so a bundled one reads as a bundle rather than as a puzzling total.
+    charged_lines: list[str] = []
 
 
 class InvoicesResponse(BaseModel):
@@ -109,6 +116,21 @@ def _row(
     asked = asked or []
     charged = sum(r.total_cents for r in asked if r.state == "charged")
     pending = sum(r.total_cents for r in asked if r.state != "charged")
+    charged_rows = [r for r in asked if r.state == "charged"]
+    toll_lines = [r.toll_cents for r in charged_rows if r.toll_cents is not None]
+    charged_tolls = sum(toll_lines) if toll_lines else None
+    lines: list[str] = []
+    for row in charged_rows:
+        for entry in row.lines or []:
+            # Narrowed rather than cast: this came out of a JSONB column, so
+            # the shape is whatever was written, and a row from an older
+            # version of the writer is a real possibility rather than a
+            # type-checker formality.
+            if not (isinstance(entry, list) and len(entry) == 2):
+                continue
+            label, cents = entry
+            if isinstance(label, str) and isinstance(cents, int):
+                lines.append(f"{label} ${cents / 100:,.2f}")
     return InvoiceRow(
         trip_id=invoice.trip_id,
         guest_name=invoice.guest_name,
@@ -135,7 +157,12 @@ def _row(
         pending_cents=pending,
         # Only interesting while something is still outstanding: once the
         # crossings are ticked off they leave this list anyway.
-        charged_but_different=bool(charged) and charged != invoice.total_cents,
+        charged_tolls_cents=charged_tolls,
+        charged_lines=lines,
+        # Compared on the toll line where the invoice itemised one, since that
+        # is the part that can be reconciled at all.
+        charged_but_different=bool(charged)
+        and (charged_tolls if charged_tolls is not None else charged) != invoice.total_cents,
     )
 
 

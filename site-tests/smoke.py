@@ -420,6 +420,12 @@ def main() -> int:
             text = page.locator("#groups").text_content() or ""
             check("a rental charged a different amount is flagged",
                   "Turo already charged" in text and "check before asking again" in text)
+            # A bundled invoice has to read as a bundle: its total alone looks
+            # like a mystery, its lines explain it.
+            check("the bundled invoice's toll line is quoted",
+                  "its toll line was $15.55" in text)
+            check("and its other charges are listed",
+                  "Cleaning $40.00" in text)
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
             look = page.locator("#look")

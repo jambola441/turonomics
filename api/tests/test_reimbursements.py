@@ -414,3 +414,168 @@ def test_charged_at_is_set_only_when_charged(session, trip) -> None:
     assert charged is not None
     invoice = record_invoice(session, charged, now=NOW + timedelta(days=2))
     assert invoice.charged_at == NOW + timedelta(days=2)
+
+
+# ---------------------------------------------------------------------------
+# Line items
+# ---------------------------------------------------------------------------
+# Matching the total was not enough. Of eight charged invoices on the live
+# account, not one total equalled the rental's crossings — a reimbursement
+# bundles cleaning, fuel and damage onto the same invoice. The toll line is the
+# part that can be reconciled.
+
+ITEMISED_BODY = """Dylan invoice
+
+Your guest has been charged.
+
+View receipt (https://turo.com/reservation/54958910/receipt)
+
+Reimbursement charges
+
+Tolls - $15.55
+Cleaning - $40.00
+
+Total charge - $55.55
+"""
+
+
+def test_the_line_items_are_read() -> None:
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None
+    assert parsed.lines == (("Tolls", 1555), ("Cleaning", 4000))
+    assert parsed.total_cents == 5555
+
+
+def test_the_total_is_not_read_as_a_line_item() -> None:
+    """It is the sum of the lines, not one of them."""
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None
+    assert all("total" not in label.lower() for label, _ in parsed.lines)
+
+
+def test_the_toll_line_is_picked_out() -> None:
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None and parsed.toll_cents == 1555
+
+
+def test_an_invoice_with_no_toll_line_reports_none() -> None:
+    """Entirely cleaning or damage. None rather than zero, so the caller can
+    tell "no toll line" from "a toll line of nothing"."""
+    body = ITEMISED_BODY.replace("Tolls - $15.55\n", "")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents is None
+
+
+def test_a_singular_toll_label_is_recognised() -> None:
+    body = ITEMISED_BODY.replace("Tolls -", "Toll -")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents == 1555
+
+
+def test_a_wordier_toll_label_is_recognised() -> None:
+    body = ITEMISED_BODY.replace("Tolls -", "Toll charges -")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None and parsed.toll_cents == 1555
+
+
+def test_a_label_merely_containing_the_letters_is_not_a_toll_line() -> None:
+    """Word boundaries, so "Tolled" or a plaza name does not become the toll
+    line and write off the wrong amount."""
+    body = ITEMISED_BODY.replace("Tolls -", "Tollington Road damage -")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert parsed.toll_cents is None, "a road name is not a toll charge"
+
+
+@requires_db
+def test_the_toll_line_is_what_gets_reconciled(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """A bundled invoice now ticks off its toll portion.
+
+    $55.55 charged, of which $15.55 was tolls, against $15.55 of crossings.
+    Comparing the total would have refused this — which is what every one of
+    the eight live invoices did.
+    """
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11", "-6.44"), "text/csv")})
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 0
+    assert api_client.get("/api/invoices").json()["invoices"] == []
+
+
+@requires_db
+def test_a_toll_line_that_does_not_match_is_still_refused(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """Itemising does not mean guessing. A toll line of $9.00 against $15.55 of
+    crossings is a part-payment or a different set, and writing the rest off
+    would lose it."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11", "-6.44"), "text/csv")})
+    body = ITEMISED_BODY.replace("Tolls - $15.55", "Tolls - $9.00")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 1555
+
+
+@requires_db
+def test_the_lines_are_stored_so_the_labels_can_be_read(session, trip) -> None:
+    """Turo's own words. The masked probe reports them as <NAME>, so storing
+    them is the only way to find out what they are."""
+    parsed = parse_invoice(
+        "Dylan has been charged for your reimbursement invoice", ITEMISED_BODY
+    )
+    assert parsed is not None
+    invoice = record_invoice(session, parsed, now=NOW)
+    assert invoice.lines == [["Tolls", 1555], ["Cleaning", 4000]]
+    assert invoice.toll_cents == 1555
+
+
+@requires_db
+def test_an_itemised_sighting_fills_in_what_an_earlier_one_lacked(session, trip) -> None:
+    """The three notifications of one invoice do not all itemise, and they
+    arrive in no particular order."""
+    bare = parse_invoice("Dylan invoice", FILED_BODY)
+    assert bare is not None and bare.toll_cents is None
+    record_invoice(session, bare, now=NOW)
+
+    itemised = parse_invoice(
+        "Dylan has not responded to your reimbursement invoice",
+        ITEMISED_BODY.replace("https://turo.com/reservation/54958910/receipt",
+                              "https://turo.com/reservation/54958910/invoice-hub?invoiceId=abc123XY"),
+    )
+    assert itemised is not None and itemised.toll_cents == 1555
+    invoice = record_invoice(session, itemised, now=NOW + timedelta(hours=1))
+    assert invoice.toll_cents == 1555
+    assert invoice.lines
+
+
+def test_a_line_amount_is_not_truncated_by_a_cent() -> None:
+    """284 of the first 5,900 amounts lose a cent to int(x * 100).
+
+    $15.55 and $40.00 are not among them, which is why a mutation replacing
+    round with truncation survived the first version of these tests. $2.01 is:
+    int(2.01 * 100) is 200.
+    """
+    body = ITEMISED_BODY.replace("Tolls - $15.55", "Tolls - $2.01")
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", body)
+    assert parsed is not None
+    assert parsed.toll_cents == 201
+    assert ("Tolls", 201) in parsed.lines

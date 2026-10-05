@@ -251,10 +251,18 @@
     // What Turo has already been asked for on this rental. Shown because
     // invoicing money the guest has paid is a dispute, not income.
     if (invoice.charged_but_different) {
+      // The toll line where the invoice itemised one, because a reimbursement
+      // bundles cleaning and fuel and its total says little on its own.
+      var mine = invoice.charged_tolls_cents != null
+        ? "its toll line was " + money(invoice.charged_tolls_cents)
+        : "it did not itemise tolls";
       add(body, "div", "asked odd",
-          "Turo already charged " + money(invoice.charged_cents) +
-          " here — these crossings are " + money(invoice.total_cents) +
+          "Turo already charged " + money(invoice.charged_cents) + " here — " +
+          mine + " and these crossings are " + money(invoice.total_cents) +
           ", so check before asking again");
+      if (invoice.charged_lines && invoice.charged_lines.length) {
+        add(body, "div", "asked", "that invoice: " + invoice.charged_lines.join(" · "));
+      }
     } else if (invoice.charged_cents) {
       add(body, "div", "asked",
           money(invoice.charged_cents) + " already charged on this rental");

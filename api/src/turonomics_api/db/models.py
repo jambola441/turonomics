@@ -739,6 +739,17 @@ class ReimbursementInvoice(Base):
     state: Mapped[str] = mapped_column(String(20))
     total_cents: Mapped[int] = mapped_column(Integer)
 
+    # Every charge on the invoice, as [[label, cents], ...]. Kept because a
+    # reimbursement bundles tolls with cleaning, fuel and damage, so the total
+    # alone cannot be reconciled against a rental's crossings — and because
+    # these labels are Turo's words, which nobody here can read otherwise: the
+    # masked probe reports them as <NAME>.
+    lines: Mapped[list[list[object]]] = mapped_column(JSONB, default=list)
+
+    # What the invoice charged for tolls specifically, where a line said so.
+    # Null when no line was recognisable as tolls.
+    toll_cents: Mapped[int | None] = mapped_column(Integer)
+
     # When the "has been charged" notification was seen. Null while the invoice
     # is only filed, which is the difference between asked and collected.
     charged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

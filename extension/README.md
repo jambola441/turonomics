@@ -1,6 +1,76 @@
 # Turonomics — Chrome Extension
 
-Exports a CSV of your Turo host trips from the last 90 days.
+Two jobs, both of them "read a page I am already logged into and get the data
+out":
+
+1. **Send tolls to Turonomics** — reads an E-ZPass account-activity page and
+   posts the statement to the API, which attributes each crossing to the trip
+   and guest who was driving.
+2. **Export Last 90 Days** — writes a CSV of Turo host trips to Downloads.
+
+## Why the tolls are scraped in your browser
+
+`www.e-zpassny.com` is behind Imperva bot protection: an unauthenticated
+request gets a JavaScript challenge instead of HTML. Scraping it from the
+server would mean storing your E-ZPass password, getting a headless browser
+past that challenge and past whatever the login's second factor is, and
+re-doing all of it whenever any of the three changes.
+
+Your browser has already solved every one of those problems. The session is
+yours, the click is yours, and the WAF sees a real browser because it is one.
+Nothing stores your E-ZPass credentials — this extension never sees them.
+
+## Sending a statement
+
+1. Log in to E-ZPass and open **Account Activity**.
+2. Click the Turonomics icon → **Send tolls to Turonomics**.
+3. It reports what the API did with it: how many rows it read, how many were
+   new, how many it could attribute to a guest, and any transponder that is not
+   bound to a car.
+
+It prefers a CSV the site generates (there is usually a download link on that
+page) and falls back to scraping the activity table. Re-sending the same page is
+harmless: the API fingerprints each crossing and skips the ones it already has,
+so paging through a long statement and sending each page works.
+
+### If it cannot find the activity
+
+The popup shows a **What was on the page** report naming each table's columns
+and masking their values — `###########` where a tag number was. That is safe to
+paste into an issue; it says what the markup looks like without saying what your
+tolls were.
+
+Two specific things it will tell you about:
+
+- **The API refused the file.** The message lists the column names it found. The
+  parser's aliases are in `api/src/turonomics_api/parsing/ezpass.py`; adding the
+  page's names there is usually the whole fix.
+- **Read N rows and kept none.** An E-ZPass download writes charges as negative
+  and the API treats a positive amount as a payment. If the page shows charges
+  as positive, every row looks like a payment. The extension does not flip the
+  signs itself: an activity table mixes tolls with replenishments, and negating
+  everything would turn a payment into a charge and bill it to a guest.
+
+### Settings
+
+Under **Settings** in the popup:
+
+- **API** — defaults to `https://turonomics.onrender.com`.
+- **Tolls token** — `TOLLS_TOKEN` from the API service, if one is set there.
+  Leave it blank if not.
+
+## What has not been verified against the real page
+
+The selectors are structural on purpose — "every `<table>`, scored by whether
+its header has a date, an amount and a tag or plate column" — because the
+logged-in activity page is behind a login and a WAF and could not be opened
+while this was written. The scoring, the CSV assembly, the row cleanup and the
+masking are all covered by `npm test`. Which table on the real page wins is not,
+and cannot be until somebody runs it on the real page. The first run is
+therefore the test: if it picks the wrong table or the API rejects the columns,
+the report in the popup says so and names what it saw.
+
+## Turo trip export
 
 ## Output CSV format
 
@@ -23,7 +93,19 @@ npm install
 npm run build        # compile TypeScript → dist/
 npm run watch        # watch mode
 npm run lint         # eslint
+npm test             # compile, then node --test over dist/
 ```
+
+`src/tolls.ts` holds everything the E-ZPass side decides, and nothing that
+touches the DOM. That split is deliberate: a content script cannot be an ES
+module, so anything inside one is untestable without a browser. `src/ezpass.ts`
+reads tables and candidate links into plain data and makes no decisions;
+`src/tolls.ts` decides what the data meant and is covered by `npm test`.
+
+`examples/ezpass/scraped-from-page.csv` is a contract between this extension and
+the Python importer: `tolls.test.ts` asserts the scraper still produces it byte
+for byte, and `api/tests/test_parsing_ezpass.py` asserts the importer still
+reads it. Changing the CSV shape on one side fails on the other.
 
 ## Loading in Chrome
 

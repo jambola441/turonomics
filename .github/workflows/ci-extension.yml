@@ -4,10 +4,13 @@ on:
   push:
     paths:
       - "extension/**"
+      - "examples/ezpass/**"
       - ".github/workflows/ci-extension.yml"
   pull_request:
     paths:
       - "extension/**"
+      - "examples/ezpass/**"
+      - ".github/workflows/ci-extension.yml"
 
 jobs:
   build:
@@ -22,7 +25,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
           cache-dependency-path: extension/package-lock.json
 
@@ -34,3 +37,9 @@ jobs:
 
       - name: Build
         run: npm run build
+
+      # The extension had lint and a build and nothing that ran it. What it now
+      # runs is the part that decides money: which table on an E-ZPass page is
+      # the statement, and what CSV comes out of it.
+      - name: Test
+        run: npm test

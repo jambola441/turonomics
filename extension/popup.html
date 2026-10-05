@@ -9,15 +9,45 @@
   <body>
     <div class="container">
       <h1>Turonomics</h1>
-      <p class="subtitle">Turo trip CSV exporter</p>
 
       <div id="status" class="status hidden"></div>
 
-      <button id="exportBtn" class="btn">Export Last 90 Days</button>
+      <section>
+        <p class="subtitle">On an E-ZPass account activity page</p>
+        <button id="tollsBtn" class="btn">Send tolls to Turonomics</button>
+        <div id="tollsResult" class="result hidden"></div>
+        <!-- Shown only when the page did not yield a statement, or the API
+             refused it. It names the page's columns and masks their values, so
+             it can be pasted into a bug report as is. -->
+        <details id="tollsReportWrap" class="report hidden">
+          <summary>What was on the page</summary>
+          <pre id="tollsReport"></pre>
+        </details>
+      </section>
 
-      <div id="result" class="result hidden">
-        <span id="tripCount"></span> trips exported — check your Downloads folder.
-      </div>
+      <hr />
+
+      <section>
+        <p class="subtitle">On the Turo host trips page</p>
+        <button id="exportBtn" class="btn">Export Last 90 Days</button>
+        <div id="result" class="result hidden">
+          <span id="tripCount"></span> trips exported — check your Downloads folder.
+        </div>
+      </section>
+
+      <hr />
+
+      <details id="settings">
+        <summary>Settings</summary>
+        <label for="apiBase">API</label>
+        <input id="apiBase" type="url" placeholder="https://turonomics.onrender.com" />
+        <label for="tollsToken">Tolls token</label>
+        <!-- TOLLS_TOKEN on the API service. Stored in extension storage rather
+             than typed per upload; blank is fine when the API has none set. -->
+        <input id="tollsToken" type="password" placeholder="blank if TOLLS_TOKEN is unset" />
+        <button id="saveSettings" class="btn btn-quiet">Save</button>
+        <div id="settingsSaved" class="result hidden">Saved.</div>
+      </details>
     </div>
     <script src="dist/popup.js" type="module"></script>
   </body>

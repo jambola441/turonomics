@@ -14,6 +14,7 @@ blank, which is worse and easier to miss.
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import sys
@@ -145,6 +146,12 @@ def main() -> int:
             owed = sum(t["amount_cents"] for t in tolls if not t["recovered_at"])
             loose = sum(t["amount_cents"] for t in tolls if not t["trip_id"])
 
+            # The stub requires a token on the writes, as the API does when
+            # TOLLS_TOKEN is set. The page has to ask for it once, keep it, and
+            # put it on every write after that — a page that prompts and then
+            # forgets the header would pass every other check here.
+            page.on("dialog", lambda d: d.accept(stub_api.TOLLS_TOKEN))
+
             page.goto(f"{SITE}/tolls/?api={API}", wait_until="domcontentloaded")
             page.wait_for_timeout(700)
 
@@ -225,6 +232,28 @@ def main() -> int:
             page.wait_for_timeout(600)
             check("re-matching says when nothing changed",
                   "Nothing changed" in (page.locator("#import-result").text_content() or ""))
+
+            # Nothing above would have worked without the token, but assert it
+            # from the server's side too: the page could have been handed a 401
+            # on each write and shown a stale figure.
+            seen = json.loads(urllib.request.urlopen(f"{API}/seen-auth").read())["seen"]
+            # Four writes above: the tick, the untick, the upload, the
+            # re-match. An exact count rather than a floor, so an extra write
+            # nobody meant to add also shows up here.
+            check("the page sent the token on every write",
+                  seen == [stub_api.TOLLS_TOKEN] * 4)
+
+            # And a rejected token must be forgotten, or the page asks nobody
+            # and fails the same way forever.
+            page.evaluate("localStorage.setItem('turonomics.tolls.token', 'wrong')")
+            page.once("dialog", lambda d: d.dismiss())
+            page.locator("#rematch").click()
+            page.wait_for_timeout(600)
+            check("a rejected token is shown as rejected",
+                  "rejected" in (page.locator("#err").text_content() or "").lower())
+            check("a rejected token is not kept",
+                  page.evaluate("localStorage.getItem('turonomics.tolls.token')") in (None, ""))
+
             check("no uncaught errors on the tolls page", not errors)
 
             if errors:

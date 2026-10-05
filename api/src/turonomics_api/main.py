@@ -52,6 +52,12 @@ def _poll_blocking() -> SyncResult:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    if not tolls.token_configured():
+        # Said once, at boot, where it will be read. The toll writes are the
+        # only endpoints here that change a figure the operator bills somebody.
+        log.warning(
+            "TOLLS_TOKEN is unset — anyone can post a statement to /api/tolls/import"
+        )
     minutes = interval_minutes()
     task: asyncio.Task[None] | None = None
     if minutes:

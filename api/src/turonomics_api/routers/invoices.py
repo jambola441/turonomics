@@ -8,6 +8,7 @@ deadline first.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated
@@ -23,6 +24,8 @@ from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_
 from turonomics_api.ingest.invoices import Invoice, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
+
+log = logging.getLogger("turonomics.routers.invoices")
 
 router = APIRouter(prefix="/api/invoices", tags=["invoices"])
 
@@ -196,24 +199,38 @@ class DraftResponse(BaseModel):
     # fact about this reservation and the other is arithmetic.
     can_file: bool
     can_file_from_turo: bool
+    # Turo's filing API takes dollars, where everything in this codebase is
+    # integer cents. Converted once, here, rather than in the extension — a
+    # rounding decision about money belongs where it can be tested.
+    amount_dollars: float
+    # The note that goes to the guest. Written here for the same reason: it is
+    # the only part of a filing a person reads, and it should not vary with
+    # whoever happens to be clicking the button.
+    message: str
     # The evidence to attach, as SVG. The extension rasterises it: Turo wants
     # an image, and a browser is already the thing holding one.
     evidence_svg: str
 
 
-@router.get("/{trip_id}/draft", response_model=DraftResponse)
-def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
-    now = datetime.now(UTC)
-    window = toll_filing_window_days()
-    built = build_invoices(session, now=now)
-    invoice = next((i for i in built if i.trip_id == trip_id), None)
-    if invoice is None:
-        # 404 rather than an empty draft: filing nothing is not a thing to do,
-        # and a rental whose crossings are all recovered has no invoice to
-        # draft rather than an invoice for zero.
-        raise HTTPException(status_code=404, detail="no outstanding crossings on that rental")
+def _note(invoice: Invoice) -> str:
+    """What the guest reads.
 
-    trip = session.get(Trip, trip_id)
+    Plain, specific, and free of anything that reads as an accusation: the
+    crossings are a fact, and a sentence about them does not need to imply the
+    guest was doing anything other than driving the car they rented.
+    """
+    count = len(invoice.lines)
+    crossings = "toll" if count == 1 else "tolls"
+    return (
+        f"{count} {crossings} on your trip, totalling "
+        f"${invoice.total_cents / 100:,.2f}. The attached sheet lists each one "
+        f"with its time and plaza, taken from the vehicle's E-ZPass account. "
+        f"Happy to send the statement itself if you would like it."
+    )
+
+
+def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> DraftResponse:
+    trip = session.get(Trip, invoice.trip_id)
     from_turo = trip.can_file_reimbursement if trip is not None else None
     left = invoice.days_left(window, now)
     sheet = EvidenceSheet(
@@ -248,6 +265,11 @@ def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
             for line in invoice.lines
         ],
         total_cents=invoice.total_cents,
+        # Cents to dollars once, at the boundary. int / 100 is exact for any
+        # cent total, and the alternative — the extension dividing — is the
+        # same arithmetic somewhere nothing checks it.
+        amount_dollars=invoice.total_cents / 100,
+        message=_note(invoice),
         days_left=left,
         # Turo's answer wins where there is one. It knows about holds and
         # disputes that a day count cannot see.
@@ -255,6 +277,122 @@ def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
         can_file_from_turo=from_turo is not None,
         evidence_svg=evidence_svg(sheet),
     )
+
+
+@router.get("/next-draft", response_model=DraftResponse)
+def next_draft(session: DbSession) -> DraftResponse:
+    """The rental most worth filing for, drafted.
+
+    Which one that is belongs here rather than in the extension: it is a
+    judgement about money and deadlines, and the extension is a browser plugin
+    that has to be rebuilt and side-loaded to change.
+
+    Soonest deadline first, because that is the one about to be lost. Rentals
+    Turo has already been asked about are skipped — asking twice for the same
+    crossings is the mistake this whole feature exists to avoid.
+    """
+    now = datetime.now(UTC)
+    window = toll_filing_window_days()
+    built = build_invoices(session, now=now)
+    asked = _reimbursements(session, [i.trip_id for i in built])
+    fileable = []
+    for invoice in built:
+        if asked.get(invoice.trip_id):
+            continue
+        trip = session.get(Trip, invoice.trip_id)
+        if trip is not None and trip.can_file_reimbursement is False:
+            continue
+        left = invoice.days_left(window, now)
+        if left is None or left < 0:
+            continue
+        fileable.append((left, -invoice.total_cents, invoice))
+    if not fileable:
+        raise HTTPException(status_code=404, detail="nothing to file")
+    fileable.sort(key=lambda row: (row[0], row[1]))
+    return _draft(session, fileable[0][2], now, window)
+
+
+@router.get("/{trip_id}/draft", response_model=DraftResponse)
+def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
+    now = datetime.now(UTC)
+    window = toll_filing_window_days()
+    built = build_invoices(session, now=now)
+    invoice = next((i for i in built if i.trip_id == trip_id), None)
+    if invoice is None:
+        # 404 rather than an empty draft: filing nothing is not a thing to do,
+        # and a rental whose crossings are all recovered has no invoice to
+        # draft rather than an invoice for zero.
+        raise HTTPException(status_code=404, detail="no outstanding crossings on that rental")
+    return _draft(session, invoice, now, window)
+
+
+class FiledIn(BaseModel):
+    """What Turo said when it took the filing."""
+
+    reimbursement_id: int
+    amount_cents: int
+
+
+class FiledResponse(BaseModel):
+    recorded: bool
+    fingerprint: str
+
+
+@router.post("/{trip_id}/filed", response_model=FiledResponse)
+def filed(
+    trip_id: uuid.UUID,
+    payload: FiledIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> FiledResponse:
+    """Record that an invoice was filed, so nothing asks for it twice.
+
+    The mail sync would find this eventually — Turo emails about every
+    reimbursement — but "eventually" is up to ten minutes, and in that window
+    the page still lists the crossings as money to collect. Filing the same
+    tolls twice is a dispute with a guest, which is the expensive end of this
+    whole feature.
+
+    Written with the same fingerprint scheme the mail parser uses, so when the
+    email does arrive it lands on this row rather than beside it.
+    """
+    require_token(authorization)
+    trip = session.get(Trip, trip_id)
+    if trip is None or not trip.turo_trip_id:
+        raise HTTPException(status_code=404, detail="no such rental")
+    fingerprint = f"inv:{payload.reimbursement_id}"
+    existing = session.scalar(
+        select(ReimbursementInvoice).where(ReimbursementInvoice.fingerprint == fingerprint)
+    )
+    if existing is not None:
+        # Idempotent: a retried post, or the email having arrived first.
+        return FiledResponse(recorded=False, fingerprint=fingerprint)
+    now = datetime.now(UTC)
+    session.add(
+        ReimbursementInvoice(
+            fingerprint=fingerprint,
+            reservation_id=trip.turo_trip_id,
+            turo_invoice_id=str(payload.reimbursement_id),
+            guest_name=trip.guest_name,
+            # Filed, not charged. The guest has been asked and has not paid,
+            # and treating the ask as the payment is how a crossing silently
+            # stops being chased.
+            state="filed",
+            total_cents=payload.amount_cents,
+            lines=[["Tolls", payload.amount_cents]],
+            toll_cents=payload.amount_cents,
+            trip_id=trip.id,
+            last_seen_at=now,
+        )
+    )
+    session.commit()
+    log.info(
+        "filed reimbursement %s for reservation %s: %dc",
+        payload.reimbursement_id,
+        trip.turo_trip_id,
+        payload.amount_cents,
+    )
+    return FiledResponse(recorded=True, fingerprint=fingerprint)
 
 
 @router.get("", response_model=InvoicesResponse)

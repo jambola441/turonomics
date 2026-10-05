@@ -253,3 +253,175 @@ def test_both_ends_of_the_trip_window_are_written_the_same_way() -> None:
     before, after = window.split(" — ")
     assert before.split()[0].rstrip(",").isalpha(), window
     assert after.split()[0].rstrip(",").isalpha(), window
+
+
+# ---------------------------------------------------------------------------
+# Choosing what to file, and recording that it was
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_the_soonest_deadline_is_drafted_first(api_client, session, car) -> None:
+    """Which rental to file for is a judgement about money and deadlines, so it
+    lives here rather than in a browser plugin that has to be side-loaded to
+    change."""
+    soon = Trip(
+        vehicle_id=car.id, turo_trip_id="111", guest_name="Soon",
+        starts_at=NOW - td(days=87), ends_at=NOW - td(days=86),
+        state=TripState.completed, source=TripSource.email,
+    )
+    later = Trip(
+        vehicle_id=car.id, turo_trip_id="222", guest_name="Later",
+        starts_at=NOW - td(days=10), ends_at=NOW - td(days=9),
+        state=TripState.completed, source=TripSource.email,
+    )
+    session.add_all([soon, later])
+    session.flush()
+    _crossing(session, car, soon, at=soon.ends_at - td(hours=2), cents=500)
+    # Bigger, but not nearly as close to expiring.
+    _crossing(session, car, later, at=later.ends_at - td(hours=2), cents=9000)
+    session.commit()
+
+    out = api_client.get("/api/invoices/next-draft").json()
+    assert out["turo_trip_id"] == "111"
+    assert out["amount_dollars"] == 5.0
+
+
+@requires_db
+def test_a_rental_already_asked_about_is_not_drafted_again(
+    api_client, session, car, rental
+) -> None:
+    """Asking twice for the same crossings is a dispute with a guest, which is
+    what this whole feature exists to avoid."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 200
+
+    api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    )
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+@requires_db
+def test_a_rental_turo_refuses_is_not_drafted(api_client, session, car, rental) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    rental.can_file_reimbursement = False
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+@requires_db
+def test_filing_is_recorded_as_asked_not_as_paid(
+    api_client, session, car, rental
+) -> None:
+    """The guest has been asked and has not paid. Treating the ask as the
+    payment is how a crossing silently stops being chased."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    out = api_client.post(
+        f"/api/invoices/{rental.id}/filed",
+        json={"reimbursement_id": 9001, "amount_cents": 679},
+    ).json()
+    assert out["recorded"] is True
+    assert out["fingerprint"] == "inv:9001"
+
+    row = api_client.get("/api/invoices").json()["invoices"][0]
+    assert row["pending_cents"] == 679, "asked for"
+    assert row["charged_cents"] == 0, "and not collected"
+
+
+@requires_db
+def test_recording_the_same_filing_twice_is_harmless(
+    api_client, session, car, rental
+) -> None:
+    """A retried post, or the email arriving before this does. The fingerprint
+    is the mail parser's own scheme so the two land on one row."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    body = {"reimbursement_id": 9001, "amount_cents": 679}
+    assert api_client.post(f"/api/invoices/{rental.id}/filed", json=body).json()["recorded"]
+    second = api_client.post(f"/api/invoices/{rental.id}/filed", json=body).json()
+    assert second["recorded"] is False
+    assert len(api_client.get("/api/invoices").json()["invoices"]) <= 1
+
+
+@requires_db
+def test_the_note_names_the_crossings_and_the_total(
+    api_client, session, car, rental
+) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=5))
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=1100)
+    session.commit()
+    message = api_client.get(f"/api/invoices/{rental.id}/draft").json()["message"]
+    assert "2 tolls" in message
+    assert "$17.79" in message
+    # Nothing that reads as an accusation: they rented the car and drove it.
+    for word in ("fail", "owe", "must", "unpaid", "liable"):
+        assert word not in message.lower(), message
+
+
+@requires_db
+def test_a_single_crossing_is_not_pluralised(api_client, session, car, rental) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    message = api_client.get(f"/api/invoices/{rental.id}/draft").json()["message"]
+    assert "1 toll on your trip" in message
+
+
+@requires_db
+def test_filing_an_unknown_rental_is_refused(api_client) -> None:
+    out = api_client.post(
+        f"/api/invoices/{uuid.uuid4()}/filed",
+        json={"reimbursement_id": 1, "amount_cents": 100},
+    )
+    assert out.status_code == 404
+
+
+@requires_db
+def test_recording_a_filing_is_gated_by_the_token(
+    api_client, monkeypatch, session, car, rental
+) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    monkeypatch.setenv("TOLLS_TOKEN", "letmein")
+    body = {"reimbursement_id": 9001, "amount_cents": 679}
+    assert api_client.post(f"/api/invoices/{rental.id}/filed", json=body).status_code == 401
+    assert (
+        api_client.post(
+            f"/api/invoices/{rental.id}/filed",
+            json=body,
+            headers={"Authorization": "Bearer letmein"},
+        ).status_code
+        == 200
+    )
+
+
+@requires_db
+def test_an_expired_rental_is_never_the_next_to_file(api_client, session, car) -> None:
+    """Past the window Turo will not take it, so offering it as the thing to do
+    next wastes the one action a person was going to take."""
+    expired = Trip(
+        vehicle_id=car.id, turo_trip_id="333", guest_name="Gone",
+        starts_at=NOW - td(days=200), ends_at=NOW - td(days=199),
+        state=TripState.completed, source=TripSource.email,
+    )
+    session.add(expired)
+    session.flush()
+    # Large, and the soonest "deadline" of all by virtue of being past it.
+    _crossing(session, car, expired, at=expired.ends_at - td(hours=2), cents=9000)
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+    live = Trip(
+        vehicle_id=car.id, turo_trip_id="444", guest_name="Live",
+        starts_at=NOW - td(days=10), ends_at=NOW - td(days=9),
+        state=TripState.completed, source=TripSource.email,
+    )
+    session.add(live)
+    session.flush()
+    _crossing(session, car, live, at=live.ends_at - td(hours=2), cents=500)
+    session.commit()
+    out = api_client.get("/api/invoices/next-draft").json()
+    assert out["turo_trip_id"] == "444", "the live one, not the bigger expired one"

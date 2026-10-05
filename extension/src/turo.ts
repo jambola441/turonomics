@@ -253,7 +253,7 @@ export function summariseCalls(calls: SeenCall[]): string {
 // The lesson is the one this file keeps relearning: an absence reported by a
 // tool is a claim about the tool first.
 
-import type { TuroPullResult } from "./types.js";
+import type { FileInvoiceResult, TuroPullResult } from "./types.js";
 
 /** A blob of JSON found in the document. */
 export interface Embedded {
@@ -378,4 +378,22 @@ export function describePull(result: TuroPullResult): string {
   if (result.failed) parts.push(`${result.failed} Turo would not return`);
   if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
   return parts.join(" · ");
+}
+
+
+/** What a filing did, in one line. */
+export function describeFiling(result: FileInvoiceResult): string {
+  const money =
+    result.amountCents === undefined ? "" : ` for $${(result.amountCents / 100).toFixed(2)}`;
+  if (!result.filed) {
+    // The amount is named even on a failure, because "it did not work" about
+    // an unknown sum is not something anyone can act on.
+    return result.reason ? `Not filed${money} — ${result.reason}` : `Not filed${money}`;
+  }
+  const who = result.guest ? ` to ${result.guest}` : "";
+  const urgency =
+    result.daysLeft !== undefined && result.daysLeft <= 7
+      ? ` (${result.daysLeft} day(s) left on it)`
+      : "";
+  return `Filed${money}${who} on reservation ${result.reservation}${urgency}`;
 }

@@ -53,6 +53,29 @@ export interface TuroPullResult {
   failed: number;
 }
 
+/** One rental's invoice, as the API drafts it. */
+export interface Draft {
+  trip_id: string;
+  turo_trip_id: string | null;
+  guest_name: string | null;
+  total_cents: number;
+  amount_dollars: number;
+  message: string;
+  days_left: number | null;
+  can_file: boolean;
+  evidence_svg: string;
+}
+
+export interface FileInvoiceResult {
+  filed: boolean;
+  /** Why not, when it was not. */
+  reason?: string;
+  guest?: string;
+  amountCents?: number;
+  reservation?: string;
+  daysLeft?: number;
+}
+
 export type MessageType =
   | { type: "SCRAPE_TRIPS" }
   | { type: "TRIPS_RESULT"; trips: TuroTrip[]; error?: never }
@@ -72,4 +95,7 @@ export type MessageType =
   | { type: "PULL_TURO_ERROR"; error: string }
   | { type: "WATCH_TURO"; tabId: number }
   | { type: "WATCH_TURO_RESULT" }
-  | { type: "REPORT_WATCH"; tabId: number };
+  | { type: "REPORT_WATCH"; tabId: number }
+  | { type: "FILE_INVOICE"; tabId: number }
+  | { type: "FILE_INVOICE_RESULT"; result: FileInvoiceResult }
+  | { type: "FILE_INVOICE_ERROR"; error: string };

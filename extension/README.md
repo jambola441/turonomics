@@ -135,6 +135,9 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.7.0 | build + reload | files a toll invoice end to end; new "File the next toll invoice" button |
+| 1.6.2 | build + reload | the probe stops masking its own file descriptors |
+| 1.6.1 | build + reload | writes to any non-analytics host are reported |
 | 1.6.0 | build + reload | records what requests *send*, and a watch that survives a form submit |
 | 1.5.0 | build + reload | pulls Turo's reservation detail; new "Pull trips from Turo" button |
 | 1.4.1 | build + reload | first-party analytics filtered out |

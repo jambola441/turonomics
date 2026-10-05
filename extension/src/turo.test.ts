@@ -12,6 +12,7 @@ import { test } from "node:test";
 import type { TuroPullResult } from "./types.js";
 import {
   CHARGE_KEYS,
+  describeFiling,
   describePull,
   describeEmbedded,
   findByKey,
@@ -409,4 +410,35 @@ test("an uploaded file is legible in the report", () => {
   ]);
   assert.match(report, /file: <file image\/png 92579 bytes>/);
   assert.match(report, /reservationId: int/);
+});
+
+// ---------------------------------------------------------------------------
+// Saying what a filing did
+// ---------------------------------------------------------------------------
+
+test("a filing says who was asked and for how much", () => {
+  const out = describeFiling({
+    filed: true, guest: "Alice", amountCents: 1151, reservation: "58626257", daysLeft: 4,
+  });
+  assert.match(out, /Filed for \$11\.51 to Alice on reservation 58626257/);
+  assert.match(out, /4 day\(s\) left/, "the deadline, while it is still close");
+});
+
+test("a comfortable deadline is not mentioned", () => {
+  const out = describeFiling({
+    filed: true, guest: "Alice", amountCents: 1151, reservation: "58626257", daysLeft: 60,
+  });
+  assert.ok(!out.includes("day(s) left"), out);
+});
+
+test("a failure names the amount as well as the reason", () => {
+  // "It did not work" about an unknown sum is not something anyone can act on.
+  const out = describeFiling({
+    filed: false, reason: "upload: Turo said 413", amountCents: 1151,
+  });
+  assert.match(out, /Not filed for \$11\.51 — upload: Turo said 413/);
+});
+
+test("nothing to file is not reported as a failure to file", () => {
+  assert.equal(describeFiling({ filed: false, reason: "nothing to file" }), "Not filed — nothing to file");
 });

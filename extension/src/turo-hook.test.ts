@@ -123,3 +123,13 @@ test("loading twice does not wrap twice", async () => {
   await new Promise((resolve) => setTimeout(resolve, 10));
   assert.equal(recorder?.length, 1);
 });
+
+test("a relative url is recorded absolute", async () => {
+  // Turo fetches "/api/properties". Recorded as-is, the worker cannot parse it
+  // and reports the bare word "url" — which is exactly what happened to the
+  // only two first-party endpoints in the first real report.
+  const { window, calls } = await install(() => new Response("{}", { status: 200 }));
+  await window.fetch("/api/properties");
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(calls()[0].url, "https://turo.com/api/properties");
+});

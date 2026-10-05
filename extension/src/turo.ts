@@ -55,11 +55,18 @@ export function stringShape(value: string): string {
   return `str(${value.length})`;
 }
 
-/** A URL's route, with its identifiers named instead of shown. */
-export function urlShape(raw: string): string {
+/**
+ * A URL's route, with its identifiers named instead of shown.
+ *
+ * The base matters. Turo fetches `/api/...`, which `new URL` refuses on its
+ * own — and the first version reported those as the bare word "url", so the
+ * two first-party endpoints on the page were the only two whose route was
+ * thrown away.
+ */
+export function urlShape(raw: string, base = "https://turo.com/"): string {
   let url: URL;
   try {
-    url = new URL(raw);
+    url = new URL(raw, base);
   } catch {
     return "url";
   }
@@ -120,14 +127,27 @@ export interface SeenCall {
   body: unknown;
 }
 
-// Turo's pages fetch fonts, images, analytics and feature flags. None of that
-// carries a trip, and reporting it buries the two or three calls that do.
-const UNINTERESTING = /(?:segment|sentry|datadog|googletagmanager|optimizely|launchdarkly|fullstory|\.(?:png|jpe?g|svg|woff2?|css|js)(?:$|\?))/i;
-const INTERESTING = /(?:\/api\/|graphql|\.json(?:$|\?)|invoice|reservation|reimburs|trip|booking|vehicle)/i;
+// Only Turo's own backend. Everything else on the page is somebody's
+// analytics, and the filter cannot be written as a list of their domains:
+// New Relic and Google both put the *page* URL in a query parameter, so a
+// beacon sent from /reservation/<id>/reimbursement/invoice contains the words
+// "reservation" and "reimbursement" and reads as the most interesting call on
+// the page. Six of the eight endpoints in the first real report were that.
+//
+// Hence two rules rather than one. First party, and matched on the route —
+// never on the query string, which is where the borrowed words live.
+const FIRST_PARTY = /^(?:[a-z0-9-]+\.)*turo\.com$/i;
+const ASSET = /\.(?:png|jpe?g|gif|svg|ico|woff2?|ttf|css|js|map)$/i;
 
-export function interestingCall(url: string): boolean {
-  if (UNINTERESTING.test(url)) return false;
-  return INTERESTING.test(url);
+export function interestingCall(url: string, base = "https://turo.com/"): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url, base);
+  } catch {
+    return false;
+  }
+  if (!FIRST_PARTY.test(parsed.hostname)) return false;
+  return !ASSET.test(parsed.pathname);
 }
 
 /**
@@ -158,4 +178,120 @@ export function summariseCalls(calls: SeenCall[]): string {
     lines.push(call.body === null ? "  (not json)" : `  ${jsonShape(call.body)}`);
   }
   return lines.join("\n");
+}
+
+// ---------------------------------------------------------------------------
+// The data is in the HTML
+// ---------------------------------------------------------------------------
+//
+// The first real probe of a trip page and of an invoice page found no call
+// carrying either. Both are server-rendered: the payload ships inside the
+// document, in a JSON script tag or on a global, and the page hydrates from
+// it. So the endpoints were the wrong thing to look for, and the document is
+// the thing to read — which is also the more stable of the two, since it
+// cannot change without the page changing.
+
+/** A blob of JSON found in the document. */
+export interface Embedded {
+  /** Where it was: `script#__NEXT_DATA__`, `window.__APOLLO_STATE__`. */
+  label: string;
+  /** The raw text, parsed by the caller so that nothing here holds a value. */
+  text: string;
+}
+
+export interface FoundPath {
+  path: string;
+  shape: string;
+}
+
+/** Keys worth finding in a hydration blob the size of a whole page. */
+export const CHARGE_KEYS =
+  /(?:toll|charge|invoice|reimburs|fee|amount|total|price|mileage|distance|fuel|ticket|citation)/i;
+export const TRIP_KEYS =
+  /(?:reservation|trip|pickup|dropoff|dropOff|return|start|end|scheduled|actual|vehicle|plate|odometer)/i;
+
+const MAX_FOUND = 25;
+
+/**
+ * Paths into a structure whose key names say they hold what we are after.
+ *
+ * A Next.js blob is the whole page, so reporting its shape reports nothing
+ * usable. Reporting the paths where "toll" or "scheduledEnd" live is the
+ * answer to "how do I read this".
+ *
+ * Array indices collapse to `[]`: an index is not structure, and sixty trips
+ * would otherwise be sixty paths saying the same thing.
+ */
+export function findByKey(
+  value: unknown,
+  pattern: RegExp,
+  limit = MAX_FOUND
+): FoundPath[] {
+  const found: FoundPath[] = [];
+  const seen = new Set<string>();
+
+  const walk = (node: unknown, path: string, depth: number): void => {
+    if (found.length >= limit || depth > 8) return;
+    if (Array.isArray(node)) {
+      // One element stands for all of them: they are the same shape, or the
+      // shape report says otherwise.
+      if (node.length) walk(node[0], `${path}[]`, depth + 1);
+      return;
+    }
+    if (node === null || typeof node !== "object") return;
+    for (const [key, child] of Object.entries(node as Record<string, unknown>)) {
+      if (found.length >= limit) return;
+      const here = path ? `${path}.${key}` : key;
+      if (pattern.test(key)) {
+        // A path, not a subtree: the same key under a hundred siblings is one
+        // finding once the indices are collapsed.
+        if (!seen.has(here)) {
+          seen.add(here);
+          found.push({ path: here, shape: jsonShape(child, 3) });
+        }
+        continue;
+      }
+      walk(child, here, depth + 1);
+    }
+  };
+
+  walk(value, "", 0);
+  return found;
+}
+
+/**
+ * The report for what the document carries, rather than what it fetched.
+ *
+ * Unparseable blobs are named and skipped: an inline script that is not JSON
+ * is the common case, and silence about it reads as "there was nothing there".
+ */
+export function describeEmbedded(blobs: Embedded[]): string {
+  if (blobs.length === 0) return "no embedded json found in the document";
+  const lines: string[] = [];
+  for (const blob of blobs) {
+    lines.push("");
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(blob.text);
+    } catch {
+      lines.push(`${blob.label} — ${blob.text.length} chars, not json`);
+      continue;
+    }
+    lines.push(`${blob.label} — ${blob.text.length} chars`);
+    const charges = findByKey(parsed, CHARGE_KEYS);
+    const trips = findByKey(parsed, TRIP_KEYS);
+    if (!charges.length && !trips.length) {
+      lines.push(`  nothing charge- or trip-shaped; top level: ${jsonShape(parsed, 4)}`);
+      continue;
+    }
+    for (const [title, hits] of [
+      ["charges", charges],
+      ["trips", trips],
+    ] as const) {
+      if (!hits.length) continue;
+      lines.push(`  ${title}:`);
+      for (const hit of hits) lines.push(`    ${hit.path}: ${hit.shape}`);
+    }
+  }
+  return lines.join("\n").trim();
 }

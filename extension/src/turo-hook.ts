@@ -54,12 +54,17 @@ interface RecordedCall {
   w.fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     const response = await originalFetch(input, init);
     try {
-      const url =
+      // Absolute, resolved here where `location` is the page's own. Turo
+      // fetches "/api/...", and a relative URL recorded as-is loses its route
+      // when the worker shapes it — which is how the only two first-party
+      // endpoints in the first real report came back as the word "url".
+      const raw =
         typeof input === "string"
           ? input
           : input instanceof URL
             ? input.href
             : input.url;
+      const url = new URL(raw, location.href).href;
       const method = init?.method ?? (input instanceof Request ? input.method : "GET");
       // A clone, so the page still gets to read its own body exactly once.
       response
@@ -99,7 +104,7 @@ interface RecordedCall {
         const text = type === "" || type === "text" ? this.responseText : "";
         record(
           this.__turonomicsMethod ?? "GET",
-          this.__turonomicsUrl ?? location.href,
+          new URL(this.__turonomicsUrl ?? location.href, location.href).href,
           this.status,
           text
         );

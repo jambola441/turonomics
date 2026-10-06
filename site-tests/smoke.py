@@ -138,6 +138,32 @@ def main() -> int:
                 page.wait_for_timeout(250)
             check("no uncaught errors anywhere in that journey", not errors)
 
+            # The run sheet collapses to its handle so the map can have the
+            # screen. Hidden, not removed: the vehicle panel must survive a
+            # round trip, and the button has to say what state it is in.
+            # The journey above ends on the car with no tracker, which has no
+            # tasks to find afterwards; start from one that does.
+            page.locator(".chip").first.click()
+            page.wait_for_timeout(250)
+            sheet_height = lambda: page.locator("#sheet").bounding_box()["height"]
+            open_height = sheet_height()
+            page.locator("#grab").click()
+            page.wait_for_timeout(300)
+            check(
+                "collapsing hides the vehicle panel",
+                page.locator("#sheet-body").is_hidden()
+                and page.locator("#grab").get_attribute("aria-expanded") == "false"
+                and sheet_height() < open_height / 4,
+            )
+            page.locator("#grab").click()
+            page.wait_for_timeout(300)
+            check(
+                "expanding brings it back intact",
+                page.locator("#sheet-body").is_visible()
+                and page.locator("#grab").get_attribute("aria-expanded") == "true"
+                and page.locator(".task").count() >= 1,
+            )
+
             # ---- the tolls page -------------------------------------------
             # Its own page on purpose: reconciling a statement is a monthly
             # back-office sit-down, not the thing the run sheet is for.

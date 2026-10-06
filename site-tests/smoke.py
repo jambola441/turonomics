@@ -475,6 +475,32 @@ def main() -> int:
             check("the ledger totals are stated",
                   "tolls $27.58" in ledger and "to bill $11.00" in ledger)
 
+            # Driving the extension from the site. The page cannot reach Turo,
+            # so a button queues a command for the browser that can.
+            check("the page says whether the extension is listening",
+                  "extension listening (v1.10.0)" in
+                  page.locator("#remoteStatus").inner_text().lower())
+            file_buttons = page.locator("#ledgerBody .btn.go")
+            check("a rental to bill can be filed from its ledger row",
+                  file_buttons.count() == 1 and "$11.00" in file_buttons.first.inner_text())
+            check("a rental settled or awaiting payment has no file button",
+                  "awaiting payment" in ledger and file_buttons.count() == 1)
+            confirm_answers.append(False)
+            file_buttons.first.click()
+            page.wait_for_timeout(400)
+            check("cancelling the confirmation queues nothing",
+                  page.locator("#remoteLog li").count() == 0)
+            confirm_answers.append(True)
+            file_buttons.first.click()
+            page.wait_for_timeout(700)
+            log = page.locator("#remoteLog").inner_text().lower()
+            check("filing queues a command and shows it waiting",
+                  "queued" in log and "file alice" in log)
+            page.locator("#pullTuro").click()
+            page.wait_for_timeout(700)
+            check("pull from turo queues one too",
+                  "pull from turo" in page.locator("#remoteLog").inner_text().lower())
+
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
             look = page.locator("#look")

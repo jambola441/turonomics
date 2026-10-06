@@ -27,6 +27,8 @@ import {
 } from "./tolls.js";
 import {
   describeEmbedded,
+  describeFiling,
+  describePull,
   hubsToRead,
   invoicePath,
   invoicesToRead,
@@ -38,6 +40,7 @@ import {
 import type {
   Draft,
   FileInvoiceResult,
+  SiteCommand,
   TuroInvoicesResult,
   TuroPullResult,
   TuroWanted,
@@ -509,12 +512,26 @@ const PULL_GAP_MS = 250;
  * This does the two things only a logged-in browser can: rasterise the sheet
  * and talk to Turo as the host.
  */
-async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
+async function fileInvoice(tabId: number, tripId?: string): Promise<FileInvoiceResult> {
   const { apiBase, tollsToken } = await settings();
-  const response = await fetch(`${apiBase}/api/invoices/next-draft`);
+  // One rental when the site picked it, otherwise the API's choice.
+  const route = tripId
+    ? `/api/invoices/${encodeURIComponent(tripId)}/draft`
+    : "/api/invoices/next-draft";
+  const response = await fetch(`${apiBase}${route}`);
   if (response.status === 404) return { filed: false, reason: "nothing to file" };
   if (!response.ok) throw new Error(`the API said ${response.status}`);
   const draft = (await response.json()) as Draft;
+  if (draft.fileable === false) {
+    // Checked again here and not only when the command was queued: a pull or
+    // a mail sync between the click and now can have changed the answer.
+    return {
+      filed: false,
+      reason: `held back — ${draft.held_because ?? "the ledger would not file it"}`,
+      guest: draft.guest_name ?? undefined,
+      amountCents: draft.total_cents,
+    };
+  }
   if (!draft.turo_trip_id) {
     return { filed: false, reason: "that rental is off-platform — file it yourself" };
   }
@@ -1003,6 +1020,11 @@ async function waitForChange(
 // Message listener
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendResponse) => {
+  if (message.type === "COMMANDS_TICK") {
+    // Every five seconds from the offscreen document; not worth a log line.
+    void runCommands();
+    return;
+  }
   LOG("received message:", message.type);
 
   if (message.type === "DOWNLOAD_CSV") {
@@ -1098,3 +1120,133 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
     return true; // async response
   }
 });
+
+// ---------------------------------------------------------------------------
+// Commands queued from the site
+// ---------------------------------------------------------------------------
+
+const COMMANDS_ALARM = "turonomics-commands";
+
+/**
+ * Keep asking the API for work: an offscreen document pings every few
+ * seconds, and a thirty-second alarm sits behind it in case Chrome closes the
+ * document. See src/offscreen.ts.
+ */
+function startListening(): void {
+  void chrome.alarms.create(COMMANDS_ALARM, { periodInMinutes: 0.5 });
+  void ensureOffscreen();
+}
+
+async function ensureOffscreen(): Promise<void> {
+  try {
+    await chrome.offscreen.createDocument({
+      url: "offscreen.html",
+      reasons: [chrome.offscreen.Reason.WORKERS],
+      justification: "Keeps a short poll for commands queued from the Turonomics site.",
+    });
+  } catch {
+    // Already open — Chrome allows one — which is the usual case.
+  }
+}
+
+chrome.runtime.onStartup.addListener(startListening);
+chrome.runtime.onInstalled.addListener(startListening);
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name !== COMMANDS_ALARM) return;
+  void ensureOffscreen();
+  void runCommands();
+});
+startListening();
+
+let commandsRunning = false;
+
+/**
+ * Claim and run whatever the site has queued, a few at a time.
+ *
+ * One run at a time in this worker; the API's row lock keeps two browsers
+ * from running one command. The answer is posted even when the command
+ * failed, because a filing that went quiet is the one case the API will not
+ * retry — it may have filed.
+ */
+async function runCommands(): Promise<void> {
+  if (commandsRunning) return;
+  commandsRunning = true;
+  try {
+    const { apiBase, tollsToken } = await settings();
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "X-Extension-Version": chrome.runtime.getManifest().version,
+      ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+    };
+    for (let i = 0; i < 5; i++) {
+      const claimed = await fetch(`${apiBase}/api/commands/claim`, { method: "POST", headers });
+      // 204 is nothing queued; anything else that is not a command (a missing
+      // token, the API asleep) is tried again on the next tick.
+      if (claimed.status !== 200) return;
+      const command = (await claimed.json()) as SiteCommand;
+      LOG(`command ${command.kind}`, command.turo_trip_id ?? "");
+      const outcome = await runCommand(command);
+      await fetch(`${apiBase}/api/commands/${encodeURIComponent(command.id)}/done`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(outcome),
+      });
+    }
+  } catch (error) {
+    LOG("commands:", error instanceof Error ? error.message : String(error));
+  } finally {
+    commandsRunning = false;
+  }
+}
+
+async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: string }> {
+  let tab: { id: number; opened: boolean };
+  try {
+    tab = await turoTabForCommands();
+  } catch (error) {
+    return { ok: false, result: error instanceof Error ? error.message : String(error) };
+  }
+  try {
+    if (command.kind === "pull") {
+      return { ok: true, result: describePull(await pullTuro(tab.id)) };
+    }
+    if (command.kind === "file" && command.trip_id) {
+      const outcome = await fileInvoice(tab.id, command.trip_id);
+      return { ok: outcome.filed, result: describeFiling(outcome) };
+    }
+    return { ok: false, result: `this version of the extension cannot ${command.kind}` };
+  } catch (error) {
+    return { ok: false, result: error instanceof Error ? error.message : String(error) };
+  } finally {
+    if (tab.opened) chrome.tabs.remove(tab.id).catch(() => undefined);
+  }
+}
+
+/**
+ * A Turo tab to work in: one already open, or a background one opened for
+ * this command and closed after it. Turo's API only answers same-origin
+ * requests carrying the session, so the work has to happen inside a Turo page.
+ */
+async function turoTabForCommands(): Promise<{ id: number; opened: boolean }> {
+  const open = await chrome.tabs.query({ url: "https://turo.com/*", status: "complete" });
+  const existing = open.find((tab) => tab.id !== undefined && !tab.discarded);
+  if (existing?.id !== undefined) return { id: existing.id, opened: false };
+
+  const created = await chrome.tabs.create({ url: "https://turo.com/us/en/trips", active: false });
+  if (created.id === undefined) throw new Error("could not open a Turo tab");
+  const id = created.id;
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error("Turo did not load within 30 seconds"));
+    }, 30_000);
+    const listener = (updated: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updated !== id || info.status !== "complete") return;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+  return { id, opened: true };
+}

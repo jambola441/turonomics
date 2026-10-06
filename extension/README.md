@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.10.0 | build + reload | runs what the site queues — Pull from Turo, and File on a ledger row — within a few seconds while Chrome is open |
 | 1.9.0 | build + reload | Pull finds every trip's invoices through Turo's invoice hub — no need to open them |
 | 1.8.0 | build + reload | Pull also reads Turo invoices the email did not break down, and the invoice page you have open |
 | 1.7.4 | build + reload | toll filing posts to `/api/v3/reimbursement/<reservation>/request` — the route Turo actually uses |

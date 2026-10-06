@@ -790,3 +790,48 @@ class ReimbursementInvoice(Base):
     trip: Mapped[Trip | None] = relationship()
 
     __table_args__ = (Index("ix_reimbursement_trip", "trip_id", "state"),)
+
+
+class ExtensionCommand(Base):
+    """Something the site asked the browser extension to do.
+
+    The site cannot talk to Turo: only the operator's own browser holds that
+    session, and the extension is what runs in it. So the site queues a
+    command here and the extension, asking every few seconds while Chrome is
+    open, claims it, does it, and reports back — which works from a
+    phone as long as the laptop is running.
+
+    A filing is never retried. A command that was claimed and never reported
+    may have filed and then lost its answer, and filing again is a guest asked
+    twice; it is marked abandoned and left for a person.
+    """
+
+    __tablename__ = "extension_command"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # "pull" or "file".
+    kind: Mapped[str] = mapped_column(String(20))
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("trip.id", ondelete="SET NULL")
+    )
+    # queued -> running -> done | failed, or running -> abandoned.
+    state: Mapped[str] = mapped_column(String(12), index=True)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What the extension said it did, in the same one line its popup shows.
+    result: Mapped[str | None] = mapped_column(Text)
+
+    trip: Mapped[Trip | None] = relationship()
+
+
+class ExtensionCheckin(Base):
+    """When the extension last asked for work, so the site can say whether
+    anything is listening before a person waits on a button that cannot fire.
+    One row."""
+
+    __tablename__ = "extension_checkin"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    version: Mapped[str | None] = mapped_column(String(20))

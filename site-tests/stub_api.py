@@ -311,6 +311,22 @@ INVOICES = [
 ]
 
 
+# Commands queued from the invoices page for the extension. The stub plays the
+# API's half only: it records what was queued and says an extension is
+# listening, which is what the page shows and acts on.
+COMMANDS: list[dict[str, object]] = []
+
+
+def _commands_payload() -> dict[str, object]:
+    return {
+        "commands": list(reversed(COMMANDS)),
+        "extension_seen_at": NOW.isoformat(),
+        "extension_version": "1.10.0",
+        "listening": True,
+        "token_required": True,
+    }
+
+
 def _ledger_payload() -> dict[str, object]:
     """Both ledgers per rental, including rentals already dealt with.
 
@@ -341,6 +357,19 @@ def _ledger_payload() -> dict[str, object]:
             "recovered_cents": 979, "asked_cents": 2500, "charged_cents": 2500,
             "turo_toll_line_cents": 2500,
             "state": "settled", "note": None,
+        },
+        {
+            # Inside the window and on Turo, so only its state says there is
+            # nothing to file: asked for already, waiting on the guest.
+            "trip_id": "33333333-3333-3333-3333-333333333333",
+            "turo_trip_id": "58468508", "guest_name": "Katherine",
+            "vehicle_nickname": "Jerry",
+            "starts_at": "2026-07-11T12:00:00Z", "ends_at": "2026-07-14T22:00:00Z",
+            "days_left": 20,
+            "tolls_cents": 0, "unfiled_cents": 0, "filed_cents": 0,
+            "recovered_cents": 0, "asked_cents": 3974, "charged_cents": 0,
+            "turo_toll_line_cents": 3974,
+            "state": "awaiting payment", "note": None,
         },
     ]
     return {
@@ -393,7 +422,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
-        if self.path.startswith("/api/invoices/ledger"):
+        if self.path.startswith("/api/commands"):
+            self._send(_commands_payload())
+        elif self.path.startswith("/api/invoices/ledger"):
             self._send(_ledger_payload())
         elif self.path.startswith("/api/invoices"):
             self._send(_invoices_payload())
@@ -425,7 +456,24 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path, _, query = self.path.partition("?")
         if (path.startswith("/api/tolls") or path.startswith("/api/trips")
-                or path.startswith("/api/invoices")) and not self._authorized():
+                or path.startswith("/api/invoices")
+                or path.startswith("/api/commands")) and not self._authorized():
+            return
+        if path == "/api/commands":
+            body = json.loads(self._read_body() or b"{}")
+            guest = None
+            for row in _ledger_payload()["rows"]:  # type: ignore[union-attr]
+                if row["trip_id"] == body.get("trip_id"):
+                    guest = row["guest_name"]
+            command = {
+                "id": f"cmd-{len(COMMANDS) + 1}", "kind": body.get("kind"),
+                "trip_id": body.get("trip_id"), "turo_trip_id": None,
+                "guest_name": guest, "state": "queued",
+                "requested_at": NOW.isoformat(), "claimed_at": None,
+                "finished_at": None, "result": None,
+            }
+            COMMANDS.append(command)
+            self._send(command)
             return
         if path.startswith("/api/invoices/") and path.endswith("/recovered"):
             trip_id = path.split("/")[-2]
@@ -481,10 +529,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
         self._send({"deleted": 0})
 
-    def _read_body(self) -> None:
+    def _read_body(self) -> bytes:
         length = int(self.headers.get("Content-Length") or 0)
-        if length:
-            self.rfile.read(length)
+        return self.rfile.read(length) if length else b""
 
     def log_message(self, *args: object) -> None:
         pass

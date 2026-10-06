@@ -12,6 +12,7 @@ from turonomics_api.bouncie.sync import SyncResult
 from turonomics_api.db.base import session_scope
 from turonomics_api.ingest.poller import interval_minutes, poll_once, summarize
 from turonomics_api.routers import (
+    commands,
     fleet,
     gmail,
     invoices,
@@ -119,6 +120,7 @@ app.include_router(tolls.router)
 app.include_router(trips.router)
 app.include_router(invoices.router)
 app.include_router(turo.router)
+app.include_router(commands.router)
 
 
 @app.get("/health")

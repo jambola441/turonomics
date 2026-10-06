@@ -31,7 +31,7 @@ import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -39,7 +39,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
 from turonomics_api.gmail.parse import INVOICE_FILED, names_tolls
-from turonomics_api.ingest.reimbursements import ReimbursementResult, _recover
+from turonomics_api.ingest.reimbursements import _RANK, ReimbursementResult, _recover
 
 log = logging.getLogger("turonomics.ingest.turo_invoice")
 
@@ -66,6 +66,8 @@ class TuroInvoice:
     total_cents: int
     total_before_fees_cents: int | None
     lines: tuple[TuroLine, ...]
+    # Turo's `fees`, summed, where every entry could be read. None otherwise.
+    fees_cents: int | None = None
 
     @property
     def toll_cents(self) -> int | None:
@@ -89,6 +91,30 @@ def _cents(money: Any) -> int | None:
         return int((Decimal(str(amount)) * 100).to_integral_value())
     except InvalidOperation:
         return None
+
+
+def _fees(fees: Any) -> int | None:
+    """Turo's `fees` list, summed — leniently, since no entry has been seen.
+
+    It was empty on the one toll invoice probed. On a distance invoice it is
+    presumably the cut that turns $156.00 into the $140.40 the email reports,
+    but nothing here depends on that being so; see `_amounts`.
+    """
+    if not isinstance(fees, list):
+        return None
+    total = 0
+    for fee in fees:
+        if not isinstance(fee, Mapping):
+            return None
+        cents = _cents(fee.get("total"))
+        if cents is None:
+            cents = _cents(fee.get("amount"))
+        if cents is None:
+            cents = _cents(fee)
+        if cents is None:
+            return None
+        total += abs(cents)
+    return total
 
 
 def _id(value: Any) -> str | None:
@@ -124,6 +150,7 @@ def parse_turo_invoice(reservation_id: str, body: Mapping[str, Any]) -> TuroInvo
         lines.append(TuroLine(kind, title.strip() if isinstance(title, str) else kind, cents))
     status = body.get("reimbursementStatus")
     return TuroInvoice(
+        fees_cents=_fees(body.get("fees")),
         reservation_id=reservation_id,
         invoice_id=invoice_id,
         reimbursement_id=_id(body.get("reimbursementId")),
@@ -141,6 +168,9 @@ class TuroInvoiceResult:
     matched: int = 0
     # Not known from mail at all, so recorded from this.
     created: int = 0
+    # Duplicate rows of one invoice folded together: the email's net total
+    # and Turo's gross one, recorded as two invoices before this matched them.
+    merged: int = 0
     # Invoices whose toll share is now known where it was not before.
     newly_itemised: list[str] = field(default_factory=list)
     # Crossings stamped as asked for, or ticked off as paid, as a result.
@@ -151,43 +181,107 @@ class TuroInvoiceResult:
     statuses: list[str] = field(default_factory=list)
 
 
-def _find(session: Session, invoice: TuroInvoice) -> ReimbursementInvoice | None:
-    """The row the mail made for this invoice, if it made one.
+# Turo's cut on a non-toll incidental, as the email reports it. Read off two
+# invoices on the live account rather than any published rate: Austin's
+# distance invoice is $156.00 on Turo's page and "Total charge - $140.40" in the
+# email, and 58313068's is $45.88 and $41.29. Tolls carry no cut — the toll
+# invoices' totals agree between the two to the cent.
+_HOST_SHARE = Decimal("0.9")
 
-    By Turo's id first — either of its ids, since the extension's own filings
-    record the reimbursement id and the emails link the invoice id, and it has
-    not been established whether those are the same number.
 
-    Then, for an invoice the mail only ever showed as a total, by that total on
-    the same reservation. Only rows with no lines: an itemised row has already
-    said what it charged, and matching one on amount could pin this invoice's
-    breakdown onto a different invoice that happens to cost the same.
+def _amounts(invoice: TuroInvoice) -> set[int]:
+    """Every figure the mail may have reported this invoice's total as.
+
+    Turo's page gives the gross, and the email the host's share of it. Matching
+    on the gross alone missed Austin's $140.40 and recorded the $156.00 beside
+    it as a second invoice — the same money twice.
     """
-    ids = [i for i in (invoice.invoice_id, invoice.reimbursement_id) if i]
-    by_id = session.scalar(
-        select(ReimbursementInvoice).where(
-            ReimbursementInvoice.reservation_id == invoice.reservation_id,
-            ReimbursementInvoice.turo_invoice_id.in_(ids),
-        )
-    )
-    if by_id is not None:
-        return by_id
-    totals = {invoice.total_cents}
+    amounts = {invoice.total_cents}
     if invoice.total_before_fees_cents is not None:
-        totals.add(invoice.total_before_fees_cents)
-    candidates = [
-        row
-        for row in session.scalars(
-            select(ReimbursementInvoice).where(
-                ReimbursementInvoice.reservation_id == invoice.reservation_id,
-                ReimbursementInvoice.total_cents.in_(totals),
-            )
+        amounts.add(invoice.total_before_fees_cents)
+    if invoice.fees_cents:
+        amounts.add(invoice.total_cents - invoice.fees_cents)
+    tolls = sum(line.cents for line in invoice.lines if line.is_tolls)
+    other = sum(line.cents for line in invoice.lines if not line.is_tolls)
+    amounts.add(tolls + int((Decimal(other) * _HOST_SHARE).to_integral_value(ROUND_HALF_UP)))
+    return amounts
+
+
+def _same_lines(row: ReimbursementInvoice, invoice: TuroInvoice) -> bool:
+    """Whether an itemised row's charges are this invoice's charges.
+
+    By amount, not label: the email's labels are Turo's copy ("Tickets") and
+    the page's are an enum. The email's line amounts are gross, like the page's
+    — only its total is net.
+    """
+    mine = sorted(
+        entry[1]
+        for entry in row.lines or []
+        if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], int)
+    )
+    return mine == sorted(line.cents for line in invoice.lines)
+
+
+def _rows_for(session: Session, invoice: TuroInvoice) -> list[ReimbursementInvoice]:
+    """Every row that is this invoice, the one to keep first.
+
+    By Turo's id — either of its ids, since the extension's own filings record
+    the reimbursement id. And by amount, for a row the mail made without an id:
+    the "charged" email links the receipt, not the invoice.
+
+    Matching by amount is where a different invoice could be swallowed, so it
+    is held to three conditions, all of which must hold:
+
+    * exactly one id-less row on the reservation matches;
+    * no row on the reservation already belongs to a *different* invoice with
+      that amount, which would mean two invoices of one size;
+    * if the row itemised, its charges are this invoice's charges.
+
+    The id-less row is the one kept, because its fingerprint is the one the
+    "charged" email will keep producing — delete it and the next mail sync
+    makes it again, and the money is counted twice once more.
+    """
+    ids = {i for i in (invoice.invoice_id, invoice.reimbursement_id) if i}
+    on_reservation = session.scalars(
+        select(ReimbursementInvoice).where(
+            ReimbursementInvoice.reservation_id == invoice.reservation_id
         )
-        if not row.lines
+    ).all()
+    by_id = [row for row in on_reservation if row.turo_invoice_id in ids]
+    amounts = _amounts(invoice)
+    others = [
+        row
+        for row in on_reservation
+        if row.turo_invoice_id is not None
+        and row.turo_invoice_id not in ids
+        and row.total_cents in amounts
     ]
-    # Two unitemised invoices for the same amount on one rental cannot be told
-    # apart, and guessing would give one of them the other's breakdown.
-    return candidates[0] if len(candidates) == 1 else None
+    by_amount = [
+        row
+        for row in on_reservation
+        if row.turo_invoice_id is None
+        and row.total_cents in amounts
+        and (not row.lines or _same_lines(row, invoice))
+    ]
+    if len(by_amount) != 1 or others:
+        by_amount = []
+    return by_amount + [row for row in by_id if row not in by_amount]
+
+
+def _merge(session: Session, keep: ReimbursementInvoice, gone: ReimbursementInvoice) -> None:
+    """Fold a duplicate row of one invoice into the row being kept."""
+    if _RANK.get(gone.state, 0) > _RANK.get(keep.state, 0):
+        keep.state = gone.state
+    charged = [when for when in (keep.charged_at, gone.charged_at) if when is not None]
+    keep.charged_at = min(charged) if charged else None
+    seen = [when for when in (keep.first_seen_at, gone.first_seen_at) if when is not None]
+    if seen:
+        # The ask happened when either sighting first saw it, and which
+        # crossings it can have covered is decided by that moment.
+        keep.first_seen_at = min(seen)
+    keep.trip_id = keep.trip_id or gone.trip_id
+    keep.guest_name = keep.guest_name or gone.guest_name
+    session.delete(gone)
 
 
 def apply_turo_invoice(
@@ -196,16 +290,20 @@ def apply_turo_invoice(
     result.seen += 1
     if invoice.status:
         result.statuses.append(f"{invoice.reservation_id}: {invoice.status}")
-    row = _find(session, invoice)
-    if row is None:
+    rows = _rows_for(session, invoice)
+    had_toll_line = any(r.toll_cents is not None for r in rows)
+    # Said once, when it is news — not on every re-read of a reservation whose
+    # other invoice is still being matched.
+    was_unanswered = not rows or any(_unanswered(r) for r in rows)
+    if not rows:
         row = ReimbursementInvoice(
             fingerprint=f"inv:{invoice.invoice_id}",
             reservation_id=invoice.reservation_id,
             turo_invoice_id=invoice.invoice_id,
-            # Filed, whatever the status says. The status values have not been
-            # read unmasked, and "charged" is the claim that ticks crossings
-            # off as paid — not one to make from an enum nobody has seen. The
-            # charged email, when it comes, moves it forward as usual.
+            # Filed, whatever the status says. "Charged" is the claim that
+            # ticks crossings off as paid, and the statuses seen so far —
+            # ACCEPTED, RESOLVED_AUTOMATICALLY_OWNER_FAVOR — have not been tied
+            # to money arriving. The charged email moves it forward as usual.
             state=INVOICE_FILED,
             total_cents=invoice.total_cents,
             lines=[],
@@ -214,7 +312,11 @@ def apply_turo_invoice(
         session.add(row)
         result.created += 1
     else:
+        row = rows[0]
         result.matched += 1
+        for duplicate in rows[1:]:
+            _merge(session, row, duplicate)
+            result.merged += 1
         # Turo's invoice id, even over the reimbursement id the extension's own
         # filing recorded. It is the id the invoice hub lists, so keeping it
         # is what stops every pull from reading this invoice again — and what
@@ -222,7 +324,6 @@ def apply_turo_invoice(
         row.turo_invoice_id = invoice.invoice_id
         row.last_seen_at = now
 
-    had_toll_line = row.toll_cents is not None
     # Turo's own breakdown replaces the email's. It is typed, it is the whole
     # invoice, and the email's was a regular expression over whichever
     # notification happened to itemise.
@@ -241,7 +342,7 @@ def apply_turo_invoice(
             f"${row.total_cents / 100:,.2f} was tolls"
         )
         result.tolls_asked += _stamp_asked(session, row, now=now)
-    elif row.toll_cents is None and not had_toll_line:
+    elif row.toll_cents is None and was_unanswered:
         result.newly_itemised.append(
             f"{invoice.reservation_id}: none of ${row.total_cents / 100:,.2f} was tolls"
         )
@@ -377,9 +478,23 @@ def hub_to_read(
             )
         )
     }
+    # A row the mail made without an id, and that still cannot say what share
+    # was tolls, is one of these invoices — but which, only reading them can
+    # tell. So every invoice on that reservation is read until it is matched.
+    # That is a handful of requests on the rentals where it matters, and it is
+    # how the duplicates an earlier, gross-only match recorded get folded in.
+    unmatched = any(
+        _unanswered(row)
+        for row in session.scalars(
+            select(ReimbursementInvoice).where(
+                ReimbursementInvoice.reservation_id == reservation_id,
+                ReimbursementInvoice.turo_invoice_id.is_(None),
+            )
+        )
+    )
     out: list[tuple[str, str]] = []
     for invoice in listed:
         row = known.get(invoice.invoice_id)
-        if row is None or _unanswered(row):
+        if unmatched or row is None or _unanswered(row):
             out.append((reservation_id, invoice.invoice_id))
     return out

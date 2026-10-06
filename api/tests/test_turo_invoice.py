@@ -28,6 +28,7 @@ from turonomics_api.db.models import (
 )
 from turonomics_api.ingest.turo_invoice import (
     TuroInvoiceResult,
+    _amounts,
     apply_turo_invoice,
     hub_to_read,
     parse_hub,
@@ -260,11 +261,20 @@ def test_no_toll_line_frees_the_crossings_to_be_filed(
 
 
 @requires_db
-def test_it_matches_by_turo_id_before_amount(session, car, rental) -> None:
-    by_id = _emailed(session, rental, total=9999, state="filed", invoice_id="113672232")
-    _emailed(session, rental, total=14040)
-    applied, _ = _apply(session, AUSTIN)
-    assert applied.id == by_id.id
+def test_two_rows_of_one_invoice_become_one(session, car, rental) -> None:
+    """The "filed" email linked the invoice and the "charged" one did not, so
+    the mail made two rows for one invoice — Austin's $50.00 ticket was asked
+    for twice in the ledger. Reading the invoice folds them together, keeping
+    the id-less row because its fingerprint is the one the charged email keeps
+    producing."""
+    by_id = _emailed(session, rental, total=14040, state="filed", invoice_id="113672232")
+    charged = _emailed(session, rental, total=14040)
+    applied, result = _apply(session, AUSTIN)
+    session.flush()
+    assert applied.id == charged.id
+    assert result.merged == 1
+    assert session.get(ReimbursementInvoice, by_id.id) is None
+    assert applied.state == "charged" and applied.turo_invoice_id == "113672232"
 
 
 @requires_db
@@ -522,7 +532,8 @@ def test_the_whole_pull_finds_austins_breakdown_unaided(
     api_client, monkeypatch, session, car, rental
 ) -> None:
     """Details, then hubs, then invoices — the order the extension calls them,
-    with nobody opening a page."""
+    with nobody opening a page. With the real figures: Turo's page says
+    $156.00, the email said $140.40."""
     monkeypatch.delenv("TOLLS_TOKEN", raising=False)
     _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
     _emailed(session, rental, total=5000, lines=[("Tickets", 5000)], invoice_id="7")
@@ -541,17 +552,102 @@ def test_the_whole_pull_finds_austins_breakdown_unaided(
         "/api/turo/hubs", json={"hubs": [{"reservation_id": RES, "body": _hub(7, 113672232)}]}
     ).json()
     assert hubs["listed"] == 2
-    assert hubs["to_read"] == [[RES, "113672232"]], "the ticket is already answered"
+    # All of them, while the $140.40 is unmatched: which one it is, only
+    # reading them can say.
+    assert hubs["to_read"] == [[RES, "7"], [RES, "113672232"]]
 
-    distance = _body(("ADDITIONAL_DISTANCE", "Additional distance", 140.40))
+    distance = _body(("ADDITIONAL_DISTANCE", "Additional distance", 156.00))
     out = api_client.post(
         "/api/turo/invoices",
         json={"invoices": [{"reservation_id": RES, "body": distance}]},
     ).json()
+    assert out["created"] == 0, "the $156.00 is the email's $140.40, not a new invoice"
     assert out["itemised"] == [f"{RES}: none of $140.40 was tolls"]
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
-    assert row["state"] == "to bill", "freed: the $140.40 was distance"
+    assert row["state"] == "to bill", "freed: it was distance"
+    assert row["asked_cents"] == 5000 + 14040, "each invoice once"
     assert api_client.get("/api/invoices/next-draft").json()["total_cents"] == 4071
+
+    again = api_client.post(
+        "/api/turo/hubs", json={"hubs": [{"reservation_id": RES, "body": _hub(7, 113672232)}]}
+    ).json()
+    assert again["to_read"] == [], "matched now, so nothing is re-read"
+
+    # And if it is read again anyway, it is not news a second time.
+    repeat = api_client.post(
+        "/api/turo/invoices",
+        json={"invoices": [{"reservation_id": RES, "body": distance}]},
+    ).json()
+    assert repeat["itemised"] == []
+
+
+@requires_db
+def test_folding_two_rows_keeps_the_most_advanced_state(session, car, rental) -> None:
+    """The kept row may be the one that only saw "filed". If the other saw
+    "charged", the money arrived, and folding must not un-charge it."""
+    paid = NOW - td(days=2)
+    by_id = _emailed(session, rental, total=14040, state="charged", invoice_id="113672232")
+    by_id.charged_at = paid
+    _emailed(session, rental, total=14040, state="filed")
+    applied, _ = _apply(session, AUSTIN)
+    assert applied.state == "charged"
+    assert applied.charged_at == paid
+
+
+@requires_db
+def test_folding_two_rows_keeps_the_earlier_ask(session, car, rental) -> None:
+    """Which crossings an invoice can have covered is decided by when it was
+    first seen. The kept row may have been seen later than its duplicate; a
+    crossing imported between the two sightings arrived after the ask, so it
+    was not part of it and is still owed. Taking the later date would stamp it
+    and nobody would ever ask for it."""
+    early, late = NOW - td(days=9), NOW - td(days=2)
+    between = _crossing(session, car, rental, cents=900, imported_at=NOW - td(days=5))
+    before = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=12))
+    _emailed(session, rental, total=14040, state="filed", invoice_id="113672232", seen=early)
+    _emailed(session, rental, total=14040, state="filed", seen=late)
+    applied, _ = _apply(session, AUSTIN)
+    assert applied.first_seen_at == early
+    assert before.filed_at is not None
+    assert between.filed_at is None
+
+
+@requires_db
+def test_the_email_reports_the_hosts_share_of_a_distance_charge(session, car, rental) -> None:
+    """Both live examples: $156.00 -> $140.40 and $45.88 -> $41.29. Tolls
+    carry no cut, so a mixed invoice nets only the rest."""
+    for gross, net in ((156.00, 14040), (45.88, 4129)):
+        parsed = parse_turo_invoice(RES, _body(("ADDITIONAL_DISTANCE", "Distance", gross)))
+        assert parsed is not None
+        assert net in _amounts(parsed), gross
+    mixed = parse_turo_invoice(RES, AUSTIN)
+    assert mixed is not None
+    assert 4071 + 8972 in _amounts(mixed), "99.69 * 0.9 = 89.72, tolls untouched"
+
+
+@requires_db
+def test_a_net_match_on_an_itemised_row_needs_the_same_charges(session, car, rental) -> None:
+    """Gross line amounts are what the email itemises, so they must agree. A
+    cleaning invoice that happens to net to the same total is another invoice."""
+    tickets = _emailed(session, rental, total=4500, lines=[("Tickets", 5000)])
+    cleaning = _emailed(session, rental, total=14040, lines=[("Cleaning", 9000), ("Smoking", 6600)])
+    cleaning.fingerprint = f"res:{RES}:cleaning"
+    applied, _ = _apply(session, _body(("TICKET_REIMBURSEMENT", "Tickets", 50.00)))
+    assert applied.id == tickets.id
+    other, result = _apply(
+        session, _body(("ADDITIONAL_DISTANCE", "Distance", 156.00), invoiceId=2, reimbursementId=3)
+    )
+    assert other.id != cleaning.id and result.created == 1
+
+
+@requires_db
+def test_two_invoices_of_one_size_are_not_guessed_between_by_net_either(
+    session, car, rental
+) -> None:
+    _emailed(session, rental, total=14040)
+    _emailed(session, rental, total=15600, state="filed", invoice_id="999")
+    _, result = _apply(session, _body(("ADDITIONAL_DISTANCE", "Distance", 156.00)))
+    assert result.created == 1 and result.matched == 0
 
 
 @requires_db

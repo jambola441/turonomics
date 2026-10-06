@@ -201,6 +201,7 @@ class InvoicesResponse(BaseModel):
     unparsed: int
     matched: int
     created: int
+    merged: int = 0
     # One line per invoice whose toll share is now known, saying what it was.
     itemised: list[str]
     tolls_asked: int
@@ -228,12 +229,13 @@ def post_invoices(
         apply_turo_invoice(session, invoice, now=now, result=result)
     session.commit()
     log.info(
-        "turo invoices: %d read, %d unparsed, %d matched, %d new, %d crossing(s) "
-        "asked, %d recovered",
+        "turo invoices: %d read, %d unparsed, %d matched, %d new, %d merged, "
+        "%d crossing(s) asked, %d recovered",
         result.seen,
         unparsed,
         result.matched,
         result.created,
+        result.merged,
         result.tolls_asked,
         result.tolls_recovered,
     )
@@ -246,6 +248,7 @@ def post_invoices(
         unparsed=unparsed,
         matched=result.matched,
         created=result.created,
+        merged=result.merged,
         itemised=result.newly_itemised,
         tolls_asked=result.tolls_asked,
         tolls_recovered=result.tolls_recovered,

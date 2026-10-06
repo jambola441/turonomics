@@ -27,11 +27,11 @@
     display:flex; flex-direction:column; overflow:hidden;
     padding-top:env(safe-area-inset-top,0px);
   }
-  header{padding:14px 20px 12px;border-bottom:1px solid var(--border);flex-shrink:0}
-  .row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+  header{padding:var(--u-space-4) 20px var(--u-space-3);border-bottom:1px solid var(--border);flex-shrink:0}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:var(--u-space-3);flex-wrap:wrap}
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
   .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
+  .legend{display:flex;gap:var(--u-space-2) var(--u-space-4);flex-wrap:wrap;margin-top:var(--u-space-3)}
   .legend div{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:var(--u-map)}
@@ -61,18 +61,32 @@
        width:38px;height:38px;cursor:pointer;transition:transform .12s ease}
   .pin:hover{transform:scale(1.08)}
   .sheet{border-top:1px solid var(--border);background:var(--surface);
-         padding:12px 20px calc(16px + env(safe-area-inset-bottom,0px));
-         display:flex;flex-direction:column;gap:12px;flex-shrink:0;max-height:52vh;overflow-y:auto}
-  .grab{width:34px;height:3px;border-radius:2px;background:var(--border2);align-self:center;flex-shrink:0}
-  .chips{display:flex;gap:7px;flex-wrap:wrap}
+         padding:0 20px calc(var(--u-space-5) + env(safe-area-inset-bottom,0px));
+         display:flex;flex-direction:column;gap:var(--u-space-4);flex-shrink:0;max-height:52vh;overflow-y:auto}
+  /* The handle is the collapse control: a real button with a 44px target, the
+     bar itself drawn by ::before. Collapsed, only the handle stays, and the map
+     takes the freed height. */
+  .grab{align-self:stretch;flex-shrink:0;height:44px;margin:0 -20px;background:none;border:none;
+        cursor:pointer;display:flex;align-items:center;justify-content:center;
+        position:sticky;top:0;z-index:1;background:var(--surface)}
+  .grab::before{content:"";width:34px;height:4px;border-radius:2px;background:var(--border2);
+        transition:background .12s ease}
+  .grab:hover::before{background:var(--muted)}
+  .sheet.collapsed{max-height:none;padding-bottom:calc(var(--u-space-1) + env(safe-area-inset-bottom,0px))}
+  .sheet.collapsed .grab{height:36px}
+  /* The sheet's own gap stops at its direct children; the vehicle panel is one
+     of them, so it needs the same rhythm for what is inside it. */
+  #sheet-body:not(.empty){display:flex;flex-direction:column;gap:var(--u-space-4)}
+  .sheet.collapsed #sheet-body{display:none}
+  .chips{display:flex;gap:var(--u-space-2);flex-wrap:wrap}
   .chip{flex:1 1 0;min-width:64px;min-height:44px;display:flex;align-items:center;justify-content:center;
         border-radius:var(--u-radius-md);font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.04em;
         border:1px solid var(--border);background:var(--surface2);cursor:pointer}
   .name{font-size:19px;font-weight:600;letter-spacing:-.01em}
   .plate{font-family:var(--mono);font-size:11px;color:var(--dim);
          background:var(--surface2);border:1px solid var(--border);border-radius:var(--u-radius-sm);padding:4px 7px}
-  .where{font-size:13px;color:var(--muted);line-height:1.4}
-  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .where{font-size:13px;color:var(--muted);line-height:1.5;margin-top:var(--u-space-1)}
+  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--u-space-2)}
   .stat{display:flex;flex-direction:column;gap:4px;padding:10px 11px;background:var(--surface2);
         border:1px solid var(--border);border-radius:var(--u-radius-md);min-width:0}
   .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
@@ -97,7 +111,7 @@
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
   .err{margin:12px 20px;padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);
        border:1px solid var(--u-err-line);color:var(--red);font-size:13px;line-height:1.45}
-  .where-btn{align-self:flex-start;font:inherit;font-size:12px;font-weight:600;color:var(--green);
+  .where-btn{align-self:flex-start;margin-bottom:var(--u-space-1);font:inherit;font-size:12px;font-weight:600;color:var(--green);
        background:none;border:1px solid var(--u-ok-line);border-radius:var(--u-radius-md);padding:7px 12px;cursor:pointer}
   .where-btn:hover{background:var(--u-ok-bg)}
   .where-btn:disabled{opacity:.5;cursor:default}
@@ -112,7 +126,7 @@
        text-transform:lowercase}
   .spot .s-free{font-family:var(--mono);font-size:11.5px;color:var(--green);margin-top:3px}
   .spot .s-far{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
-  .tasks{display:flex;flex-direction:column;gap:7px}
+  .tasks{display:flex;flex-direction:column;gap:var(--u-space-2)}
   .task{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;border-radius:var(--u-radius-lg);
         background:var(--surface2);border:1px solid var(--border);text-align:left;
         width:100%;font:inherit;color:inherit;cursor:pointer;
@@ -135,7 +149,7 @@
   .note-guest .g-who{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
        text-transform:uppercase;color:var(--dim)}
   .note-guest .g-body{font-size:13.5px;line-height:1.5;white-space:pre-wrap;word-break:break-word}
-  .notes{display:flex;flex-direction:column;gap:8px}
+  .notes{display:flex;flex-direction:column;gap:var(--u-space-2)}
   .bell{font:inherit;font-size:11.5px;color:var(--muted);cursor:pointer;
         display:flex;align-items:center;gap:6px;min-height:32px;padding:5px 10px;
         border-radius:var(--u-radius-md);border:1px solid var(--border);background:var(--surface2)}
@@ -167,7 +181,7 @@
   <div id="map"></div>
 
   <div class="sheet" id="sheet">
-    <div class="grab"></div>
+    <button type="button" class="grab" id="grab" aria-expanded="true" aria-controls="sheet-body" aria-label="Hide vehicle details"></button>
     <div id="sheet-body" class="empty">Loading fleet…</div>
   </div>
 
@@ -845,6 +859,28 @@
       .then(function () { setBell("off", "Enable alerts", false); })
       .catch(function () { setBell("on", "Alerts on", false); });
   }
+
+  // Collapsing the sheet hands its height to the map. Remembered per browser,
+  // but storage can throw (private windows, blocked site data) and the page
+  // must work without it.
+  (function () {
+    var sheet = document.getElementById("sheet");
+    var grab = document.getElementById("grab");
+    function apply(collapsed) {
+      sheet.classList.toggle("collapsed", collapsed);
+      grab.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      grab.setAttribute("aria-label", collapsed ? "Show vehicle details" : "Hide vehicle details");
+      // Leaflet caches its size; without this the map keeps the old height and
+      // tiles never load into the space just freed.
+      if (map) setTimeout(function () { map.invalidateSize(); }, 0);
+    }
+    try { if (localStorage.getItem("fleet-sheet") === "collapsed") apply(true); } catch (e) {}
+    grab.addEventListener("click", function () {
+      var collapsed = !sheet.classList.contains("collapsed");
+      apply(collapsed);
+      try { localStorage.setItem("fleet-sheet", collapsed ? "collapsed" : "open"); } catch (e) {}
+    });
+  })();
 
   // Data first. The fleet list must render whether or not the map library
   // loaded, so a blocked script or a dead tile server costs you the map, not

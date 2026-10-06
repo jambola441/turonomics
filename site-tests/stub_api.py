@@ -306,6 +306,11 @@ INVOICES = [
              charged_lines=["7 tolls $15.55", "22 mi additional distance $40.00"]),
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000006", guest_name="Austin",
              days_left=33, file_by=_iso(days=33), total_cents=4071, pending_cents=4071),
+    # Turo charged this rental for something plainly not tolls. It is said as
+    # that, not as a warning: the tolls are still owed and nothing is unclear.
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000007", guest_name="Shashi",
+             days_left=40, file_by=_iso(days=40), total_cents=2263,
+             charged_cents=5000, charged_lines=["Tickets $50.00"]),
     _invoice(trip_id="ffff0000-0000-0000-0000-000000000004", guest_name="Brandon",
              days_left=-5, file_by=_iso(days=-5), expired=True, total_cents=1679),
 ]
@@ -344,6 +349,9 @@ def _ledger_payload() -> dict[str, object]:
             "tolls_cents": 1779, "unfiled_cents": 1100, "filed_cents": 679,
             "recovered_cents": 0, "asked_cents": 679, "charged_cents": 0,
             "turo_toll_line_cents": None,
+            "turo_tolls_cents": 0, "turo_tickets_cents": 5000,
+            "turo_distance_cents": 15600, "turo_other_cents": 0,
+            "turo_unknown_cents": 777,
             "state": "partly billed",
             "note": "11.00 arrived after the first invoice",
         },
@@ -371,8 +379,22 @@ def _ledger_payload() -> dict[str, object]:
             "turo_toll_line_cents": 3974,
             "state": "awaiting payment", "note": None,
         },
+        {
+            "trip_id": "44444444-4444-4444-4444-444444444444",
+            "turo_trip_id": "47336177", "guest_name": "Early",
+            "vehicle_nickname": "Jolene",
+            "starts_at": "2026-05-01T12:00:00Z", "ends_at": "2026-05-03T22:00:00Z",
+            "days_left": -66,
+            "tolls_cents": 0, "unfiled_cents": 0, "filed_cents": 0,
+            "recovered_cents": 0, "asked_cents": 0, "charged_cents": 0,
+            "turo_toll_line_cents": None,
+            "state": "no statement yet",
+            "note": "outside the imported statements (3 Jul 2026 – 4 Oct 2026)",
+        },
     ]
     return {
+        "statements_from": "2026-07-03T12:00:00Z",
+        "statements_to": "2026-10-04T12:00:00Z",
         "rows": rows,
         "tolls_cents": 2758,
         "unfiled_cents": 1100,

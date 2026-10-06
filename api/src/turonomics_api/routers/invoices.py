@@ -9,21 +9,22 @@ deadline first.
 from __future__ import annotations
 
 import logging
+import re
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
+from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip, TripState
 from turonomics_api.gmail.parse import names_tolls
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_svg
-from turonomics_api.ingest.invoices import Invoice, InvoiceLine, build_invoices
+from turonomics_api.ingest.invoices import OFF_PLATFORM, Invoice, InvoiceLine, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
 
@@ -67,9 +68,10 @@ class InvoiceRow(BaseModel):
     # twice for money already paid is a dispute, not income.
     charged_cents: int = 0
     pending_cents: int = 0
-    # Set when an invoice was charged for this rental but its total does not
-    # match these crossings — cleaning and fuel ride on the same invoices, so
-    # it is surfaced rather than written off.
+    # Set when Turo's side cannot be reconciled with these crossings: an
+    # invoice nobody can break down, or a toll line that disagrees with them.
+    # A charge that is plainly something else (a ticket, distance) does not
+    # set it; it is listed in `charged_lines` and is no reason to hold back.
     charged_but_different: bool = False
     # What a charged invoice said it took for tolls specifically, where it
     # itemised. The figure worth comparing: a reimbursement bundles cleaning,
@@ -148,6 +150,55 @@ def _unreadable(rows: list[ReimbursementInvoice]) -> int:
     return total
 
 
+_TICKETS = re.compile(r"\b(?:tickets?|citations?|violations?|parking|fines?)\b", re.IGNORECASE)
+_DISTANCE = re.compile(r"\b(?:distance|mileage|miles?|mi)\b", re.IGNORECASE)
+
+
+def _by_kind(rows: list[ReimbursementInvoice]) -> dict[str, int]:
+    """Turo's invoices on a rental, summed by what each line was for.
+
+    By line, so a bundled invoice splits; by the line's label, because that is
+    what the email gives and what is stored for Turo's typed lines too. The
+    toll figure is the invoice's own toll line where it has one, which was
+    read off the type rather than the label.
+    """
+    out = {
+        "turo_tolls_cents": 0,
+        "turo_tickets_cents": 0,
+        "turo_distance_cents": 0,
+        "turo_other_cents": 0,
+        "turo_unknown_cents": 0,
+    }
+    for row in rows:
+        entries = [
+            (entry[0], entry[1])
+            for entry in row.lines or []
+            if isinstance(entry, list)
+            and len(entry) == 2
+            and isinstance(entry[0], str)
+            and isinstance(entry[1], int)
+        ]
+        if not entries:
+            out["turo_unknown_cents"] += row.total_cents
+            continue
+        tolls_counted = row.toll_cents is not None
+        if tolls_counted:
+            out["turo_tolls_cents"] += row.toll_cents or 0
+        for label, cents in entries:
+            if names_tolls(label):
+                if not tolls_counted:
+                    # Names tolls but is not a toll line of its own ("Tolls and
+                    # fuel"): what share was tolls is exactly what is unknown.
+                    out["turo_unknown_cents"] += cents
+            elif _TICKETS.search(label):
+                out["turo_tickets_cents"] += cents
+            elif _DISTANCE.search(label):
+                out["turo_distance_cents"] += cents
+            else:
+                out["turo_other_cents"] += cents
+    return out
+
+
 def _row(
     invoice: Invoice,
     window: int,
@@ -201,10 +252,13 @@ def _row(
         # crossings are ticked off they leave this list anyway.
         charged_tolls_cents=charged_tolls,
         charged_lines=lines,
-        # Compared on the toll line where the invoice itemised one, since that
-        # is the part that can be reconciled at all.
-        charged_but_different=bool(charged)
-        and (charged_tolls if charged_tolls is not None else charged) != invoice.total_cents,
+        # Worth a person's look only when Turo's side cannot be reconciled with
+        # ours: a charge nobody can break down, or a toll line that disagrees
+        # with these crossings. A ticket or a distance charge beside them used
+        # to set this too, and the page told the operator to "check before
+        # asking again" about money that had nothing to do with tolls.
+        charged_but_different=_unreadable(asked) > 0
+        or (charged_tolls is not None and charged_tolls != invoice.total_cents),
     )
 
 
@@ -379,6 +433,15 @@ class LedgerRow(BaseModel):
     asked_cents: int
     charged_cents: int
     turo_toll_line_cents: int | None
+    # Everything Turo has invoiced on this rental, by what it was for — the
+    # split the operator asked for, so "Turo charged $190.40" reads as $50.00
+    # of tickets and $140.40 of distance rather than as a mystery. Unknown is
+    # an invoice nobody has broken down yet.
+    turo_tolls_cents: int = 0
+    turo_tickets_cents: int = 0
+    turo_distance_cents: int = 0
+    turo_other_cents: int = 0
+    turo_unknown_cents: int = 0
 
     # Turo's `allowedToRequestReimbursement`, reported and not acted on: it is
     # false for every rental on the live account, including ones that were
@@ -393,6 +456,11 @@ class LedgerRow(BaseModel):
 
 class LedgerResponse(BaseModel):
     rows: list[LedgerRow]
+    # The span the imported E-ZPass crossings cover, so a rental with none can
+    # say whether that is because it had none or because no statement reaches
+    # it yet.
+    statements_from: datetime | None = None
+    statements_to: datetime | None = None
     tolls_cents: int
     unfiled_cents: int
     filed_cents: int
@@ -559,6 +627,7 @@ def ledger(session: DbSession) -> LedgerResponse:
                 asked_cents=sum(r.total_cents for r in theirs),
                 charged_cents=charged,
                 turo_toll_line_cents=sum(toll_lines) if toll_lines else None,
+                **_by_kind(theirs),
                 turo_allows_request=(
                     trip.can_file_reimbursement if trip is not None else None
                 ),
@@ -566,8 +635,14 @@ def ledger(session: DbSession) -> LedgerResponse:
                 note=note,
             )
         )
+    first, last = session.execute(
+        select(func.min(Toll.occurred_at), func.max(Toll.occurred_at))
+    ).one()
+    rows.extend(_quiet_rentals(session, rows, first=first, last=last, window=window, now=now))
     rows.sort(key=lambda row: row.ends_at, reverse=True)
     return LedgerResponse(
+        statements_from=first,
+        statements_to=last,
         rows=rows,
         tolls_cents=sum(r.tolls_cents for r in rows),
         unfiled_cents=sum(r.unfiled_cents for r in rows),
@@ -575,6 +650,78 @@ def ledger(session: DbSession) -> LedgerResponse:
         recovered_cents=sum(r.recovered_cents for r in rows),
         charged_cents=sum(r.charged_cents for r in rows),
     )
+
+
+NO_CROSSINGS = "no crossings"
+NO_STATEMENT = "no statement yet"
+
+
+def _quiet_rentals(
+    session: Session,
+    seen: list[LedgerRow],
+    *,
+    first: datetime | None,
+    last: datetime | None,
+    window: int,
+    now: datetime,
+) -> list[LedgerRow]:
+    """Every other rental on the account, so the ledger is the whole account.
+
+    A rental with no crossings is still worth a row: Turo may have invoiced it
+    for a ticket or distance, and whether it truly had no tolls or simply falls
+    outside every imported statement is the question the operator acts on —
+    by pulling another E-ZPass date range.
+
+    Covered means the rental sits inside the span of crossings imported so
+    far. That is the fleet's span, not per car: a statement is one account,
+    and a car that crossed nothing that month is still covered by it.
+    """
+    known = {row.trip_id for row in seen}
+    trips = session.scalars(
+        select(Trip).where(
+            Trip.state != TripState.cancelled,
+            Trip.starts_at <= now,
+        )
+    ).all()
+    quiet = [trip for trip in trips if trip.id not in known]
+    asked = _reimbursements(session, [trip.id for trip in quiet])
+    out: list[LedgerRow] = []
+    for trip in quiet:
+        theirs = asked.get(trip.id) or []
+        covered = first is not None and last is not None and (
+            trip.starts_at >= first and trip.ends_at <= last
+        )
+        off = trip.source is OFF_PLATFORM
+        left = None if off else (trip.ends_at + timedelta(days=window) - now) // timedelta(days=1)
+        toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
+        out.append(
+            LedgerRow(
+                trip_id=trip.id,
+                turo_trip_id=trip.turo_trip_id,
+                guest_name=trip.guest_name,
+                vehicle_nickname=trip.vehicle.nickname if trip.vehicle else None,
+                starts_at=trip.starts_at,
+                ends_at=trip.ends_at,
+                days_left=left,
+                tolls_cents=0,
+                unfiled_cents=0,
+                filed_cents=0,
+                recovered_cents=0,
+                asked_cents=sum(r.total_cents for r in theirs),
+                charged_cents=sum(r.total_cents for r in theirs if r.state == "charged"),
+                turo_toll_line_cents=sum(toll_lines) if toll_lines else None,
+                **_by_kind(theirs),
+                turo_allows_request=trip.can_file_reimbursement,
+                state=NO_CROSSINGS if covered else NO_STATEMENT,
+                note=None if covered else (
+                    "no E-ZPass statement imported for these dates"
+                    if first is None
+                    else "outside the imported statements "
+                    f"({first:%-d %b %Y} – {last:%-d %b %Y})"
+                ),
+            )
+        )
+    return out
 
 
 @router.get("/next-draft", response_model=DraftResponse)

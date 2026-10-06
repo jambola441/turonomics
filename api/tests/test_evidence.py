@@ -848,3 +848,136 @@ def test_one_unitemised_invoice_holds_back_a_rental_with_an_itemised_one(
     assert api_client.get("/api/invoices/next-draft").status_code == 404
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert "$140.40" in row["note"], "only the part nobody can read"
+
+
+# ---------------------------------------------------------------------------
+# What Turo charged, said plainly, and the whole account in the ledger
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_a_charge_that_is_plainly_something_else_is_not_a_warning(
+    api_client, session, car, rental
+) -> None:
+    """Austin's rental read "it did not itemise tolls — check before asking
+    again" after Turo's page had said exactly what each charge was."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _turo_invoice(session, rental, total=5000, lines=[["Tickets", 5000]], key="a")
+    _turo_invoice(session, rental, total=14040, lines=[["Additional distance", 15600]], key="b")
+    session.commit()
+    row = api_client.get("/api/invoices").json()["invoices"][0]
+    assert row["charged_but_different"] is False
+    assert row["charged_cents"] == 19040
+    assert "Tickets $50.00" in row["charged_lines"]
+
+
+@requires_db
+def test_an_unreadable_charge_is_still_a_warning(api_client, session, car, rental) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _turo_invoice(session, rental, total=14040, lines=[])
+    session.commit()
+    assert api_client.get("/api/invoices").json()["invoices"][0]["charged_but_different"] is True
+
+
+@requires_db
+def test_a_toll_line_that_disagrees_is_still_a_warning(api_client, session, car, rental) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _crossing(session, car, rental, at=ENDS - td(hours=1), cents=900)
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:tl", reservation_id=rental.turo_trip_id, state="charged",
+            total_cents=1555, lines=[["Tolls", 1555]], toll_cents=1555, trip_id=rental.id,
+            last_seen_at=NOW, charged_at=NOW,
+        )
+    )
+    session.commit()
+    row = api_client.get("/api/invoices").json()["invoices"][0]
+    assert row["charged_but_different"] is True
+
+
+@requires_db
+def test_the_ledger_splits_turos_charges_by_kind(api_client, session, car, rental) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _turo_invoice(session, rental, total=5000, lines=[["Tickets", 5000]], key="a")
+    _turo_invoice(
+        session, rental, total=20000,
+        lines=[["Tolls", 1200], ["22 mi additional distance", 4000], ["Cleaning", 14800]],
+        toll=1200, key="b",
+    )
+    _turo_invoice(session, rental, total=777, lines=[], key="c")
+    _turo_invoice(session, rental, total=3000, lines=[["Tolls and fuel", 3000]], key="d")
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["turo_tolls_cents"] == 1200
+    assert row["turo_tickets_cents"] == 5000
+    assert row["turo_distance_cents"] == 4000
+    assert row["turo_other_cents"] == 14800
+    assert row["turo_unknown_cents"] == 777 + 3000, "no lines, and tolls mixed with fuel"
+
+
+@requires_db
+def test_every_rental_on_the_account_is_in_the_ledger(api_client, session, car, rental) -> None:
+    """Including the ones with no crossings — a rental Turo charged for a ticket
+    is still part of where the money went."""
+    first = _crossing(session, car, rental, at=ENDS - td(days=1))
+    quiet = Trip(
+        vehicle_id=car.id, turo_trip_id="1001", guest_name="Quiet",
+        starts_at=ENDS - td(days=30), ends_at=ENDS - td(days=28),
+        state=TripState.completed, source=TripSource.email,
+    )
+    cancelled = Trip(
+        vehicle_id=car.id, turo_trip_id="1002", guest_name="Cancelled",
+        starts_at=ENDS - td(days=20), ends_at=ENDS - td(days=19),
+        state=TripState.cancelled, source=TripSource.email,
+    )
+    upcoming = Trip(
+        vehicle_id=car.id, turo_trip_id="1003", guest_name="Upcoming",
+        starts_at=datetime.now(UTC) + td(days=3), ends_at=datetime.now(UTC) + td(days=5),
+        state=TripState.upcoming, source=TripSource.email,
+    )
+    session.add_all([quiet, cancelled, upcoming])
+    session.flush()
+    _turo_invoice(session, quiet, total=5000, lines=[["Tickets", 5000]])
+    session.commit()
+
+    rows = api_client.get("/api/invoices/ledger").json()["rows"]
+    names = {r["guest_name"]: r for r in rows}
+    assert set(names) == {"Dylan", "Quiet"}, "not cancelled, not yet started"
+    assert names["Quiet"]["tolls_cents"] == 0
+    assert names["Quiet"]["turo_tickets_cents"] == 5000
+    assert names["Quiet"]["charged_cents"] == 5000
+    assert first.trip_id == rental.id
+
+
+@requires_db
+def test_a_rental_outside_every_statement_says_so(api_client, session, car, rental) -> None:
+    """The operator's next job: pull the E-ZPass range that covers it."""
+    _crossing(session, car, rental, at=ENDS - td(days=1))
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    inside = Trip(
+        vehicle_id=car.id, turo_trip_id="1001", guest_name="Inside",
+        starts_at=ENDS - td(hours=20), ends_at=ENDS - td(hours=10),
+        state=TripState.completed, source=TripSource.email,
+    )
+    before = Trip(
+        vehicle_id=car.id, turo_trip_id="1002", guest_name="Before",
+        starts_at=ENDS - td(days=40), ends_at=ENDS - td(days=38),
+        state=TripState.completed, source=TripSource.email,
+    )
+    session.add_all([inside, before])
+    session.commit()
+    out = api_client.get("/api/invoices/ledger").json()
+    names = {r["guest_name"]: r for r in out["rows"]}
+    assert names["Inside"]["state"] == "no crossings"
+    assert names["Before"]["state"] == "no statement yet"
+    assert "outside the imported statements" in names["Before"]["note"]
+    assert out["statements_from"] is not None and out["statements_to"] is not None
+
+
+@requires_db
+def test_with_no_statement_at_all_nothing_reads_as_crossing_free(
+    api_client, session, rental
+) -> None:
+    out = api_client.get("/api/invoices/ledger").json()
+    assert [r["state"] for r in out["rows"]] == ["no statement yet"]
+    assert "no E-ZPass statement" in out["rows"][0]["note"]

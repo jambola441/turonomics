@@ -455,7 +455,7 @@ def main() -> int:
             # invented, which is how a parser that read none of them went a
             # year unnoticed.
             check("the charges are listed the way the invoice words them",
-                  "incidental charges: 7 tolls $15.55" in text
+                  "charges: 7 tolls $15.55" in text
                   and "22 mi additional distance $40.00" in text)
             # The ledger: the second look at the same money.
             page.locator("#ledgerWrap > summary").click()
@@ -501,6 +501,24 @@ def main() -> int:
             check("pull from turo queues one too",
                   "pull from turo" in page.locator("#remoteLog").inner_text().lower())
 
+            check("a charge that is plainly not tolls is said as that, not as a warning",
+                  "turo charged $50.00 here for other things: tickets $50.00 — none of it tolls"
+                  in text.lower())
+            check("the old 'did not itemise' warning is gone",
+                  "did not itemise" not in text)
+            check("the ledger splits what Turo charged by kind",
+                  "$156.00" in ledger and "$50.00" in ledger)
+            check("money nobody has broken down is called out",
+                  "+$7.77 not broken down" in ledger)
+            check("a rental outside every statement says so",
+                  "no statement yet" in ledger and "outside the imported statements" in ledger)
+            check("the ledger says which dates the statements cover",
+                  "statements imported cover jul 3 – oct 4" in ledger)
+            check("days left to file is a column", "days left" in ledger and "closed" in ledger)
+            # Eleven columns on a phone: the table scrolls inside its box, and
+            # the page itself must not.
+            check("the wider ledger does not push the page sideways",
+                  page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
             look = page.locator("#look")

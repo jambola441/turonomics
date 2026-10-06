@@ -92,7 +92,7 @@ names what it drops, so the next run will say whether an *actual* check-out
 time is in there. `odometerDetail.checkOutOdometerReading` being null on a
 finished trip suggests some of these only fill in once the host checks out.
 
-### `GET /api/<locale>/reservations/<id>/reimbursement/invoice/<invoiceId>`
+### `GET /api/<version>/reservations/<id>/reimbursement/invoice/<invoiceId>`
 
 ```
 invoiceId, reimbursementId
@@ -161,7 +161,7 @@ three caps — `alreadyRequested`, `maximumReimbursementPerTrip` and
 `maximumReimbursementRequestAmount` — are worth reading before filing rather
 than after being refused.
 
-### `POST /api/<locale>/reimbursement/<reservationId>/request`
+### `POST /api/<version>/reimbursement/<reservationId>/request`
 
 ```
 sent: {
@@ -178,6 +178,14 @@ sent: {
 }
 -> {messageUuid: uuid, reimbursementId: int}
 ```
+
+**That path segment is an API version, not a locale.** It was read as `us` from
+a masked probe report showing `/api/<str(2)>/…`, and the filing POST went to a
+path that does not exist — 404, after the evidence image had already been
+uploaded. The masker prints a plain lowercase segment verbatim, so `us` would
+have shown as `us`; only a segment with a digit in it masks that way. Versions
+survive masking now, and the extension reads the version from the page's own
+resource timings rather than carrying a constant.
 
 Two things to note before building on this.
 
@@ -208,8 +216,8 @@ amount works, which is the path this app would take.
 
 | endpoint | carries |
 |---|---|
-| `GET /api/<locale>/feeds/conversation?page&itemsPerPage` | paginated reservations: `id`, `statusCode: BOOKED \| COMPLETED`, `booking`/`request`/`interval`/`cancelledRequest` start+end, `vehicle` with `licensePlate` and `vin`, `renter`, `location`, plus `numPages` |
-| `GET /api/<locale>/reservation/conversation?reservationId` | the whole message thread: `authorDriverRole: HOST \| GUEST`, `sentTime`, `sentTimeZone`, `text`, attached `media.images[]` |
+| `GET /api/<version>/feeds/conversation?page&itemsPerPage` | paginated reservations: `id`, `statusCode: BOOKED \| COMPLETED`, `booking`/`request`/`interval`/`cancelledRequest` start+end, `vehicle` with `licensePlate` and `vin`, `renter`, `location`, plus `numPages` |
+| `GET /api/<version>/reservation/conversation?reservationId` | the whole message thread: `authorDriverRole: HOST \| GUEST`, `sentTime`, `sentTimeZone`, `text`, attached `media.images[]` |
 | `GET /api/reservation/photos?reservationId` | 39 trip photos with `step: TRIP_PHOTO \| OWNER_CHECK_IN` and `imageType: ODOMETER` |
 | `GET /api/me` | the host: `driverRoles`, `driverLicenseStatus`, `alerts.searchExcludedVehicleIds` |
 | `GET /api/reservations/<id>/my-role` | `driverRole` |

@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.7.1 | build + reload | reads Turo's API version from the page instead of guessing it |
 | 1.7.0 | build + reload | files a toll invoice end to end; new "File the next toll invoice" button |
 | 1.6.2 | build + reload | the probe stops masking its own file descriptors |
 | 1.6.1 | build + reload | writes to any non-analytics host are reported |

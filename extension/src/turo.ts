@@ -86,7 +86,14 @@ export function urlShape(raw: string, base = "https://turo.com/"): string {
     .split("/")
     .filter(Boolean)
     .map((segment) =>
-      /^[a-z][a-z-]*$/.test(segment) ? segment : `<${stringShape(segment)}>`
+      // A version segment is structure, and masking it cost a filing: a probe
+      // reported `/api/<str(2)>/reimbursement/<id>/request`, that was read as
+      // a locale, and the POST went to a path that does not exist. Narrow on
+      // purpose — "v2" and not every short alphanumeric, which is what an id
+      // looks like.
+      /^[a-z][a-z-]*$/.test(segment) || /^v\d{1,3}$/.test(segment)
+        ? segment
+        : `<${stringShape(segment)}>`
     )
     .join("/");
   const keys = [...new Set([...url.searchParams.keys()])].sort();

@@ -417,7 +417,7 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
   const outcome = await inPage(
     tabId,
     fileInvoiceInPage,
-    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message, LOCALE],
+    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message],
     12,
     "MAIN"
   );
@@ -453,9 +453,6 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
   };
 }
 
-// Turo's own routes carry it, and every observed call used "us". Kept as a
-// constant rather than scattered so a fleet elsewhere is one edit.
-const LOCALE = "us";
 
 /**
  * File one toll invoice, from inside the page.
@@ -478,8 +475,7 @@ function fileInvoiceInPage(
   svg: string,
   reservationId: string,
   amount: number,
-  message: string,
-  locale: string
+  message: string
 ): Promise<{ ok: true; reimbursementId: number } | { ok: false; error: string; stage: string }> {
   const fail = (stage: string, error: string) =>
     ({ ok: false as const, error, stage });
@@ -511,7 +507,44 @@ function fileInvoiceInPage(
       image.src = encoded;
     });
 
+  /**
+   * The version segment in Turo's API paths, read from what this page has
+   * already fetched.
+   *
+   * It was hard-coded as "us", on the reading that `/api/<str(2)>/...` in a
+   * masked probe report was a locale. It is not: the masker prints a plain
+   * lowercase segment verbatim, so "us" would have shown as "us" — only a
+   * segment with a digit in it masks that way. The filing POST went to a path
+   * that does not exist and came back 404 after the evidence had been
+   * uploaded.
+   *
+   * So it is discovered rather than guessed, from the resource timings the
+   * page has already accumulated. No extra request, and exact.
+   */
+  const apiVersion = (): string | null => {
+    try {
+      const entries = performance.getEntriesByType("resource");
+      for (const entry of entries) {
+        const found = /\/api\/(v\d+)\//.exec(entry.name);
+        if (found) return found[1];
+      }
+    } catch {
+      // Resource timing is not something to fail a filing over.
+    }
+    return null;
+  };
+
   return (async () => {
+    const version = apiVersion();
+    if (!version) {
+      // Deliberately not falling back to a guess. The last guess uploaded an
+      // evidence image and then 404'd, which leaves a stray photo on the trip
+      // and nothing filed.
+      return fail(
+        "route",
+        "could not tell which API version this page uses — open a trip page and try again"
+      );
+    }
     let png: Blob;
     try {
       png = await rasterise();
@@ -538,7 +571,7 @@ function fileInvoiceInPage(
     }
 
     try {
-      const response = await fetch(`/api/${locale}/reimbursement/${reservationId}/request`, {
+      const response = await fetch(`/api/${version}/reimbursement/${reservationId}/request`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

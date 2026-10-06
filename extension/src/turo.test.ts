@@ -15,6 +15,9 @@ import {
   describeFiling,
   reimbursementRequestPath,
   describePull,
+  invoiceOnPage,
+  invoicePath,
+  invoicesToRead,
   describeEmbedded,
   findByKey,
   interestingCall,
@@ -507,4 +510,68 @@ test("a filing path is never built from something that is not a reservation id",
   assert.throws(() => reimbursementRequestPath(""));
   assert.throws(() => reimbursementRequestPath("58426608/../x"));
   assert.throws(() => reimbursementRequestPath("abc"));
+});
+
+// ---------------------------------------------------------------------------
+// Reading an invoice's breakdown
+// ---------------------------------------------------------------------------
+
+test("the invoice a page is showing is read off its url", () => {
+  assert.deepEqual(
+    invoiceOnPage(
+      "https://turo.com/us/en/reservation/59077848/reimbursement/invoice?invoiceId=113672232"
+    ),
+    ["59077848", "113672232"]
+  );
+  assert.deepEqual(
+    invoiceOnPage("https://turo.com/reservation/59077848/reimbursement/invoice/?invoiceId=1"),
+    ["59077848", "1"]
+  );
+});
+
+test("a page that is not an invoice is not read as one", () => {
+  for (const url of [
+    "https://turo.com/us/en/reservation/59077848",
+    "https://turo.com/us/en/reservation/59077848/reimbursement/request/tolls",
+    "https://turo.com/us/en/reservation/59077848/reimbursement/invoice",
+    "https://turo.com/us/en/reservation/59077848/reimbursement/invoice?invoiceId=abc",
+    "https://turo.com.evil.example/reservation/1/reimbursement/invoice?invoiceId=2",
+    "not a url",
+  ]) {
+    assert.equal(invoiceOnPage(url), null, url);
+  }
+});
+
+test("the open invoice is read first and never twice", () => {
+  const page = "https://turo.com/us/en/reservation/59077848/reimbursement/invoice?invoiceId=9";
+  assert.deepEqual(
+    invoicesToRead([["111", "1"], ["59077848", "9"]], page),
+    [["59077848", "9"], ["111", "1"]]
+  );
+  assert.deepEqual(invoicesToRead(undefined, "https://turo.com/"), []);
+});
+
+test("an invoice path is only ever built from digits", () => {
+  const template = "/api/v2/reservations/{id}/reimbursement/invoice/{invoice}";
+  assert.equal(
+    invoicePath(template, "59077848", "113672232"),
+    "/api/v2/reservations/59077848/reimbursement/invoice/113672232"
+  );
+  assert.throws(() => invoicePath(template, "59077848", "../x"));
+  assert.throws(() => invoicePath(template, "", "1"));
+});
+
+test("a pull that read invoices says what they turned out to be", () => {
+  const out = describePull({
+    ...EMPTY,
+    asked: 1,
+    stored: 1,
+    invoices: {
+      seen: 1, unparsed: 0, matched: 1, created: 0,
+      itemised: ["59077848: $40.71 of $140.40 was tolls"],
+      tolls_asked: 0, tolls_recovered: 5, statuses: [], asked: 1, failed: 0,
+    },
+  });
+  assert.match(out, /1 of 1 invoice\(s\) read/);
+  assert.match(out, /\$40\.71 of \$140\.40 was tolls/);
 });

@@ -36,6 +36,25 @@ export interface TuroWanted {
   reservations: string[];
   detail_path: string;
   token_required: boolean;
+  /** Invoices whose breakdown the mail did not give, as [reservation, invoice]. */
+  invoices?: [string, string][];
+  invoice_path?: string;
+}
+
+/** What the API made of the invoice pages it was sent. */
+export interface TuroInvoicesResult {
+  seen: number;
+  unparsed: number;
+  matched: number;
+  created: number;
+  /** One line per invoice whose toll share is now known. */
+  itemised: string[];
+  tolls_asked: number;
+  tolls_recovered: number;
+  statuses: string[];
+  /** How many were fetched, and how many Turo would not hand over. */
+  asked: number;
+  failed: number;
 }
 
 /** What the API says it did with them, plus what the pull itself managed. */
@@ -51,6 +70,7 @@ export interface TuroPullResult {
   /** How many the API asked for, and how many Turo would not hand over. */
   asked: number;
   failed: number;
+  invoices?: TuroInvoicesResult;
 }
 
 /** One rental's invoice, as the API drafts it. */

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Annotated
 
@@ -462,6 +463,58 @@ def _ledger_state(
     return "settled", None
 
 
+@dataclass(frozen=True)
+class _Tally:
+    unfiled: int
+    filed: int
+    recovered: int
+    left: int | None
+    state: str
+    note: str | None
+
+
+def _tally(
+    session: Session,
+    invoice: Invoice,
+    theirs: list[ReimbursementInvoice],
+    *,
+    window: int,
+    now: datetime,
+) -> _Tally:
+    """One rental's three columns and the word for them.
+
+    Shared by the ledger and by next-draft, so that the button only ever files
+    what the ledger calls to bill. They were separate once, and next-draft
+    offered Austin's $40.71 while the ledger — had it been able to see the
+    $140.40 — would have said to check Turo first.
+    """
+    tolls = session.scalars(
+        select(Toll).where(Toll.id.in_([line.toll_id for line in invoice.lines]))
+    ).all()
+    unfiled = sum(t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is None)
+    filed = sum(
+        t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
+    )
+    recovered = sum(t.amount_cents for t in tolls if t.recovered_at is not None)
+    toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
+    left = invoice.days_left(window, now)
+    state, note = _ledger_state(
+        tolls=invoice.total_cents,
+        unfiled=unfiled,
+        filed=filed,
+        recovered=recovered,
+        toll_line=sum(toll_lines) if toll_lines else None,
+        left=left,
+        unreadable=_unreadable(theirs),
+    )
+    return _Tally(unfiled, filed, recovered, left, state, note)
+
+
+# The only states next-draft files from. Everything else is either done, out
+# of time, or waiting for a person to look at what Turo already charged.
+_FILEABLE = frozenset({"to bill", "partly billed"})
+
+
 @router.get("/ledger", response_model=LedgerResponse)
 def ledger(session: DbSession) -> LedgerResponse:
     """Every rental with crossings, and what has become of each.
@@ -478,31 +531,13 @@ def ledger(session: DbSession) -> LedgerResponse:
 
     rows: list[LedgerRow] = []
     for invoice in built:
-        states = {line.toll_id: line for line in invoice.lines}
-        tolls = session.scalars(
-            select(Toll).where(Toll.id.in_(list(states)))
-        ).all()
-        unfiled = sum(
-            t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is None
-        )
-        filed = sum(
-            t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
-        )
-        recovered = sum(t.amount_cents for t in tolls if t.recovered_at is not None)
-        trip = session.get(Trip, invoice.trip_id)
         theirs = asked.get(invoice.trip_id) or []
+        tally = _tally(session, invoice, theirs, window=window, now=now)
+        unfiled, filed, recovered = tally.unfiled, tally.filed, tally.recovered
+        state, note, left = tally.state, tally.note, tally.left
+        trip = session.get(Trip, invoice.trip_id)
         charged = sum(r.total_cents for r in theirs if r.state == "charged")
         toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
-        left = invoice.days_left(window, now)
-        state, note = _ledger_state(
-            tolls=invoice.total_cents,
-            unfiled=unfiled,
-            filed=filed,
-            recovered=recovered,
-            toll_line=sum(toll_lines) if toll_lines else None,
-            left=left,
-            unreadable=_unreadable(theirs),
-        )
         rows.append(
             LedgerRow(
                 trip_id=invoice.trip_id,
@@ -555,12 +590,14 @@ def next_draft(session: DbSession) -> DraftResponse:
     asked = _reimbursements(session, [i.trip_id for i in built])
     fileable = []
     for invoice in built:
-        left = invoice.days_left(window, now)
-        if left is None or left < 0:
-            continue
-        if _unreadable(asked.get(invoice.trip_id) or []):
-            # Turo has charged something on this rental that may be these
-            # crossings. Left for the ledger to flag, not filed blind.
+        tally = _tally(
+            session, invoice, asked.get(invoice.trip_id) or [], window=window, now=now
+        )
+        # The ledger's word decides, not a second copy of its reasoning. That
+        # covers the window, Turo having charged something unreadable, and
+        # Turo having charged a toll line none of these crossings were stamped
+        # against — each of which is a guest who may be asked twice.
+        if tally.state not in _FILEABLE or tally.left is None:
             continue
         # Per crossing, not per rental. Skipping any rental that carried a
         # reimbursement was safe against asking twice and wrong the other way:
@@ -569,7 +606,7 @@ def next_draft(session: DbSession) -> DraftResponse:
         unfiled = _unfiled(session, invoice)
         if not unfiled:
             continue
-        fileable.append((left, -sum(line.amount_cents for line in unfiled), invoice))
+        fileable.append((tally.left, -sum(line.amount_cents for line in unfiled), invoice))
     if not fileable:
         raise HTTPException(status_code=404, detail="nothing to file")
     fileable.sort(key=lambda row: (row[0], row[1]))

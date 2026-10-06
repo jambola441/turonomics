@@ -975,3 +975,92 @@ def test_an_invoice_naming_tolls_without_a_line_of_their_own_is_surfaced(
 
     assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911, "untouched"
     assert any("names tolls but not on a line of its own" in e for e in result.unmatched_totals)
+
+
+# ---------------------------------------------------------------------------
+# A filing made by hand, learned of by email
+# ---------------------------------------------------------------------------
+#
+# The extension stamps `filed_at` when it files. A filing made in Turo's own UI
+# reaches this app only as a notification email, and until these existed
+# nothing stamped the crossings — so the button would offer the same rental
+# again, asking the guest twice.
+
+FILED_BY_HAND = ITEMISED_BODY.replace("Your guest has been charged.", "Invoice sent.")
+
+
+def _filed_tolls(session, trip):
+    return session.scalars(
+        select(Toll).where(Toll.trip_id == trip.id, Toll.filed_at.is_not(None))
+    ).all()
+
+
+@requires_db
+def test_an_emailed_filing_marks_the_crossings_as_asked(
+    api_client, monkeypatch, session, trip
+) -> None:
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11", "-6.44"), "text/csv")})
+    assert api_client.get("/api/invoices/next-draft").status_code == 200
+
+    parsed = parse_invoice("Dylan invoice", FILED_BY_HAND)
+    assert parsed is not None and parsed.toll_cents == 1555
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+
+    assert len(_filed_tolls(session, trip)) == 2
+    assert api_client.get("/api/invoices/next-draft").status_code == 404, (
+        "not offered again"
+    )
+
+
+@requires_db
+def test_an_invoice_for_something_else_marks_nothing(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """Refuelling or a ticket asked the guest for nothing to do with these
+    crossings, so they are still to be asked for."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    body = FILED_BY_HAND.replace("Tolls - $15.55\nCleaning - $40.00", "Refueling - $40.00")
+    body = body.replace("Total charge - $55.55", "Total charge - $40.00")
+    parsed = parse_invoice("Dylan invoice", body)
+    assert parsed is not None and parsed.toll_cents is None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+
+    assert _filed_tolls(session, trip) == []
+    assert api_client.get("/api/invoices/next-draft").status_code == 200
+
+
+@requires_db
+def test_a_re_read_email_does_not_claim_a_later_crossing(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """The same email is re-read on every sync. A crossing that arrived on a
+    later statement was not part of that ask, and stamping it on a re-read
+    would strand it — the bug per-crossing tracking was built to fix."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    parsed = parse_invoice("Dylan invoice", FILED_BY_HAND)
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+    assert len(_filed_tolls(session, trip)) == 1
+
+    # A later statement brings another crossing on the same rental...
+    later = (HEADER + "\n" + f"990,NY LZA7293,MTAB&T,,RKB,31,"
+             f"{(NOW - timedelta(days=39, hours=5)).astimezone(EASTERN):%m/%d/%Y},"
+             f"{(NOW - timedelta(days=39, hours=5)).astimezone(EASTERN):%I:%M:%S %p},$-4.50\n")
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("b.csv", later.encode(), "text/csv")})
+    # ...and the same email is read again on the next sync.
+    record_invoice(session, parse_invoice("Dylan invoice", FILED_BY_HAND), now=NOW)
+    session.commit()
+
+    assert len(_filed_tolls(session, trip)) == 1, "the new one is still to be asked for"
+    out = api_client.get("/api/invoices/next-draft").json()
+    assert out["total_cents"] == 450

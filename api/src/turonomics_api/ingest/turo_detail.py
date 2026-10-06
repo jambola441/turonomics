@@ -72,6 +72,9 @@ class ReservationDetail:
     grace_period_ends_at: datetime | None = None
     can_file_reimbursement: bool | None = None
     license_plate: str | None = None
+    # Whether Turo offers this reservation's invoice hub, which it does only
+    # when there is an invoice to show. Saves fetching a hub for every rental.
+    has_invoices: bool = False
 
 
 def _interval(starts: datetime, ends: datetime) -> str:
@@ -105,7 +108,9 @@ def parse_detail(payload: Mapping[str, Any]) -> ReservationDetail | None:
     registration = registration if isinstance(registration, Mapping) else {}
     plate = registration.get("licensePlate")
     allowed = payload.get("allowedToRequestReimbursement")
+    actions = payload.get("reservationActions")
     return ReservationDetail(
+        has_invoices=isinstance(actions, list) and "VIEW_INVOICE_HUB" in actions,
         reservation_id=str(reservation),
         starts_at=_moment(booking.get("start")),
         ends_at=_moment(booking.get("end")),

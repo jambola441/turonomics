@@ -15,6 +15,8 @@ import {
   describeFiling,
   reimbursementRequestPath,
   describePull,
+  hubOnPage,
+  hubsToRead,
   invoiceOnPage,
   invoicePath,
   invoicesToRead,
@@ -574,4 +576,35 @@ test("a pull that read invoices says what they turned out to be", () => {
   });
   assert.match(out, /1 of 1 invoice\(s\) read/);
   assert.match(out, /\$40\.71 of \$140\.40 was tolls/);
+});
+
+test("the invoice hub a page is showing is read off its url", () => {
+  assert.equal(hubOnPage("https://turo.com/us/en/reservation/59077848/invoice-hub"), "59077848");
+  assert.equal(hubOnPage("https://turo.com/us/en/reservation/59077848"), null);
+  assert.equal(hubOnPage("https://turo.com.evil.example/reservation/1/invoice-hub"), null);
+  assert.equal(hubOnPage("nope"), null);
+});
+
+test("hubs are read once each, the open one first", () => {
+  const page = "https://turo.com/us/en/reservation/59077848/invoice-hub";
+  assert.deepEqual(hubsToRead(["111", "59077848"], page), ["59077848", "111"]);
+  assert.deepEqual(hubsToRead(undefined, undefined), []);
+  // Only ever digits, because each becomes a path.
+  assert.deepEqual(hubsToRead(["1/../x", "222"], undefined), ["222"]);
+});
+
+test("a pull that read hubs says how many invoices they listed", () => {
+  const base = {
+    seen: 1, unparsed: 0, matched: 1, created: 0,
+    itemised: ["59077848: none of $140.40 was tolls"],
+    tolls_asked: 0, tolls_recovered: 0, statuses: [], asked: 1, failed: 0,
+  };
+  const out = describePull({ ...EMPTY, asked: 57, stored: 57, invoices: { ...base, hubs: 12, listed: 20 } });
+  assert.match(out, /12 invoice hub\(s\) listing 20 invoice\(s\)/);
+  assert.match(out, /none of \$140\.40 was tolls/);
+  const quiet = describePull({
+    ...EMPTY, asked: 57, stored: 57,
+    invoices: { ...base, itemised: [], seen: 0, asked: 0, hubs: 12, listed: 20 },
+  });
+  assert.match(quiet, /12 invoice hub\(s\) read, nothing new on them/);
 });

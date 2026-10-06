@@ -215,7 +215,11 @@ def apply_turo_invoice(
         result.created += 1
     else:
         result.matched += 1
-        row.turo_invoice_id = row.turo_invoice_id or invoice.invoice_id
+        # Turo's invoice id, even over the reimbursement id the extension's own
+        # filing recorded. It is the id the invoice hub lists, so keeping it
+        # is what stops every pull from reading this invoice again — and what
+        # lets the mail's row for it land here instead of beside it.
+        row.turo_invoice_id = invoice.invoice_id
         row.last_seen_at = now
 
     had_toll_line = row.toll_cents is not None
@@ -293,12 +297,89 @@ def wanted_invoices(session: Session, *, limit: int = 40) -> list[tuple[str, str
     ).all()
     out: list[tuple[str, str]] = []
     for row in rows:
-        labels = [entry[0] for entry in row.lines or [] if isinstance(entry, list) and entry]
         # An invoice that itemised and named no tolls has already answered.
-        if labels and not any(isinstance(label, str) and names_tolls(label) for label in labels):
+        if not _unanswered(row):
             continue
         if row.turo_invoice_id:
             out.append((row.reservation_id, row.turo_invoice_id))
         if len(out) >= limit:
             break
+    return out
+
+
+@dataclass(frozen=True)
+class HubInvoice:
+    invoice_id: str
+    status: str | None
+    title: str | None
+
+
+def parse_hub(body: Mapping[str, Any]) -> list[HubInvoice] | None:
+    """The invoices `/api/reservations/<id>/invoice-hub` lists, or None.
+
+    Observed on 59077848 as ``sections: [{type: RESOLVED, invoices: [{invoiceId,
+    amount, status: PAID, title, type: INCIDENTAL, ...}]}]``. Only the ids are
+    relied on: the breakdown comes from each invoice's own page, and the hub's
+    amounts are integers where the invoice page's are dollars, which is a unit
+    nobody has confirmed.
+    """
+    sections = body.get("sections")
+    if not isinstance(sections, list):
+        return None
+    found: list[HubInvoice] = []
+    for section in sections:
+        if not isinstance(section, Mapping):
+            continue
+        invoices = section.get("invoices")
+        if not isinstance(invoices, list):
+            continue
+        for entry in invoices:
+            if not isinstance(entry, Mapping):
+                continue
+            invoice_id = _id(entry.get("invoiceId"))
+            if invoice_id is None:
+                continue
+            status, title = entry.get("status"), entry.get("title")
+            found.append(
+                HubInvoice(
+                    invoice_id=invoice_id,
+                    status=status if isinstance(status, str) else None,
+                    title=title if isinstance(title, str) else None,
+                )
+            )
+    return found
+
+
+def _unanswered(row: ReimbursementInvoice) -> bool:
+    """Whether a row still cannot say how much of it was tolls."""
+    if row.toll_cents is not None:
+        return False
+    labels = [entry[0] for entry in row.lines or [] if isinstance(entry, list) and entry]
+    return not labels or any(isinstance(label, str) and names_tolls(label) for label in labels)
+
+
+def hub_to_read(
+    session: Session, reservation_id: str, listed: list[HubInvoice]
+) -> list[tuple[str, str]]:
+    """Which of a hub's invoices are worth fetching.
+
+    One this app has no row for, under Turo's invoice id — which includes one
+    the mail only ever showed as a total, since that row has no id — and one
+    whose row still cannot say what share was tolls. An invoice already
+    answered is not fetched again on every pull.
+    """
+    known = {
+        row.turo_invoice_id: row
+        for row in session.scalars(
+            select(ReimbursementInvoice).where(
+                ReimbursementInvoice.reservation_id == reservation_id,
+                ReimbursementInvoice.turo_invoice_id.is_not(None),
+            )
+        )
+    }
+    out: list[tuple[str, str]] = []
+    for invoice in listed:
+        row = known.get(invoice.invoice_id)
+        if row is None or _unanswered(row):
+            out.append((reservation_id, invoice.invoice_id))
     return out

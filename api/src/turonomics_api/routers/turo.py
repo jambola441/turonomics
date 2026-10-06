@@ -36,6 +36,8 @@ from turonomics_api.ingest.turo_detail import (
 from turonomics_api.ingest.turo_invoice import (
     TuroInvoiceResult,
     apply_turo_invoice,
+    hub_to_read,
+    parse_hub,
     parse_turo_invoice,
     wanted_invoices,
 )
@@ -60,6 +62,7 @@ class WantedResponse(BaseModel):
     # pairs, and where Turo's invoice page reads one from.
     invoices: list[list[str]] = []
     invoice_path: str = "/api/v2/reservations/{id}/reimbursement/invoice/{invoice}"
+    hub_path: str = "/api/reservations/{id}/invoice-hub"
 
 
 class DetailsIn(BaseModel):
@@ -78,6 +81,8 @@ class DetailsResponse(BaseModel):
     # Crossings that found a rental once the times moved, and invoices that
     # could be reconciled as a result.
     tolls_rematched: int
+    # Reservations whose invoice hub is worth reading, because Turo offers it.
+    invoice_hubs: list[str] = []
     # One line per rental saying where Turo's gracePeriodEnd actually falls.
     # Here rather than in a log because the answer decides whether the toll
     # matcher can stop guessing, and a log line is easy to miss.
@@ -126,6 +131,7 @@ def post_details(
     now = datetime.now(UTC)
     result = DetailResult()
     unparsed = 0
+    hubs: list[str] = []
     for body in payload.details:
         detail = parse_detail(body)
         if detail is None:
@@ -134,6 +140,8 @@ def post_details(
             unparsed += 1
             continue
         apply_detail(session, detail, now=now, result=result)
+        if detail.has_invoices:
+            hubs.append(detail.reservation_id)
     session.flush()
 
     # Only when something moved. Re-running attribution is cheap but it is not
@@ -168,6 +176,7 @@ def post_details(
         retimed=result.retimed,
         wrong_plate=result.wrong_plate,
         tolls_rematched=rematched,
+        invoice_hubs=hubs,
         grace_periods=describe_grace_periods(session),
     )
 
@@ -242,3 +251,56 @@ def post_invoices(
         tolls_recovered=result.tolls_recovered,
         statuses=result.statuses,
     )
+
+
+class HubIn(BaseModel):
+    reservation_id: str
+    body: dict[str, Any]
+
+
+class HubsIn(BaseModel):
+    hubs: list[HubIn]
+
+
+class HubsResponse(BaseModel):
+    seen: int
+    unparsed: int
+    # Every invoice the hubs listed, and the ones worth fetching, as
+    # [reservation, invoice] pairs.
+    listed: int
+    to_read: list[list[str]]
+
+
+@router.post("/hubs", response_model=HubsResponse)
+def post_hubs(
+    payload: HubsIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> HubsResponse:
+    """Which invoices to read, from the hubs that list them.
+
+    A read, really, but behind the token like the other pull endpoints: it is
+    only ever called by the pull, and it is sent Turo's bodies.
+    """
+    require_token(authorization)
+    seen = unparsed = listed = 0
+    to_read: list[list[str]] = []
+    for item in payload.hubs:
+        invoices = parse_hub(item.body)
+        if invoices is None:
+            unparsed += 1
+            continue
+        seen += 1
+        listed += len(invoices)
+        to_read.extend(
+            [reservation, invoice]
+            for reservation, invoice in hub_to_read(session, item.reservation_id, invoices)
+        )
+    log.info(
+        "turo hubs: %d read, %d unparsed, %d invoice(s) listed, %d to read",
+        seen,
+        unparsed,
+        listed,
+        len(to_read),
+    )
+    return HubsResponse(seen=seen, unparsed=unparsed, listed=listed, to_read=to_read)

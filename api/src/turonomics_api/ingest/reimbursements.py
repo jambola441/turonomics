@@ -79,6 +79,16 @@ def record_invoice(
             ReimbursementInvoice.fingerprint == parsed.fingerprint
         )
     )
+    if invoice is None and parsed.turo_invoice_id:
+        # Read off Turo's invoice page before the mail arrived, or filed by
+        # the extension and since matched to its invoice id. Either way it is
+        # this invoice, and a second row for it would count the money twice.
+        invoice = session.scalar(
+            select(ReimbursementInvoice).where(
+                ReimbursementInvoice.reservation_id == parsed.reservation_id,
+                ReimbursementInvoice.turo_invoice_id == parsed.turo_invoice_id,
+            )
+        )
     is_new = False
     if invoice is None:
         invoice = ReimbursementInvoice(

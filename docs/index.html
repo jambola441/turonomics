@@ -3,34 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0e171e" />
   <title>Turonomics — Turo EZPass Toll Reconciliation</title>
+  <link rel="stylesheet" href="uniform.css">
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
   <style>
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
     :root {
-      --bg: #f8f9fa;
-      --surface: #ffffff;
-      --surface2: #f1f3f5;
-      --border: #dee2e6;
-      --primary: #1971c2;
-      --primary-hover: #1864ab;
-      --primary-light: #e7f5ff;
-      --success: #2f9e44;
-      --success-light: #ebfbee;
-      --warning: #e67700;
-      --warning-light: #fff9db;
-      --danger: #c92a2a;
-      --danger-light: #fff5f5;
-      --text: #212529;
-      --text-muted: #868e96;
-      --text-light: #495057;
-      --radius: 8px;
-      --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
-      --shadow-md: 0 4px 6px rgba(0,0,0,.07), 0 2px 4px rgba(0,0,0,.06);
+      --bg: var(--u-bg);
+      --surface: var(--u-surface);
+      --surface2: var(--u-surface-2);
+      --border: var(--u-line);
+      --primary: var(--u-link);
+      --primary-hover: var(--u-fg);
+      --primary-light: var(--u-surface-2);
+      --success: var(--u-green);
+      --success-light: var(--u-ok-bg);
+      --warning: var(--u-amber);
+      --warning-light: var(--u-warn-bg);
+      --danger: var(--u-red);
+      --danger-light: var(--u-err-bg);
+      --text: var(--u-fg);
+      --text-muted: var(--u-dim);
+      --text-light: var(--u-muted);
+      --radius: var(--u-radius-lg);
+      --shadow: none;
+      --shadow-md: none;
     }
 
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-family: var(--u-font-sans);
       background: var(--bg);
       color: var(--text);
       line-height: 1.5;
@@ -51,19 +54,7 @@
       align-items: center;
       gap: 1rem;
     }
-    .logo {
-      width: 40px;
-      height: 40px;
-      background: var(--primary);
-      border-radius: var(--radius);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: #fff;
-      font-size: 1.25rem;
-      flex-shrink: 0;
-    }
-    .header-text h1 { font-size: 1.25rem; font-weight: 700; }
+    .header-text h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; }
     .header-text p { font-size: 0.8rem; color: var(--text-muted); margin-top: 1px; }
 
     main {
@@ -112,7 +103,7 @@
     textarea {
       width: 100%;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--u-radius-md);
       padding: 0.5rem 0.75rem;
       font-size: 0.875rem;
       font-family: inherit;
@@ -123,9 +114,9 @@
     }
     input[type="url"]:focus,
     input[type="text"]:focus,
-    textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(25,113,194,.15); }
+    textarea:focus { border-color: var(--primary); outline: 2px solid var(--u-link); outline-offset: 1px; }
 
-    textarea { resize: vertical; min-height: 100px; font-family: "Menlo", "Consolas", monospace; font-size: 0.8rem; }
+    textarea { resize: vertical; min-height: 100px; font-family: var(--u-font-mono); font-size: 0.8rem; }
 
     /* ── Drop zones ── */
     .uploads-grid {
@@ -173,7 +164,7 @@
       gap: 0.5rem;
       padding: 0.6rem 1.25rem;
       border: none;
-      border-radius: 6px;
+      border-radius: var(--u-radius-md);
       font-size: 0.875rem;
       font-weight: 600;
       cursor: pointer;
@@ -181,7 +172,7 @@
       font-family: inherit;
     }
     .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .btn-primary { background: var(--primary); color: #fff; }
+    .btn-primary { background: var(--primary); color: var(--u-on-accent); }
     .btn-primary:hover:not(:disabled) { background: var(--primary-hover); }
     .btn-sm { padding: 0.35rem 0.75rem; font-size: 0.8rem; }
     .btn-ghost { background: transparent; color: var(--text-muted); border: 1px solid var(--border); }
@@ -197,8 +188,8 @@
     /* ── Spinner ── */
     .spinner {
       width: 18px; height: 18px;
-      border: 2px solid rgba(255,255,255,.4);
-      border-top-color: #fff;
+      border: 2px solid color-mix(in srgb,var(--u-on-accent) 35%,transparent);
+      border-top-color: var(--u-on-accent);
       border-radius: 50%;
       animation: spin .7s linear infinite;
       display: none;
@@ -215,8 +206,8 @@
       display: none;
     }
     .banner.visible { display: block; }
-    .banner-error { background: var(--danger-light); color: var(--danger); border: 1px solid #ffc9c9; }
-    .banner-info { background: var(--primary-light); color: var(--primary); border: 1px solid #a5d8ff; }
+    .banner-error { background: var(--danger-light); color: var(--danger); border: 1px solid var(--u-err-line); }
+    .banner-info { background: var(--primary-light); color: var(--primary); border: 1px solid var(--u-line-strong); }
 
     /* ── Results ── */
     #results { display: none; }
@@ -260,15 +251,15 @@
     }
     .trip-header:hover { background: var(--surface2); }
     .trip-meta { flex: 1; display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
-    .trip-id { font-size: 0.75rem; color: var(--text-muted); font-family: monospace; }
+    .trip-id { font-size: 0.75rem; color: var(--text-muted); font-family: var(--u-font-mono); }
     .plate-badge {
       background: var(--surface2);
       border: 1px solid var(--border);
-      border-radius: 4px;
+      border-radius: var(--u-radius-sm);
       padding: 0.15rem 0.5rem;
       font-size: 0.75rem;
       font-weight: 600;
-      font-family: monospace;
+      font-family: var(--u-font-mono);
       letter-spacing: .05em;
     }
     .trip-dates { font-size: 0.8rem; color: var(--text-light); }
@@ -325,7 +316,7 @@
     /* ── Unmatched tolls ── */
     .unmatched-header {
       background: var(--warning-light);
-      border-bottom: 1px solid #ffe8cc;
+      border-bottom: 1px solid var(--u-warn-line);
       padding: 0.75rem 1.125rem;
       font-size: 0.85rem;
       font-weight: 600;
@@ -357,7 +348,7 @@
     select {
       width: 100%;
       border: 1px solid var(--border);
-      border-radius: 6px;
+      border-radius: var(--u-radius-md);
       padding: 0.5rem 0.75rem;
       font-size: 0.875rem;
       font-family: inherit;
@@ -367,7 +358,7 @@
       outline: none;
       cursor: pointer;
     }
-    select:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(25,113,194,.15); }
+    select:focus { border-color: var(--primary); outline: 2px solid var(--u-link); outline-offset: 1px; }
 
     /* ── Misc ── */
     .field-group { margin-bottom: 1rem; }
@@ -381,7 +372,7 @@
       color: var(--text-muted);
       margin-bottom: 0.75rem;
     }
-    .mono { font-family: monospace; }
+    .mono { font-family: var(--u-font-mono); }
 
     /* ── Footer ── */
     footer {
@@ -448,9 +439,8 @@
 
 <header>
   <div class="header-inner">
-    <div class="logo">🚗</div>
     <div class="header-text">
-      <h1>Turonomics</h1>
+      <h1>Turonomics<span class="u-dot">.</span></h1>
       <p>Match NY EZPass toll transactions to Turo rental trips</p>
     </div>
   </div>
@@ -461,7 +451,7 @@
   <!-- API Config -->
   <div class="card">
     <div class="card-header">
-      <h2>⚙️ API Configuration</h2>
+      <h2>API configuration</h2>
     </div>
     <div class="card-body">
       <div class="field-group">
@@ -498,7 +488,7 @@
   <!-- Upload -->
   <div class="card">
     <div class="card-header">
-      <h2>📁 Upload Files</h2>
+      <h2>Upload files</h2>
     </div>
     <div class="card-body">
       <div class="uploads-grid">
@@ -564,7 +554,7 @@
     <!-- Trips -->
     <div class="card" id="trips-card">
       <div class="card-header">
-        <h2>🗺️ Trips</h2>
+        <h2>Trips</h2>
       </div>
       <div id="trips-list" style="padding: 1rem; display: flex; flex-direction: column; gap: .75rem;"></div>
     </div>

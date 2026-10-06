@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0d0f12">
+<meta name="theme-color" content="#0e171e">
 <!-- The API is a separate service on a separate origin. Override for local
      work with ?api=http://127.0.0.1:8000 -->
 <meta name="turonomics-api" content="https://turonomics.onrender.com">
@@ -15,19 +15,14 @@
 <link rel="apple-touch-icon" href="icons/icon-180.png">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="vendor/leaflet.css">
+<link rel="stylesheet" href="../uniform.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  :root{
-    --bg:#0d0f12; --surface:#16191d; --surface2:#1d2126; --border:#2a2f36; --border2:#3a4048;
-    --text:#f0f2f4; --muted:#98a1ab; --dim:#8a939d;
-    --red:#ff6259; --amber:#f5a524; --green:#3ddc97; --blue:#5aa2f5;
-    --mono:"IBM Plex Mono",ui-monospace,monospace;
-  }
   html,body{height:100%}
   body{
-    font-family:"Archivo","Helvetica Neue",Helvetica,sans-serif;
+    font-family:var(--u-font-sans);
     background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
     display:flex; flex-direction:column; overflow:hidden;
     padding-top:env(safe-area-inset-top,0px);
@@ -39,8 +34,8 @@
   .legend{display:flex;gap:14px;flex-wrap:wrap;margin-top:10px}
   .legend div{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
   .dot{width:7px;height:7px;border-radius:50%}
-  #map{flex:1;min-height:0;background:#101317}
-  .leaflet-container{background:#101317;font-family:inherit}
+  #map{flex:1;min-height:0;background:var(--u-map)}
+  .leaflet-container{background:var(--u-map);font-family:inherit}
   .name[data-focus]{cursor:pointer}
   .name[data-focus]:hover{text-decoration:underline;text-underline-offset:3px}
   .chip{cursor:pointer}
@@ -51,7 +46,7 @@
   body.invert-tiles .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   /* Leaflet's controls ship light and glare against a dark map. */
   .leaflet-control-attribution{
-    background:rgba(13,15,18,.82)!important;color:var(--dim)!important;
+    background:color-mix(in srgb,var(--bg) 82%,transparent)!important;color:var(--dim)!important;
     font-size:10px;padding:2px 6px;backdrop-filter:blur(4px)}
   .leaflet-control-attribution a{color:var(--muted)!important}
   .leaflet-control-attribution svg{display:none}
@@ -71,46 +66,46 @@
   .grab{width:34px;height:3px;border-radius:2px;background:var(--border2);align-self:center;flex-shrink:0}
   .chips{display:flex;gap:7px;flex-wrap:wrap}
   .chip{flex:1 1 0;min-width:64px;min-height:44px;display:flex;align-items:center;justify-content:center;
-        border-radius:9px;font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.04em;
+        border-radius:var(--u-radius-md);font-family:var(--mono);font-size:13px;font-weight:600;letter-spacing:.04em;
         border:1px solid var(--border);background:var(--surface2);cursor:pointer}
   .name{font-size:19px;font-weight:600;letter-spacing:-.01em}
   .plate{font-family:var(--mono);font-size:11px;color:var(--dim);
-         background:var(--surface2);border:1px solid var(--border);border-radius:5px;padding:4px 7px}
+         background:var(--surface2);border:1px solid var(--border);border-radius:var(--u-radius-sm);padding:4px 7px}
   .where{font-size:13px;color:var(--muted);line-height:1.4}
   .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
   .stat{display:flex;flex-direction:column;gap:4px;padding:10px 11px;background:var(--surface2);
-        border:1px solid var(--border);border-radius:9px;min-width:0}
+        border:1px solid var(--border);border-radius:var(--u-radius-md);min-width:0}
   .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
   .stat .v{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em}
-  .note{font-size:12.5px;line-height:1.45;padding:10px 12px;border-radius:9px}
-  .ask{display:flex;flex-direction:column;gap:9px;padding:14px;border-radius:11px;
+  .note{font-size:12.5px;line-height:1.45;padding:10px 12px;border-radius:var(--u-radius-md)}
+  .ask{display:flex;flex-direction:column;gap:9px;padding:14px;border-radius:var(--u-radius-lg);
        background:var(--surface2);border:1px solid var(--border)}
   .ask h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
-          text-transform:uppercase;color:var(--amber,#f5a524);font-weight:600}
+          text-transform:uppercase;color:var(--amber);font-weight:600}
   .ask p{font-size:12.5px;color:var(--muted);line-height:1.45}
   .side{display:flex;align-items:center;gap:12px;min-height:56px;padding:11px 13px;
-        border-radius:10px;background:var(--surface);border:1px solid var(--border2);
+        border-radius:var(--u-radius-lg);background:var(--surface);border:1px solid var(--border2);
         cursor:pointer;text-align:left;width:100%;font:inherit;color:inherit;
         transition:border-color .12s ease,background .12s ease}
-  .side:hover{border-color:var(--green);background:#1b2a23}
-  .side:active{background:#22332b}
+  .side:hover{border-color:var(--green);background:var(--u-ok-bg)}
+  .side:active{background:var(--u-ok-bg)}
   .side:disabled{opacity:.5;cursor:default}
   .side .s-name{font-size:15px;font-weight:600;letter-spacing:-.005em}
   .side .s-meta{font-family:var(--mono);font-size:11.5px;color:var(--dim);margin-top:3px}
   .side .s-tag{font-size:11px;color:var(--green);margin-top:3px}
   .muted{color:var(--muted)}
   .empty{padding:40px 20px;text-align:center;color:var(--muted);font-size:14px;line-height:1.5}
-  .err{margin:12px 20px;padding:12px 14px;border-radius:9px;background:#1a1214;
-       border:1px solid #4a2a29;color:var(--red);font-size:13px;line-height:1.45}
+  .err{margin:12px 20px;padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);
+       border:1px solid var(--u-err-line);color:var(--red);font-size:13px;line-height:1.45}
   .where-btn{align-self:flex-start;font:inherit;font-size:12px;font-weight:600;color:var(--green);
-       background:none;border:1px solid #2b4a3c;border-radius:8px;padding:7px 12px;cursor:pointer}
-  .where-btn:hover{background:#15241d}
+       background:none;border:1px solid var(--u-ok-line);border-radius:var(--u-radius-md);padding:7px 12px;cursor:pointer}
+  .where-btn:hover{background:var(--u-ok-bg)}
   .where-btn:disabled{opacity:.5;cursor:default}
   .spots{display:flex;flex-direction:column;gap:7px}
   .spots h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;
        text-transform:uppercase;color:var(--green);font-weight:600;padding:2px}
   .spots .caveat{font-size:11.5px;color:var(--dim);line-height:1.45;padding:0 2px}
-  .spot{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:10px;
+  .spot{display:flex;align-items:center;gap:11px;padding:10px 12px;border-radius:var(--u-radius-lg);
         background:var(--surface);border:1px solid var(--border2)}
   .spot .s-name{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
   .spot .s-between{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px;
@@ -118,13 +113,13 @@
   .spot .s-free{font-family:var(--mono);font-size:11.5px;color:var(--green);margin-top:3px}
   .spot .s-far{font-family:var(--mono);font-size:11px;color:var(--dim);flex-shrink:0}
   .tasks{display:flex;flex-direction:column;gap:7px}
-  .task{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;border-radius:10px;
+  .task{display:flex;align-items:flex-start;gap:11px;padding:11px 12px;border-radius:var(--u-radius-lg);
         background:var(--surface2);border:1px solid var(--border);text-align:left;
         width:100%;font:inherit;color:inherit;cursor:pointer;
         transition:border-color .12s ease,opacity .15s ease}
   .task:hover{border-color:var(--green)}
   .task:disabled{opacity:.45;cursor:default}
-  .task .box{width:20px;height:20px;border-radius:6px;border:1.6px solid var(--border2);
+  .task .box{width:20px;height:20px;border-radius:var(--u-radius-sm);border:1.6px solid var(--border2);
         flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center}
   .task:hover .box{border-color:var(--green)}
   .task .t-title{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
@@ -135,7 +130,7 @@
   .undo{align-self:flex-start;font:inherit;font-size:11.5px;color:var(--muted);
         background:none;border:none;padding:4px 0;cursor:pointer;text-decoration:underline;
         text-underline-offset:3px}
-  .note-guest{display:flex;flex-direction:column;gap:7px;padding:11px 13px;border-radius:10px;
+  .note-guest{display:flex;flex-direction:column;gap:7px;padding:11px 13px;border-radius:var(--u-radius-lg);
        background:var(--surface2);border:1px solid var(--border);border-left:3px solid var(--blue)}
   .note-guest .g-who{font-family:var(--mono);font-size:10px;letter-spacing:.09em;
        text-transform:uppercase;color:var(--dim)}
@@ -143,9 +138,9 @@
   .notes{display:flex;flex-direction:column;gap:8px}
   .bell{font:inherit;font-size:11.5px;color:var(--muted);cursor:pointer;
         display:flex;align-items:center;gap:6px;min-height:32px;padding:5px 10px;
-        border-radius:8px;border:1px solid var(--border);background:var(--surface2)}
+        border-radius:var(--u-radius-md);border:1px solid var(--border);background:var(--surface2)}
   .bell:hover{border-color:var(--border2);color:var(--text)}
-  .bell[data-state="on"]{color:var(--green);border-color:#2b4a3c}
+  .bell[data-state="on"]{color:var(--green);border-color:var(--u-ok-line)}
   .bell:disabled{opacity:.55;cursor:default}
   @media(min-width:900px){.sheet{max-height:40vh}}
 </style>
@@ -153,7 +148,7 @@
 <body>
   <header>
     <div class="row">
-      <h1>Fleet</h1>
+      <h1>Fleet<span class="u-dot">.</span></h1>
       <div class="row" style="gap:10px">
         <button type="button" class="bell" id="alerts" hidden></button>
         <div class="stamp" id="stamp">loading…</div>
@@ -181,7 +176,7 @@
 (function () {
   "use strict";
 
-  var COLORS = { red: "#ff6259", amber: "#f5a524", green: "#3ddc97", blue: "#5aa2f5", dim: "#8a939d" };
+  var COLORS = { red: "#e3654d", amber: "#f0b240", green: "#4fd49a", blue: "#8fc3d9", dim: "#8797a2" };
 
   // The UI is a static site and the API is a separate service, so the base URL
   // is configuration rather than an assumption. A ?api= override keeps local
@@ -388,7 +383,7 @@
 
     var chips = fleet.vehicles.map(function (x) {
       var xc = COLORS[tone(x)], on = x.id === v.id;
-      return '<div class="chip" data-id="' + x.id + '" style="color:' + (on ? "#0d0f12" : xc) +
+      return '<div class="chip" data-id="' + x.id + '" style="color:' + (on ? "#0e171e" : xc) +
              ";background:" + (on ? xc : "var(--surface2)") + ";border-color:" + (on ? xc : "var(--border)") + '">' +
              esc(initials(x.nickname)) + "</div>";
     }).join("");

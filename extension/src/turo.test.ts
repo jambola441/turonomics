@@ -461,3 +461,35 @@ test("an api version survives in a route", () => {
     "https://turo.com/api/<str(9)>/x"
   );
 });
+
+test("a path id is placed against the page's own url", () => {
+  // Which id a route takes is the difference between a filing and a 404, and
+  // a masked report cannot tell an 8-digit reservation id from an 8-digit
+  // reimbursement id. Whether it is the number the operator is looking at is
+  // the distinction that matters, and is not a value.
+  const page = "https://turo.com/us/en/reservation/58426608/reimbursement/request/tolls";
+  assert.match(
+    urlShape("https://turo.com/api/v2/reimbursement/58426608/request", "https://turo.com/", page),
+    /\/api\/v2\/reimbursement\/<digits\(8\)=the one in the page url>\/request$/
+  );
+  // A different id is reported as a plain shape, which is the finding.
+  assert.match(
+    urlShape("https://turo.com/api/v2/reimbursement/77112233/request", "https://turo.com/", page),
+    /\/reimbursement\/<digits\(8\)>\/request$/
+  );
+});
+
+test("placing an id never prints it", () => {
+  const page = "https://turo.com/us/en/reservation/58426608/x";
+  const shaped = urlShape("https://turo.com/api/v2/reimbursement/58426608/request", "https://turo.com/", page);
+  assert.ok(!shaped.includes("58426608"), shaped);
+});
+
+test("a substring of a longer id is not a match", () => {
+  // 5842 appearing inside 58426608 must not read as "the one in the page url".
+  const page = "https://turo.com/us/en/reservation/58426608/x";
+  assert.match(
+    urlShape("https://turo.com/api/v2/reimbursement/5842/request", "https://turo.com/", page),
+    /<digits\(4\)>/
+  );
+});

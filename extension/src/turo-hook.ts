@@ -22,6 +22,8 @@ interface RecordedCall {
   body: unknown;
   /** What was *sent*. For a filing POST this is the whole point. */
   request?: unknown;
+  /** The page it was made from, so an id in the path can be placed. */
+  page?: string;
 }
 
 (() => {
@@ -94,6 +96,7 @@ interface RecordedCall {
       status,
       body: parsed(text),
       request: request ?? null,
+      page: location.href,
     });
   };
 

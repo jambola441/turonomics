@@ -20,6 +20,7 @@ interface Recorded {
   status: number;
   body: unknown;
   request: unknown;
+  page?: string;
 }
 
 type FakeWindow = {
@@ -79,6 +80,7 @@ test("and the call is recorded", async () => {
     status: 200,
     body: { status: "CHARGED" },
     request: null,
+    page: "https://turo.com/trips",
   });
 });
 

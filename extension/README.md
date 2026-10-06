@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.7.3 | build + reload | the probe says whether an id in a path is the one in the page URL |
 | 1.7.2 | build + reload | reads the API path from the page, and names it when a call fails |
 | 1.7.0 | build + reload | files a toll invoice end to end; new "File the next toll invoice" button |
 | 1.6.2 | build + reload | the probe stops masking its own file descriptors |

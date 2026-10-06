@@ -75,7 +75,21 @@ export function stringShape(value: string): string {
  * two first-party endpoints on the page were the only two whose route was
  * thrown away.
  */
-export function urlShape(raw: string, base = "https://turo.com/"): string {
+/**
+ * A numeric path segment, said to be the one already in the page's own URL.
+ *
+ * Which id a route takes is the difference between a filing and a 404, and a
+ * masked report cannot tell an eight-digit reservation id from an eight-digit
+ * reimbursement id. It can say whether the number is the one the operator is
+ * looking at, which is the distinction that matters and is not a value.
+ */
+function placed(segment: string, page: string | undefined): string | null {
+  if (!page || !/^\d+$/.test(segment)) return null;
+  const inPage = new RegExp(`(?:^|[/?=&-])${segment}(?:$|[/?=&-])`).test(page);
+  return inPage ? `<digits(${segment.length})=the one in the page url>` : null;
+}
+
+export function urlShape(raw: string, base = "https://turo.com/", page?: string): string {
   let url: URL;
   try {
     url = new URL(raw, base);
@@ -93,7 +107,7 @@ export function urlShape(raw: string, base = "https://turo.com/"): string {
       // looks like.
       /^[a-z][a-z-]*$/.test(segment) || /^v\d{1,3}$/.test(segment)
         ? segment
-        : `<${stringShape(segment)}>`
+        : (placed(segment, page) ?? `<${stringShape(segment)}>`)
     )
     .join("/");
   const keys = [...new Set([...url.searchParams.keys()])].sort();
@@ -159,6 +173,8 @@ export interface SeenCall {
    * none of them could say how an invoice is filed.
    */
   request?: unknown;
+  /** The page the call was made from. */
+  page?: string;
 }
 
 // Only Turo's own backend. Everything else on the page is somebody's
@@ -222,7 +238,7 @@ export function summariseCalls(calls: SeenCall[]): string {
   }
   const byRoute = new Map<string, SeenCall>();
   for (const call of interesting) {
-    const key = `${call.method} ${urlShape(call.url)}`;
+    const key = `${call.method} ${urlShape(call.url, "https://turo.com/", call.page)}`;
     // Keep the first that actually carried a body: a 204 or a failed retry on
     // the same route says nothing about the payload.
     const existing = byRoute.get(key);

@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Turonomics",
-  "version": "1.9.0",
-  "description": "Export Turo host trip history, read what Turo's pages fetch, and send an E-ZPass statement to Turonomics",
+  "version": "1.10.0",
+  "description": "Export Turo host trip history, read what Turo's pages fetch, send an E-ZPass statement to Turonomics, and run what the Turonomics site asks for",
   "permissions": [
     "downloads",
     "scripting",
     "tabs",
-    "storage"
+    "storage",
+    "alarms",
+    "offscreen"
   ],
   "host_permissions": [
     "https://turo.com/*",

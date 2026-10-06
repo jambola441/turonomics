@@ -255,6 +255,11 @@ class DraftResponse(BaseModel):
     # The evidence to attach, as SVG. The extension rasterises it: Turo wants
     # an image, and a browser is already the thing holding one.
     evidence_svg: str
+    # Whether the ledger would file this rental, and if not, why not. A draft
+    # is also a preview — the site shows one for any rental — so it is drafted
+    # either way, and the extension refuses to file one that is held.
+    fileable: bool = True
+    held_because: str | None = None
 
 
 def _note(lines: list[InvoiceLine]) -> str:
@@ -624,7 +629,40 @@ def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
         # and a rental whose crossings are all recovered has no invoice to
         # draft rather than an invoice for zero.
         raise HTTPException(status_code=404, detail="no outstanding crossings on that rental")
-    return _draft(session, invoice, now, window)
+    out = _draft(session, invoice, now, window)
+    held = hold_reason(session, invoice, now=now, window=window)
+    out.fileable = held is None
+    out.held_because = held
+    return out
+
+
+def hold_reason(
+    session: Session, invoice: Invoice, *, now: datetime, window: int
+) -> str | None:
+    """Why the ledger would not file this rental, or None if it would.
+
+    The same rule next-draft applies, for a rental somebody picked by hand —
+    from the site's File button, which must not be a way around it.
+    """
+    asked = _reimbursements(session, [invoice.trip_id]).get(invoice.trip_id) or []
+    tally = _tally(session, invoice, asked, window=window, now=now)
+    if tally.state not in _FILEABLE:
+        return tally.note or tally.state
+    if tally.left is None:
+        return "off-platform, so there is nothing to file on Turo"
+    if not _unfiled(session, invoice):
+        return "every crossing on it has been asked for"
+    return None
+
+
+def fileable_invoice(session: Session, trip_id: uuid.UUID) -> tuple[Invoice | None, str | None]:
+    """The rental's invoice and why it cannot be filed, for a caller outside."""
+    now = datetime.now(UTC)
+    window = toll_filing_window_days()
+    invoice = next((i for i in build_invoices(session, now=now) if i.trip_id == trip_id), None)
+    if invoice is None:
+        return None, "no outstanding crossings on that rental"
+    return invoice, hold_reason(session, invoice, now=now, window=window)
 
 
 class FiledIn(BaseModel):

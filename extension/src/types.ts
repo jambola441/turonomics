@@ -90,6 +90,18 @@ export interface Draft {
   days_left: number | null;
   can_file: boolean;
   evidence_svg: string;
+  /** Whether the ledger would file it; a per-rental draft may be held back. */
+  fileable?: boolean;
+  held_because?: string | null;
+}
+
+/** A command the site queued, as the API hands it over when claimed. */
+export interface SiteCommand {
+  id: string;
+  kind: string;
+  trip_id: string | null;
+  turo_trip_id: string | null;
+  guest_name: string | null;
 }
 
 export interface FileInvoiceResult {
@@ -103,6 +115,7 @@ export interface FileInvoiceResult {
 }
 
 export type MessageType =
+  | { type: "COMMANDS_TICK" }
   | { type: "SCRAPE_TRIPS" }
   | { type: "TRIPS_RESULT"; trips: TuroTrip[]; error?: never }
   | { type: "TRIPS_ERROR"; error: string; trips?: never }

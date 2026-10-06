@@ -310,6 +310,30 @@ charged. An invoice the mail never saw is recorded as filed, not charged,
 because `reimbursementStatus` has not yet been read unmasked; the response
 reports every status it sees until it has.
 
+## Driving it from the site
+
+The site cannot call Turo; only the operator's browser holds the session. So
+the invoices page queues commands — **Pull from Turo**, and **File** on a
+ledger row — at `POST /api/commands`, and the extension runs them:
+
+* An offscreen document (`extension/offscreen.html`) pings the service worker
+  every five seconds, which keeps it awake and makes it ask
+  `POST /api/commands/claim` for work. A thirty-second alarm sits behind it
+  and recreates the document if Chrome closes it.
+* A claim takes the oldest queued command under a row lock that skips locked
+  rows, so two browsers never run one. It is also the check-in the site reads
+  to say whether an extension is listening.
+* The command runs in an open Turo tab, or a background one opened for it and
+  closed after. The answer goes to `POST /api/commands/<id>/done` — the same
+  one line the popup would show.
+
+Filing from the site follows the ledger's rule twice: a File command is only
+queued for a rental next-draft would file, and the extension checks the
+draft's `fileable` again when it runs. A second click while one is waiting
+returns the same command. A filing claimed and never answered is marked
+abandoned after ten minutes and never re-run: it may have filed and lost its
+answer, and running it again would ask the guest twice.
+
 ## What this does not answer
 
 - Whether a check-out *time* (as opposed to an odometer reading) is in the

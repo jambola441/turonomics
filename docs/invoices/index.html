@@ -54,6 +54,18 @@
   .ledger-state.tobill{color:var(--amber)}
   .ledger-state.expired{color:var(--dim)}
   .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
+  .ledger-table .btn{font-size:11px;padding:3px 9px;margin-top:5px}
+  .remote{margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
+  .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
+  .remote-status{font-size:12.5px;color:var(--muted)}
+  .remote-status.on{color:var(--green)}
+  .remote-log{list-style:none;margin:10px 0 0;padding:0;font-size:12px}
+  .remote-log li{padding:5px 0;border-top:1px solid var(--line);line-height:1.45}
+  .remote-log .st{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
+                  text-transform:uppercase;margin-right:6px;color:var(--dim)}
+  .remote-log .st.running,.remote-log .st.queued{color:var(--amber)}
+  .remote-log .st.done{color:var(--green)}
+  .remote-log .st.failed,.remote-log .st.abandoned{color:var(--red)}
   .stat.gone .v{color:var(--red)}
 
   h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
@@ -124,6 +136,17 @@
   </div>
 
   <div class="note" id="look" hidden></div>
+
+  <!-- The site cannot talk to Turo; the extension in the operator's own
+       browser can. A button here queues a command and the extension runs it
+       within a few seconds, if Chrome is open somewhere with it installed. -->
+  <section class="remote" id="remote" hidden>
+    <div class="remote-head">
+      <span class="remote-status" id="remoteStatus">looking for the extension…</span>
+      <button class="btn" id="pullTuro" type="button">Pull from Turo</button>
+    </div>
+    <ol class="remote-log" id="remoteLog"></ol>
+  </section>
 
   <div id="groups"></div>
 
@@ -428,6 +451,16 @@
          row.state.indexOf("check ") === 0 ? "tobill" :
          row.state === "expired" ? "expired" : "");
       state.textContent = row.state;
+      if (row.turo_trip_id && (row.state === "to bill" || row.state === "partly billed") &&
+          row.days_left != null && row.days_left >= 0) {
+        var file = document.createElement("button");
+        file.type = "button";
+        file.className = "btn go";
+        file.textContent = "File " + money(row.unfiled_cents);
+        file.addEventListener("click", function () { queueFiling(row); });
+        state.appendChild(document.createElement("br"));
+        state.appendChild(file);
+      }
       tr.appendChild(state);
       body.appendChild(tr);
     });
@@ -438,6 +471,100 @@
       " · settled " + money(data.recovered_cents);
     el("ledgerWrap").hidden = !(data.rows || []).length;
   }
+
+  // -------------------------------------------------------------------------
+  // Commands for the extension
+  // -------------------------------------------------------------------------
+
+  var remote = { polling: null, active: {} };
+
+  function ago(iso) {
+    var s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000));
+    if (s < 90) return s + "s ago";
+    var m = Math.round(s / 60);
+    if (m < 90) return m + " min ago";
+    return Math.round(m / 60) + " h ago";
+  }
+
+  function renderCommands(data) {
+    el("remote").hidden = false;
+    var status = el("remoteStatus");
+    if (data.listening) {
+      status.className = "remote-status on";
+      status.textContent = "Extension listening" +
+        (data.extension_version ? " (v" + data.extension_version + ")" : "") +
+        " — buttons here run in your browser within a few seconds.";
+    } else {
+      status.className = "remote-status";
+      status.textContent = data.extension_seen_at
+        ? "Extension last seen " + ago(data.extension_seen_at) +
+          " — open Chrome where it is installed, and anything queued will run then."
+        : "No extension has checked in yet — install 1.10.0 or later.";
+    }
+    var log = el("remoteLog");
+    log.textContent = "";
+    var pending = false;
+    var finished = false;
+    (data.commands || []).slice(0, 6).forEach(function (c) {
+      var li = document.createElement("li");
+      var st = document.createElement("span");
+      st.className = "st " + c.state;
+      st.textContent = c.state;
+      li.appendChild(st);
+      var what = c.kind === "pull" ? "Pull from Turo" :
+        "File " + (c.guest_name || "rental") + (c.turo_trip_id ? " · " + c.turo_trip_id : "");
+      li.appendChild(document.createTextNode(what + (c.result ? " — " + c.result : "")));
+      log.appendChild(li);
+      if (c.state === "queued" || c.state === "running") pending = true;
+      // A command seen pending and now finished means the money moved; the
+      // rest of the page is reloaded so it says so.
+      if (remote.active[c.id] && c.state !== "queued" && c.state !== "running") finished = true;
+      remote.active[c.id] = c.state === "queued" || c.state === "running";
+    });
+    if (finished) load();
+    schedule(pending ? 4000 : 30000);
+  }
+
+  function schedule(ms) {
+    if (remote.polling) clearTimeout(remote.polling);
+    remote.polling = setTimeout(loadCommands, ms);
+  }
+
+  function loadCommands() {
+    return fetch(API + "/api/commands")
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) { if (data) renderCommands(data); else schedule(30000); })
+      .catch(function () { schedule(30000); });
+  }
+
+  function queue(body) {
+    if (!ensureToken()) return Promise.resolve();
+    return fetch(API + "/api/commands", {
+      method: "POST",
+      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+      body: JSON.stringify(body)
+    })
+      .then(handleStatus)
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (b) {
+          // 409 is the ledger refusing, and its reason is the useful part.
+          if (!r.ok) throw new Error(b.detail || ("the API said " + r.status));
+          return b;
+        });
+      })
+      .then(function () { return loadCommands(); })
+      .catch(function (e) { fail("Could not queue that: " + e.message); });
+  }
+
+  function queueFiling(row) {
+    if (!window.confirm(
+      "File " + money(row.unfiled_cents) + " of tolls to " + (row.guest_name || "this guest") +
+      " on Turo?\n\nYour browser's extension files it, with the evidence sheet attached."
+    )) return;
+    queue({ kind: "file", trip_id: row.trip_id });
+  }
+
+  el("pullTuro").addEventListener("click", function () { queue({ kind: "pull" }); });
 
   function loadLedger() {
     return fetch(API + "/api/invoices/ledger")
@@ -452,6 +579,7 @@
 
   function load() {
     loadLedger();
+    if (!remote.polling) loadCommands();
     return fetch(API + "/api/invoices")
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);

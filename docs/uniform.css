@@ -1,0 +1,135 @@
+/* Uniform design tokens (https://design.uniformrealestate.com/) for every page.
+
+   Dark is the default and light is opt-in with data-theme="light" on <html>,
+   which is how Uniform itself ships. The pages' own stylesheets keep their
+   short historical names (--bg, --text, --amber ...); those are aliases onto
+   the --u-* tokens here, so a palette change happens in this one file.
+
+   Status colours are not in Uniform's brand palette (it only has signal and
+   lake). They are kept because they carry meaning on these pages -- overdue,
+   billed, paid -- and every one is paired with words or a glyph, never colour
+   alone, per Uniform's tag guidance. */
+
+:root {
+  /* Brand */
+  --u-ink: #14212b;
+  --u-paper: #f3f5f6;
+  --u-slate: #5e6e79;
+  --u-signal: #c8402a;
+  --u-signal-on-dark: #e3654d;
+  --u-lake: #1f5f7a;
+  --u-lake-light: #8fc3d9;
+  --u-night: #0e171e;
+  --u-mist: #9dacb6;
+  --u-rule: #d5dce0;
+  --u-rule-dark: #22313b;
+
+  /* Spacing (4px scale), radii */
+  --u-space-1: 4px;
+  --u-space-2: 8px;
+  --u-space-3: 12px;
+  --u-space-4: 16px;
+  --u-space-5: 24px;
+  --u-space-6: 32px;
+  --u-space-7: 48px;
+  --u-radius-sm: 4px;
+  --u-radius-md: 6px;
+  --u-radius-lg: 10px;
+
+  --u-font-sans: "Public Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --u-font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Theme: dark */
+  --u-bg: var(--u-night);
+  --u-surface: #14212b;
+  --u-surface-2: #1a2a35;
+  --u-fg: var(--u-paper);
+  --u-muted: var(--u-mist);
+  --u-dim: #8797a2;
+  --u-link: var(--u-lake-light);
+  --u-accent: var(--u-signal-on-dark);
+  --u-line: var(--u-rule-dark);
+  --u-line-strong: #31444f;
+  --u-hover: #1a2a35;
+  --u-map: #0b1319;
+
+  --u-red: #e3654d;
+  --u-amber: #f0b240;
+  --u-green: #4fd49a;
+  --u-blue: var(--u-lake-light);
+  --u-ok-bg: #12261f;
+  --u-ok-line: #28513f;
+  --u-warn-bg: #241f12;
+  --u-warn-line: #5a4a20;
+  --u-err-bg: #26151a;
+  --u-err-line: #5c2d2b;
+  --u-on-accent: var(--u-night);
+  --u-shadow: none;
+
+  color-scheme: dark;
+}
+
+:root[data-theme="light"] {
+  --u-bg: var(--u-paper);
+  --u-surface: #ffffff;
+  --u-surface-2: #e9edef;
+  --u-fg: var(--u-ink);
+  --u-muted: var(--u-slate);
+  --u-dim: #5e6e79;
+  --u-link: var(--u-lake);
+  --u-accent: var(--u-signal);
+  --u-line: var(--u-rule);
+  --u-line-strong: #b9c5cc;
+  --u-hover: #e9edef;
+  --u-map: #dfe5e8;
+
+  --u-red: #b0331f;
+  --u-amber: #8a5300;
+  --u-green: #1b6e47;
+  --u-blue: var(--u-lake);
+  --u-ok-bg: #e4f2ea;
+  --u-ok-line: #a9d1bb;
+  --u-warn-bg: #f8efd9;
+  --u-warn-line: #dcc58d;
+  --u-err-bg: #f9e5e1;
+  --u-err-line: #e3b2a9;
+  --u-on-accent: #ffffff;
+
+  color-scheme: light;
+}
+
+/* Short names used by the fleet, tolls and invoices pages. */
+:root {
+  --bg: var(--u-bg);
+  --surface: var(--u-surface);
+  --surface2: var(--u-surface-2);
+  --border: var(--u-line);
+  --border2: var(--u-line-strong);
+  --text: var(--u-fg);
+  --muted: var(--u-muted);
+  --dim: var(--u-dim);
+  --red: var(--u-red);
+  --amber: var(--u-amber);
+  --green: var(--u-green);
+  --blue: var(--u-blue);
+  --mono: var(--u-font-mono);
+  --line: var(--u-line);
+  --ink: var(--u-fg);
+}
+
+/* Titles end in Uniform's brand dot rather than a full stop. */
+.u-dot {
+  color: var(--u-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--u-link);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}

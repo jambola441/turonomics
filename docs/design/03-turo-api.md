@@ -92,7 +92,7 @@ names what it drops, so the next run will say whether an *actual* check-out
 time is in there. `odometerDetail.checkOutOdometerReading` being null on a
 finished trip suggests some of these only fill in once the host checks out.
 
-### `GET /api/<version>/reservations/<id>/reimbursement/invoice/<invoiceId>`
+### `GET /api/v2/reservations/<id>/reimbursement/invoice/<invoiceId>`
 
 ```
 invoiceId, reimbursementId
@@ -161,7 +161,7 @@ three caps — `alreadyRequested`, `maximumReimbursementPerTrip` and
 `maximumReimbursementRequestAmount` — are worth reading before filing rather
 than after being refused.
 
-### `POST /api/<version>/reimbursement/<reservationId>/request`
+### `POST /api/v3/reimbursement/<reservationId>/request`
 
 ```
 sent: {
@@ -179,20 +179,27 @@ sent: {
 -> {messageUuid: uuid, reimbursementId: int}
 ```
 
-**That path segment is written `<version>` here because nobody has read it
-directly.** It was first hard-coded as `us`, from a masked report showing
-`/api/<str(2)>/…`; the filing POST went to a path that does not exist and
-returned 404 after the evidence image had been uploaded. A second reading said
-it must be a version like `v2`, since the masker prints a plain lowercase
-segment verbatim and only one containing a digit masks that way. The operator,
-looking at their own browser, said `en` — though the page URL is
-`turo.com/us/en/reservation/…`, so that may be the page rather than the API.
+**`v3`, read directly, and not the `v2` the page's other calls use.** The
+operator filed 58426608 by hand with the watch running, and the report showed
+`POST /api/v3/reimbursement/<digits(8)=the one in the page url>/request -> 200`.
+On the same page, `/api/v2/driver/detail` and
+`/api/v2/reservations/<id>/reimbursement/invoice` were fetched. Turo versions
+each route separately.
 
-Both readings are inferences about a URL nobody has looked at unmasked, and
-one is already known to be wrong. The extension therefore takes the segment
-from a URL the page actually fetched, and names the path it used when a call
-fails. Short segments like `v2` survive masking now, so the next report will
-simply say.
+How this got wrong twice is worth keeping:
+
+* It was first hard-coded as `us`, from a masked `/api/<str(2)>/…`, and 404'd.
+* The extension then read the segment from whatever the page had fetched. A
+  filing page never fetches the filing route before somebody files, so the
+  only versioned calls it could find were the `v2` ones. That 404'd too, as
+  `/api/v2/reimbursement/58426608/request`.
+* The operator's reading of `en` was the page URL, `turo.com/us/en/…`, not the
+  API path.
+
+So the path is now a constant (`reimbursementRequestPath` in
+`extension/src/turo.ts`), and the id in it is the reservation id. If Turo moves
+the route to `v4`, the filing fails with the path named in the message, and a
+watch report on a hand filing will show the new one.
 
 Two things to note before building on this.
 

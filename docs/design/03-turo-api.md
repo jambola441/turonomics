@@ -92,7 +92,7 @@ names what it drops, so the next run will say whether an *actual* check-out
 time is in there. `odometerDetail.checkOutOdometerReading` being null on a
 finished trip suggests some of these only fill in once the host checks out.
 
-### `GET /api/<locale>/reservations/<id>/reimbursement/invoice/<invoiceId>`
+### `GET /api/<version>/reservations/<id>/reimbursement/invoice/<invoiceId>`
 
 ```
 invoiceId, reimbursementId
@@ -161,7 +161,7 @@ three caps — `alreadyRequested`, `maximumReimbursementPerTrip` and
 `maximumReimbursementRequestAmount` — are worth reading before filing rather
 than after being refused.
 
-### `POST /api/<locale>/reimbursement/<reservationId>/request`
+### `POST /api/<version>/reimbursement/<reservationId>/request`
 
 ```
 sent: {
@@ -178,6 +178,21 @@ sent: {
 }
 -> {messageUuid: uuid, reimbursementId: int}
 ```
+
+**That path segment is written `<version>` here because nobody has read it
+directly.** It was first hard-coded as `us`, from a masked report showing
+`/api/<str(2)>/…`; the filing POST went to a path that does not exist and
+returned 404 after the evidence image had been uploaded. A second reading said
+it must be a version like `v2`, since the masker prints a plain lowercase
+segment verbatim and only one containing a digit masks that way. The operator,
+looking at their own browser, said `en` — though the page URL is
+`turo.com/us/en/reservation/…`, so that may be the page rather than the API.
+
+Both readings are inferences about a URL nobody has looked at unmasked, and
+one is already known to be wrong. The extension therefore takes the segment
+from a URL the page actually fetched, and names the path it used when a call
+fails. Short segments like `v2` survive masking now, so the next report will
+simply say.
 
 Two things to note before building on this.
 
@@ -208,8 +223,8 @@ amount works, which is the path this app would take.
 
 | endpoint | carries |
 |---|---|
-| `GET /api/<locale>/feeds/conversation?page&itemsPerPage` | paginated reservations: `id`, `statusCode: BOOKED \| COMPLETED`, `booking`/`request`/`interval`/`cancelledRequest` start+end, `vehicle` with `licensePlate` and `vin`, `renter`, `location`, plus `numPages` |
-| `GET /api/<locale>/reservation/conversation?reservationId` | the whole message thread: `authorDriverRole: HOST \| GUEST`, `sentTime`, `sentTimeZone`, `text`, attached `media.images[]` |
+| `GET /api/<version>/feeds/conversation?page&itemsPerPage` | paginated reservations: `id`, `statusCode: BOOKED \| COMPLETED`, `booking`/`request`/`interval`/`cancelledRequest` start+end, `vehicle` with `licensePlate` and `vin`, `renter`, `location`, plus `numPages` |
+| `GET /api/<version>/reservation/conversation?reservationId` | the whole message thread: `authorDriverRole: HOST \| GUEST`, `sentTime`, `sentTimeZone`, `text`, attached `media.images[]` |
 | `GET /api/reservation/photos?reservationId` | 39 trip photos with `step: TRIP_PHOTO \| OWNER_CHECK_IN` and `imageType: ODOMETER` |
 | `GET /api/me` | the host: `driverRoles`, `driverLicenseStatus`, `alerts.searchExcludedVehicleIds` |
 | `GET /api/reservations/<id>/my-role` | `driverRole` |

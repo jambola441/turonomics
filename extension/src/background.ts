@@ -417,7 +417,7 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
   const outcome = await inPage(
     tabId,
     fileInvoiceInPage,
-    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message, LOCALE],
+    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message],
     12,
     "MAIN"
   );
@@ -453,9 +453,6 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
   };
 }
 
-// Turo's own routes carry it, and every observed call used "us". Kept as a
-// constant rather than scattered so a fleet elsewhere is one edit.
-const LOCALE = "us";
 
 /**
  * File one toll invoice, from inside the page.
@@ -478,8 +475,7 @@ function fileInvoiceInPage(
   svg: string,
   reservationId: string,
   amount: number,
-  message: string,
-  locale: string
+  message: string
 ): Promise<{ ok: true; reimbursementId: number } | { ok: false; error: string; stage: string }> {
   const fail = (stage: string, error: string) =>
     ({ ok: false as const, error, stage });
@@ -511,7 +507,58 @@ function fileInvoiceInPage(
       image.src = encoded;
     });
 
+  /**
+   * The segment between `/api/` and the route, read from what this page has
+   * already fetched.
+   *
+   * It was hard-coded to "us", read off `/api/<str(2)>/…` in a masked probe
+   * report. The POST went to a path that does not exist and came back 404 —
+   * after the evidence image had been uploaded. A second reading said the
+   * segment must be a version like "v2", since the masker prints a plain
+   * lowercase segment verbatim and only one containing a digit masks that
+   * way; the operator, looking at their own browser, said "en".
+   *
+   * Both are inferences about somebody else's URL, and one of them is already
+   * known to have been wrong. So neither is used: this takes the segment from
+   * a URL the page actually fetched, whatever it turns out to be, and fails
+   * plainly if it cannot find one.
+   */
+  const apiPrefix = (): string | null => {
+    try {
+      const names = performance.getEntriesByType("resource").map((entry) => entry.name);
+      // Strongest evidence first: a call on the reimbursement route itself.
+      // Then any of the routes observed carrying the same prefix. Whatever
+      // that segment turns out to be — a version, a locale, something else —
+      // this takes it from a URL the page actually fetched rather than from
+      // anybody's reading of a masked report.
+      for (const pattern of [
+        /\/api\/([A-Za-z0-9_-]{1,8})\/reimbursement\//,
+        /\/api\/([A-Za-z0-9_-]{1,8})\/reservations\/\d+\/reimbursement/,
+        /\/api\/([A-Za-z0-9_-]{1,8})\/(?:feeds|driver|reservation)\//,
+      ]) {
+        for (const name of names) {
+          const found = pattern.exec(name);
+          if (found) return found[1];
+        }
+      }
+    } catch {
+      // Resource timing is not something to fail a filing over.
+    }
+    return null;
+  };
+
   return (async () => {
+    const prefix = apiPrefix();
+    if (!prefix) {
+      // Deliberately not falling back to a guess. The last guess uploaded an
+      // evidence image and then 404'd, which leaves a stray photo on the trip
+      // and nothing filed.
+      return fail(
+        "route",
+        "could not read Turo's API path from this page — open a trip page, let it " +
+          "load, and try again"
+      );
+    }
     let png: Blob;
     try {
       png = await rasterise();
@@ -529,7 +576,9 @@ function fileInvoiceInPage(
         credentials: "include",
         body: form,
       });
-      if (!response.ok) return fail("upload", `Turo said ${response.status}`);
+      if (!response.ok) {
+        return fail("upload", `Turo said ${response.status} to /api/reservation/image`);
+      }
       const body = (await response.json()) as { uuid?: string };
       if (!body.uuid) return fail("upload", "no uuid came back");
       uuid = body.uuid;
@@ -538,7 +587,7 @@ function fileInvoiceInPage(
     }
 
     try {
-      const response = await fetch(`/api/${locale}/reimbursement/${reservationId}/request`, {
+      const response = await fetch(`/api/${prefix}/reimbursement/${reservationId}/request`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -557,7 +606,14 @@ function fileInvoiceInPage(
           evPostTripRechargingBatteryLevelsDto: null,
         }),
       });
-      if (!response.ok) return fail("request", `Turo said ${response.status}`);
+      if (!response.ok) {
+        // The path is in the message because that is the thing most likely to
+        // be wrong, and a bare status sends somebody back to the network tab.
+        return fail(
+          "request",
+          `Turo said ${response.status} to /api/${prefix}/reimbursement/${reservationId}/request`
+        );
+      }
       const body = (await response.json()) as { reimbursementId?: number };
       if (typeof body.reimbursementId !== "number") {
         // The image is uploaded and Turo may or may not have taken the

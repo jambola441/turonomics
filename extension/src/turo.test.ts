@@ -442,3 +442,22 @@ test("a failure names the amount as well as the reason", () => {
 test("nothing to file is not reported as a failure to file", () => {
   assert.equal(describeFiling({ filed: false, reason: "nothing to file" }), "Not filed — nothing to file");
 });
+
+test("an api version survives in a route", () => {
+  // Masking it cost a filing: `/api/<str(2)>/reimbursement/<id>/request` was
+  // read as a locale, the POST went to a path that does not exist, and the
+  // evidence image had already been uploaded by then.
+  assert.equal(
+    urlShape("https://turo.com/api/v2/reimbursement/58426608/request"),
+    "https://turo.com/api/v2/reimbursement/<digits(8)>/request"
+  );
+  // Narrow on purpose. An id is not a version, however short.
+  assert.equal(
+    urlShape("https://turo.com/api/reservation/a1b2c3/detail"),
+    "https://turo.com/api/reservation/<str(6)>/detail"
+  );
+  assert.equal(
+    urlShape("https://turo.com/api/v12345678/x"),
+    "https://turo.com/api/<str(9)>/x"
+  );
+});

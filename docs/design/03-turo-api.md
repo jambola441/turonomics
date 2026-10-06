@@ -179,13 +179,20 @@ sent: {
 -> {messageUuid: uuid, reimbursementId: int}
 ```
 
-**That path segment is an API version, not a locale.** It was read as `us` from
-a masked probe report showing `/api/<str(2)>/…`, and the filing POST went to a
-path that does not exist — 404, after the evidence image had already been
-uploaded. The masker prints a plain lowercase segment verbatim, so `us` would
-have shown as `us`; only a segment with a digit in it masks that way. Versions
-survive masking now, and the extension reads the version from the page's own
-resource timings rather than carrying a constant.
+**That path segment is written `<version>` here because nobody has read it
+directly.** It was first hard-coded as `us`, from a masked report showing
+`/api/<str(2)>/…`; the filing POST went to a path that does not exist and
+returned 404 after the evidence image had been uploaded. A second reading said
+it must be a version like `v2`, since the masker prints a plain lowercase
+segment verbatim and only one containing a digit masks that way. The operator,
+looking at their own browser, said `en` — though the page URL is
+`turo.com/us/en/reservation/…`, so that may be the page rather than the API.
+
+Both readings are inferences about a URL nobody has looked at unmasked, and
+one is already known to be wrong. The extension therefore takes the segment
+from a URL the page actually fetched, and names the path it used when a call
+fails. Short segments like `v2` survive masking now, so the next report will
+simply say.
 
 Two things to note before building on this.
 

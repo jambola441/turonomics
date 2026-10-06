@@ -73,9 +73,16 @@ poll, so the moment a car came to rest and stayed at rest is recorded already.
 `ingest/returns.py` reads it, and narrows the window to the car's actual
 return — see the note there for why it narrows only.
 
-**`allowedToRequestReimbursement`** is the filing window, authoritatively.
-`TOLL_FILING_WINDOW_DAYS = 90` is a number from the help pages; this is Turo
-saying yes or no about this reservation.
+**`allowedToRequestReimbursement` is not the filing window**, whatever it
+looks like. It was read that way and briefly made a hard gate, and against the
+live account it is `false` for all 37 rentals — including one that was then
+filed by hand, accepted, and charged to the guest an hour and a half later.
+The gate answered "nothing to file" for the whole account while $1,218 sat
+uncollected.
+
+It is stored and reported, in case it starts meaning something legible, and
+nothing is decided by it. The 90-day window from the help pages remains the
+gate.
 
 **`booking.vehicleRegistration.licensePlate`** identifies the car without
 matching a nickname or guessing between two identical Corollas.

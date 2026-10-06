@@ -198,7 +198,14 @@ class DraftResponse(BaseModel):
     # otherwise. Named so the caller can tell which it got, because one is a
     # fact about this reservation and the other is arithmetic.
     can_file: bool
-    can_file_from_turo: bool
+    # Turo's `allowedToRequestReimbursement`, reported and *not* acted on.
+    #
+    # It was briefly a hard gate here, on the assumption that it meant "a
+    # reimbursement may still be requested". Against the live account it is
+    # false for all 37 rentals — including the one that was then filed by hand
+    # and charged to the guest. Whatever it means, it is not that, and a gate
+    # built on it blocked every invoice this app could otherwise raise.
+    turo_allows_request: bool | None
     # Turo's filing API takes dollars, where everything in this codebase is
     # integer cents. Converted once, here, rather than in the extension — a
     # rounding decision about money belongs where it can be tested.
@@ -297,10 +304,10 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
         amount_dollars=total_cents / 100,
         message=_note(lines),
         days_left=left,
-        # Turo's answer wins where there is one. It knows about holds and
-        # disputes that a day count cannot see.
-        can_file=from_turo if from_turo is not None else (left is not None and left >= 0),
-        can_file_from_turo=from_turo is not None,
+        # The window decides. Turo's flag is reported beside it and does not
+        # override it — see `turo_allows_request`.
+        can_file=left is not None and left >= 0,
+        turo_allows_request=from_turo,
         evidence_svg=evidence_svg(sheet),
     )
 
@@ -330,9 +337,10 @@ class LedgerRow(BaseModel):
     charged_cents: int
     turo_toll_line_cents: int | None
 
-    # Turo's own answer about whether a reimbursement can still be requested,
-    # where the pull has fetched it. Null means it has not been asked.
-    can_file: bool | None
+    # Turo's `allowedToRequestReimbursement`, reported and not acted on: it is
+    # false for every rental on the live account, including ones that were
+    # filed successfully afterwards.
+    turo_allows_request: bool | None
     # A word for the row, so a page does not have to re-derive one and two
     # readers do not reach different conclusions from the same numbers.
     state: str
@@ -357,7 +365,6 @@ def _ledger_state(
     recovered: int,
     toll_line: int | None,
     left: int | None,
-    can_file: bool | None,
 ) -> tuple[str, str | None]:
     """What this rental's crossings amount to, in a word.
 
@@ -399,16 +406,6 @@ def _ledger_state(
             "check Turo's toll line",
             f"Turo charged ${toll_line / 100:,.2f} of tolls against "
             f"${unfiled / 100:,.2f} still outstanding here",
-        )
-    if unfiled > 0 and can_file is False:
-        # Turo refusing, inside the window, is the single most consequential
-        # thing this view can report — and it was reaching the operator as a
-        # 404 from the filing button, which reads as "nothing to do" rather
-        # than "money you cannot collect". It belongs on the row.
-        return (
-            "Turo will not take it",
-            "Turo says a reimbursement cannot be requested for this rental, "
-            f"though {left} day(s) of the window remain",
         )
     if unfiled > 0 and left is not None and left < 0:
         return "expired", "past the 90-day window, so this cannot be filed"
@@ -456,7 +453,6 @@ def ledger(session: DbSession) -> LedgerResponse:
             recovered=recovered,
             toll_line=sum(toll_lines) if toll_lines else None,
             left=left,
-            can_file=trip.can_file_reimbursement if trip is not None else None,
         )
         rows.append(
             LedgerRow(
@@ -474,7 +470,9 @@ def ledger(session: DbSession) -> LedgerResponse:
                 asked_cents=sum(r.total_cents for r in theirs),
                 charged_cents=charged,
                 turo_toll_line_cents=sum(toll_lines) if toll_lines else None,
-                can_file=trip.can_file_reimbursement if trip is not None else None,
+                turo_allows_request=(
+                    trip.can_file_reimbursement if trip is not None else None
+                ),
                 state=state,
                 note=note,
             )
@@ -507,9 +505,6 @@ def next_draft(session: DbSession) -> DraftResponse:
     built = build_invoices(session, now=now)
     fileable = []
     for invoice in built:
-        trip = session.get(Trip, invoice.trip_id)
-        if trip is not None and trip.can_file_reimbursement is False:
-            continue
         left = invoice.days_left(window, now)
         if left is None or left < 0:
             continue

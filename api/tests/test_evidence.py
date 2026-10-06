@@ -201,31 +201,35 @@ def test_a_rental_with_nothing_outstanding_has_no_draft(
 
 
 @requires_db
-def test_turos_own_answer_decides_whether_it_can_be_filed(
+def test_turos_flag_is_reported_and_not_acted_on(
     api_client, session, car, rental
 ) -> None:
-    """A day count cannot see a hold or a dispute. Where the pull has fetched
-    Turo's answer, that is the one that counts — and the response says which
-    of the two it gave."""
+    """`allowedToRequestReimbursement` was briefly a hard gate here.
+
+    Against the live account it is false for all 37 rentals, including the one
+    that was then filed by hand and charged to the guest. Whatever it means, it
+    is not "a reimbursement may still be requested" — and a gate built on it
+    blocked every invoice this app could otherwise raise.
+    """
     _crossing(session, car, rental, at=ENDS - td(hours=3))
     rental.can_file_reimbursement = False
     session.commit()
 
     out = api_client.get(f"/api/invoices/{rental.id}/draft").json()
-    assert out["can_file"] is False, "despite being inside the 90 days"
-    assert out["can_file_from_turo"] is True
+    assert out["can_file"] is True, "the window decides, and it is open"
+    assert out["turo_allows_request"] is False, "reported, beside it"
     assert out["days_left"] is not None and out["days_left"] > 0
 
 
 @requires_db
-def test_without_turos_answer_the_window_decides(
+def test_the_window_decides_whether_a_draft_can_be_filed(
     api_client, session, car, rental
 ) -> None:
     _crossing(session, car, rental, at=ENDS - td(hours=3))
     session.commit()
     out = api_client.get(f"/api/invoices/{rental.id}/draft").json()
     assert out["can_file"] is True
-    assert out["can_file_from_turo"] is False
+    assert out["turo_allows_request"] is None, "never asked"
 
 
 @requires_db
@@ -306,11 +310,16 @@ def test_a_rental_already_asked_about_is_not_drafted_again(
 
 
 @requires_db
-def test_a_rental_turo_refuses_is_not_drafted(api_client, session, car, rental) -> None:
+def test_a_rental_turo_flags_is_still_offered(api_client, session, car, rental) -> None:
+    """The regression this file exists to prevent a second time: with that flag
+    as a gate, `next-draft` answered "nothing to file" for every rental on the
+    account while $1,218 sat uncollected."""
     _crossing(session, car, rental, at=ENDS - td(hours=2))
     rental.can_file_reimbursement = False
     session.commit()
-    assert api_client.get("/api/invoices/next-draft").status_code == 404
+    out = api_client.get("/api/invoices/next-draft")
+    assert out.status_code == 200
+    assert out.json()["turo_allows_request"] is False
 
 
 @requires_db
@@ -756,31 +765,15 @@ def test_a_turo_toll_line_that_did_not_reconcile_is_flagged(
 
 
 @requires_db
-def test_turo_refusing_inside_the_window_is_on_the_row(
+def test_turos_flag_does_not_change_a_rows_state(
     api_client, session, car, rental
 ) -> None:
-    """Found live: 34 rentals worth $1,218 that Turo will not accept a
-    reimbursement for, reaching the operator as a 404 from the filing button —
-    which reads as "nothing to do" rather than "money you cannot collect"."""
+    """It is reported, so it can be looked at if it ever starts meaning
+    something. It does not decide anything."""
     _crossing(session, car, rental, at=ENDS - td(hours=2), cents=2789)
     rental.can_file_reimbursement = False
     session.commit()
 
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
-    assert row["state"] == "Turo will not take it"
-    assert row["can_file"] is False
-    assert "cannot be requested" in row["note"]
-    assert "day(s) of the window remain" in row["note"], "and that it is not a deadline"
-
-
-@requires_db
-def test_a_rental_turo_has_not_been_asked_about_still_reads_as_to_bill(
-    api_client, session, car, rental
-) -> None:
-    """Null is not false. A rental the pull has never covered must not look
-    like one Turo has refused."""
-    _crossing(session, car, rental, at=ENDS - td(hours=2))
-    session.commit()
-    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
-    assert row["can_file"] is None
-    assert row["state"] == "to bill"
+    assert row["state"] == "to bill", "there is money here and the window is open"
+    assert row["turo_allows_request"] is False

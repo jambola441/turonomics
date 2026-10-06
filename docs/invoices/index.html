@@ -55,6 +55,11 @@
   .ledger-state.expired{color:var(--dim)}
   .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
   .ledger-table .btn{font-size:11px;padding:3px 9px;margin-top:5px}
+  .ledger-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .ledger-table th,.ledger-table td{white-space:nowrap}
+  .ledger-table td:first-child{white-space:normal;min-width:150px}
+  .ledger-cover{font-size:12px;color:var(--muted);margin:0 0 10px}
+  .ledger-table .unread{color:var(--amber);font-size:10.5px}
   .remote{margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
   .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
   .remote-status{font-size:12.5px;color:var(--muted)}
@@ -154,8 +159,10 @@
        groups above answer "what next" and so leave those out; this answers
        "where did it all go", which needs them or the totals do not add up. -->
   <details id="ledgerWrap" class="ledger">
-    <summary>Every rental, and what became of its crossings</summary>
+    <summary>Every rental on the account, and what became of its crossings</summary>
     <div class="ledger-totals" id="ledgerTotals"></div>
+    <div class="ledger-cover" id="ledgerCover"></div>
+    <div class="ledger-scroll">
     <table class="ledger-table">
       <thead>
         <tr>
@@ -165,11 +172,17 @@
           <th class="num">Asked</th>
           <th class="num">Settled</th>
           <th class="num">Turo charged</th>
+          <th class="num">Turo: tolls</th>
+          <th class="num">tickets</th>
+          <th class="num">distance</th>
+          <th class="num">other</th>
+          <th class="num">Days left</th>
           <th></th>
         </tr>
       </thead>
       <tbody id="ledgerBody"></tbody>
     </table>
+    </div>
   </details>
 </main>
 
@@ -309,22 +322,26 @@
     // What Turo has already been asked for on this rental. Shown because
     // invoicing money the guest has paid is a dispute, not income.
     if (invoice.charged_but_different) {
-      // The toll line where the invoice itemised one, because a reimbursement
-      // bundles cleaning and fuel and its total says little on its own.
-      var mine = invoice.charged_tolls_cents != null
-        ? "its toll line was " + money(invoice.charged_tolls_cents)
-        : "it did not itemise tolls";
+      // Only when Turo's side cannot be squared with these crossings: a charge
+      // nobody has broken down, or a toll line that disagrees.
+      var why = invoice.charged_tolls_cents != null
+        ? "its toll line was " + money(invoice.charged_tolls_cents) +
+          " and these crossings are " + money(invoice.total_cents)
+        : "some of it has not been broken down yet — pull from Turo to read it";
       add(body, "div", "asked odd",
-          "Turo already charged " + money(invoice.charged_cents) + " here — " +
-          mine + " and these crossings are " + money(invoice.total_cents) +
+          "Turo already charged " + money(invoice.charged_cents) + " here — " + why +
           ", so check before asking again");
       if (invoice.charged_lines && invoice.charged_lines.length) {
-        add(body, "div", "asked",
-            "incidental charges: " + invoice.charged_lines.join(" · "));
+        add(body, "div", "asked", "charges: " + invoice.charged_lines.join(" · "));
       }
     } else if (invoice.charged_cents) {
+      // Plainly something else — a ticket, distance — so said as that, and no
+      // reason to hold the tolls back.
       add(body, "div", "asked",
-          money(invoice.charged_cents) + " already charged on this rental");
+          "Turo charged " + money(invoice.charged_cents) + " here for other things" +
+          (invoice.charged_lines && invoice.charged_lines.length
+            ? ": " + invoice.charged_lines.join(" · ") : "") +
+          " — none of it tolls");
     } else if (invoice.pending_cents) {
       add(body, "div", "asked",
           "an invoice for " + money(invoice.pending_cents) + " is filed and unpaid");
@@ -439,16 +456,31 @@
       }
       tr.appendChild(who);
       [row.tolls_cents, row.unfiled_cents, row.filed_cents, row.recovered_cents,
-       row.charged_cents].forEach(function (cents) {
+       row.charged_cents, row.turo_tolls_cents || 0, row.turo_tickets_cents || 0,
+       row.turo_distance_cents || 0, row.turo_other_cents || 0].forEach(function (cents) {
         var td = document.createElement("td");
         td.className = "num" + (cents ? "" : " zero");
         td.textContent = money(cents);
         tr.appendChild(td);
       });
+      if (row.turo_unknown_cents) {
+        // Money Turo invoiced that nobody has broken down yet. Under "other"
+        // so the columns still add up, and amber because it is the part that
+        // may be these tolls.
+        var unread = document.createElement("div");
+        unread.className = "unread";
+        unread.textContent = "+" + money(row.turo_unknown_cents) + " not broken down";
+        tr.lastChild.appendChild(unread);
+      }
+      var left = document.createElement("td");
+      left.className = "num" + (row.days_left == null || row.days_left < 0 ? " zero" : "");
+      left.textContent = row.days_left == null ? "—" :
+        row.days_left < 0 ? "closed" : String(row.days_left);
+      tr.appendChild(left);
       var state = document.createElement("td");
       state.className = "ledger-state " +
         (row.state === "to bill" || row.state === "partly billed" ||
-         row.state.indexOf("check ") === 0 ? "tobill" :
+         row.state.indexOf("check ") === 0 || row.state === "no statement yet" ? "tobill" :
          row.state === "expired" ? "expired" : "");
       state.textContent = row.state;
       if (row.turo_trip_id && (row.state === "to bill" || row.state === "partly billed") &&
@@ -469,6 +501,10 @@
       " · to bill " + money(data.unfiled_cents) +
       " · asked " + money(data.filed_cents) +
       " · settled " + money(data.recovered_cents);
+    el("ledgerCover").textContent = data.statements_from
+      ? "E-ZPass statements imported cover " + when(data.statements_from) + " – " +
+        when(data.statements_to) + ". Rentals outside that read “no statement yet”."
+      : "No E-ZPass statement imported yet.";
     el("ledgerWrap").hidden = !(data.rows || []).length;
   }
 

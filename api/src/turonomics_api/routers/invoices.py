@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
+from turonomics_api.gmail.parse import names_tolls
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_svg
 from turonomics_api.ingest.invoices import Invoice, InvoiceLine, build_invoices
 from turonomics_api.routers.tolls import require_token, token_configured
@@ -108,6 +109,42 @@ def _reimbursements(
         if row.trip_id is not None:
             out.setdefault(row.trip_id, []).append(row)
     return out
+
+
+def _unreadable(rows: list[ReimbursementInvoice]) -> int:
+    """Money Turo has asked for on a rental without saying whether it was tolls.
+
+    Two shapes, and both mean the same thing for filing — nobody here can say
+    whether these crossings were part of it:
+
+    * no lines at all. The "has been charged" email links the receipt rather
+      than the invoice and often does not itemise, so an invoice seen only
+      through that email is a total and nothing else. Austin's $140.40 on
+      59077848 is one, beside a $50.00 ticket that did itemise.
+    * a line that names tolls without being a toll line of its own — "Tolls
+      and fuel", or two toll lines.
+
+    An invoice with a readable toll line is not here: `_mark_asked` has already
+    stamped the crossings it covered. Nor is one that itemised only tickets or
+    refuelling, which asked for nothing to do with tolls.
+
+    Next-draft skips a rental with any of this, because the alternative is
+    filing $40.71 of crossings that the $140.40 may already have charged. The
+    cost of skipping is a rental that waits for a person to read Turo's invoice
+    page; the cost of not skipping is a guest asked twice.
+    """
+    total = 0
+    for row in rows:
+        if row.toll_cents is not None:
+            continue
+        labels = [
+            entry[0]
+            for entry in row.lines or []
+            if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[0], str)
+        ]
+        if not labels or any(names_tolls(label) for label in labels):
+            total += row.total_cents
+    return total
 
 
 def _row(
@@ -365,6 +402,7 @@ def _ledger_state(
     recovered: int,
     toll_line: int | None,
     left: int | None,
+    unreadable: int = 0,
 ) -> tuple[str, str | None]:
     """What this rental's crossings amount to, in a word.
 
@@ -377,6 +415,16 @@ def _ledger_state(
         return "settled", None
     if unfiled == 0 and filed > 0:
         return "awaiting payment", None
+    if unfiled > 0 and unreadable > 0:
+        # Before every state that would offer these crossings for filing,
+        # because each of them would be offering money that may already have
+        # been charged. See `_unreadable`.
+        return (
+            "check Turo's invoice",
+            f"Turo has asked for ${unreadable / 100:,.2f} on this rental without "
+            f"saying what for — read its invoice before asking for "
+            f"${unfiled / 100:,.2f} of tolls",
+        )
     if unfiled > 0 and (filed > 0 or recovered > 0):
         # The case the per-crossing tracking exists for: a statement arriving
         # after the first invoice went out.
@@ -453,6 +501,7 @@ def ledger(session: DbSession) -> LedgerResponse:
             recovered=recovered,
             toll_line=sum(toll_lines) if toll_lines else None,
             left=left,
+            unreadable=_unreadable(theirs),
         )
         rows.append(
             LedgerRow(
@@ -503,10 +552,15 @@ def next_draft(session: DbSession) -> DraftResponse:
     now = datetime.now(UTC)
     window = toll_filing_window_days()
     built = build_invoices(session, now=now)
+    asked = _reimbursements(session, [i.trip_id for i in built])
     fileable = []
     for invoice in built:
         left = invoice.days_left(window, now)
         if left is None or left < 0:
+            continue
+        if _unreadable(asked.get(invoice.trip_id) or []):
+            # Turo has charged something on this rental that may be these
+            # crossings. Left for the ledger to flag, not filed blind.
             continue
         # Per crossing, not per rental. Skipping any rental that carried a
         # reimbursement was safe against asking twice and wrong the other way:

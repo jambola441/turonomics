@@ -27,6 +27,7 @@ import {
 } from "./tolls.js";
 import {
   describeEmbedded,
+  hubsToRead,
   invoicePath,
   invoicesToRead,
   reimbursementRequestPath,
@@ -403,7 +404,13 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
         : `the API said ${response.status}`;
     throw new Error(detail);
   }
-  const invoices = await pullInvoices(tabId, wanted, apiBase, tollsToken);
+  const invoices = await pullInvoices(
+    tabId,
+    wanted,
+    (result as TuroPullResult | null)?.invoice_hubs,
+    apiBase,
+    tollsToken
+  );
   return {
     ...(result as TuroPullResult),
     asked: wanted.reservations.length,
@@ -422,12 +429,64 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
 async function pullInvoices(
   tabId: number,
   wanted: TuroWanted,
+  hubsNamed: string[] | undefined,
   apiBase: string,
   tollsToken: string | undefined
 ): Promise<TuroInvoicesResult | null> {
   const tab = await chrome.tabs.get(tabId).catch(() => null);
-  const pairs = invoicesToRead(wanted.invoices, tab?.url);
-  if (!pairs.length || !wanted.invoice_path) return null;
+  const post = async (route: string, payload: unknown): Promise<unknown> => {
+    const response = await fetch(`${apiBase}${route}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+    const result: unknown = await response.json().catch(() => null);
+    if (!response.ok) throw new Error(`the API said ${response.status} to ${route}`);
+    return result;
+  };
+
+  // Each rental's invoice hub lists its invoices, so no invoice needs an id
+  // from the mail — or a person opening its page — to be found.
+  let fromHubs: [string, string][] = [];
+  let hubsRead = 0;
+  let listed = 0;
+  const hubs = wanted.hub_path ? hubsToRead(hubsNamed, tab?.url) : [];
+  if (hubs.length && wanted.hub_path) {
+    const bodies: { reservation_id: string; body: unknown }[] = [];
+    for (const id of hubs) {
+      const body = await inPage(
+        tabId,
+        fetchJsonInPage,
+        [wanted.hub_path.replace("{id}", id)],
+        12,
+        "MAIN"
+      );
+      if (body !== null) bodies.push({ reservation_id: id, body });
+      await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+    }
+    const answer = (await post("/api/turo/hubs", { hubs: bodies })) as {
+      seen: number;
+      listed: number;
+      to_read: [string, string][];
+    };
+    hubsRead = answer.seen;
+    listed = answer.listed;
+    fromHubs = answer.to_read;
+  }
+
+  const pairs = invoicesToRead([...(wanted.invoices ?? []), ...fromHubs], tab?.url);
+  if (!pairs.length || !wanted.invoice_path) {
+    return hubsRead
+      ? {
+          seen: 0, unparsed: 0, matched: 0, created: 0, itemised: [],
+          tolls_asked: 0, tolls_recovered: 0, statuses: [],
+          asked: 0, failed: 0, hubs: hubsRead, listed,
+        }
+      : null;
+  }
   const bodies: { reservation_id: string; body: unknown }[] = [];
   let failed = 0;
   for (const [reservation, invoice] of pairs) {
@@ -437,17 +496,8 @@ async function pullInvoices(
     else bodies.push({ reservation_id: reservation, body });
     await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
   }
-  const response = await fetch(`${apiBase}/api/turo/invoices`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
-    },
-    body: JSON.stringify({ invoices: bodies }),
-  });
-  const result: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new Error(`the API said ${response.status} to the invoices`);
-  return { ...(result as TuroInvoicesResult), asked: pairs.length, failed };
+  const result = (await post("/api/turo/invoices", { invoices: bodies })) as TuroInvoicesResult;
+  return { ...result, asked: pairs.length, failed, hubs: hubsRead, listed };
 }
 
 const PULL_GAP_MS = 250;

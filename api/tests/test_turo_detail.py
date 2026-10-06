@@ -576,3 +576,20 @@ def test_the_grace_report_is_readable_without_the_token(
     assert len(out["lines"]) == 1
     assert "+4.0h from end" in out["lines"][0]
     assert "return grace" in out["verdict"]
+
+
+def test_a_reservation_turo_offers_an_invoice_hub_for_says_so() -> None:
+    """Observed on 59077848, which has two invoices:
+    reservationActions: [VIEW_INVOICE_HUB, UPLOAD_TRIP_PHOTOS, VIEW_INVOICE_HUB_ACTION_CENTER]."""
+    body = {
+        **_detail(),
+        "reservationActions": [
+            "VIEW_INVOICE_HUB", "UPLOAD_TRIP_PHOTOS", "VIEW_INVOICE_HUB_ACTION_CENTER",
+        ],
+    }
+    parsed = parse_detail(body)
+    assert parsed is not None and parsed.has_invoices is True
+    plain = parse_detail({**_detail(), "reservationActions": ["UPLOAD_TRIP_PHOTOS"]})
+    assert plain is not None and plain.has_invoices is False
+    missing = parse_detail(_detail())
+    assert missing is not None and missing.has_invoices is False

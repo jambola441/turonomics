@@ -39,6 +39,7 @@ export interface TuroWanted {
   /** Invoices whose breakdown the mail did not give, as [reservation, invoice]. */
   invoices?: [string, string][];
   invoice_path?: string;
+  hub_path?: string;
 }
 
 /** What the API made of the invoice pages it was sent. */
@@ -55,6 +56,9 @@ export interface TuroInvoicesResult {
   /** How many were fetched, and how many Turo would not hand over. */
   asked: number;
   failed: number;
+  /** How many invoice hubs were read, and how many invoices they listed. */
+  hubs?: number;
+  listed?: number;
 }
 
 /** What the API says it did with them, plus what the pull itself managed. */
@@ -67,6 +71,8 @@ export interface TuroPullResult {
   wrong_plate: string[];
   tolls_rematched: number;
   grace_periods: string[];
+  /** Reservations whose invoice hub Turo offers, so worth reading. */
+  invoice_hubs?: string[];
   /** How many the API asked for, and how many Turo would not hand over. */
   asked: number;
   failed: number;

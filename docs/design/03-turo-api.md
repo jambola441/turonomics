@@ -284,6 +284,23 @@ that is open, because an invoice seen only through the charged email has no id
 the API knows: opening it on Turo and pressing Pull is how that one is read.
 Bodies go to `POST /api/turo/invoices` unmodified.
 
+That was the first version. The pull now finds them unaided, from the invoice
+hub Turo shows each trip's invoices on:
+
+```
+GET /api/reservations/<id>/invoice-hub
+  sections: [{type: RESOLVED, invoices: [{invoiceId, amount: {amount: int},
+              status: PAID, title, type: INCIDENTAL, invoiceLabel, description}]}]
+```
+
+Only trips whose reservation detail lists `VIEW_INVOICE_HUB` in
+`reservationActions` are asked for one — `POST /api/turo/details` answers with
+those as `invoice_hubs`. The hubs go to `POST /api/turo/hubs`, which answers
+with the invoices worth reading: any it has no row for under that invoice id,
+and any whose row still cannot say what share was tolls. An invoice already
+answered is not fetched again. The hub's `amount` is an integer where the
+invoice page's is dollars; nothing relies on it until its unit is confirmed.
+
 `ingest/turo_invoice.py` takes the toll share from `lineItems[].type`, never
 the title. It matches the invoice to the mail's row by either Turo id, then —
 only for a row with no lines — by total, and refuses to guess between two such

@@ -29,6 +29,8 @@ from turonomics_api.db.models import (
 from turonomics_api.ingest.turo_invoice import (
     TuroInvoiceResult,
     apply_turo_invoice,
+    hub_to_read,
+    parse_hub,
     parse_turo_invoice,
     wanted_invoices,
 )
@@ -406,3 +408,153 @@ def test_turo_charging_tolls_none_of_ours_were_stamped_for_is_not_drafted(
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert row["state"] == "check Turo's toll line"
     assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Finding a rental's invoices without anyone opening them
+# ---------------------------------------------------------------------------
+
+
+def _hub(*ids: int, status: str = "PAID") -> dict:
+    """`/api/reservations/<id>/invoice-hub`, shaped as observed on 59077848."""
+    return {
+        "cta": {"button": {"buttonType": "PRIMARY", "label": "Create invoice"}},
+        "emptyState": None,
+        "sections": [{
+            "type": "RESOLVED",
+            "title": "Resolved",
+            "invoices": [
+                {
+                    "amount": {"amount": 5000, "currencyCode": "USD"},
+                    "invoiceId": invoice_id,
+                    "invoiceLabel": "Invoice #000000000",
+                    "status": status,
+                    "title": "Tickets",
+                    "type": "INCIDENTAL",
+                    "description": "Paid by guest on 07/25/2026",
+                }
+                for invoice_id in ids
+            ],
+        }],
+    }
+
+
+def test_a_hub_lists_its_invoice_ids() -> None:
+    listed = parse_hub(_hub(113672232, 113672299))
+    assert listed is not None
+    assert [i.invoice_id for i in listed] == ["113672232", "113672299"]
+    assert listed[0].status == "PAID"
+
+
+def test_an_empty_hub_lists_nothing_and_a_non_hub_is_refused() -> None:
+    assert parse_hub({"sections": [], "emptyState": {"title": "No invoices"}}) == []
+    assert parse_hub({"error": "nope"}) is None
+
+
+@requires_db
+def test_a_hub_invoice_known_only_as_a_total_is_read(session, rental) -> None:
+    """Austin's $140.40: the mail's row has no id, so the hub's id for it is
+    one this app does not know — which is exactly what makes it worth reading."""
+    _emailed(session, rental, total=14040)
+    listed = parse_hub(_hub(113672232))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == [(RES, "113672232")]
+
+
+@requires_db
+def test_a_hub_invoice_already_answered_is_not_read_again(session, rental) -> None:
+    """Every pull reads every hub. Without this it would re-read every invoice
+    on the account each time, which is the kind of traffic that gets noticed."""
+    _emailed(session, rental, total=5000, lines=[("Tickets", 5000)], invoice_id="1")
+    _emailed(session, rental, total=100, invoice_id="2")  # known, but no breakdown
+    listed = parse_hub(_hub(1, 2, 3))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == [(RES, "2"), (RES, "3")]
+
+
+@requires_db
+def test_reading_an_invoice_keeps_turos_invoice_id(session, car, rental) -> None:
+    """The extension's own filing is recorded under the reimbursement id. Once
+    its invoice is read, the row carries the invoice id the hub lists, so the
+    next pull knows it."""
+    ours = _emailed(
+        session, rental, total=14040, state="filed", invoice_id="5550001",
+        lines=[("Tolls", 14040)],
+    )
+    _apply(session, AUSTIN)
+    assert ours.turo_invoice_id == "113672232"
+    listed = parse_hub(_hub(113672232))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == []
+
+
+@requires_db
+def test_the_mail_lands_on_the_row_turo_already_described(session, car, rental) -> None:
+    """The double count this closes: a row keyed by the reimbursement id, and
+    the email for the same invoice keyed by its invoice id, used to be two
+    invoices for one ask."""
+    from turonomics_api.gmail.parse import ParsedInvoice
+    from turonomics_api.ingest.reimbursements import record_invoice
+
+    # Filed by the extension, so keyed `inv:<reimbursement id>`; then read off
+    # Turo, which gives it the invoice id the email links.
+    ours = _emailed(
+        session, rental, total=14040, state="filed", invoice_id="5550001",
+        lines=[("Tolls", 14040)],
+    )
+    _apply(session, AUSTIN)
+    assert ours.fingerprint == "inv:5550001"
+    before = session.query(ReimbursementInvoice).count()
+    record_invoice(
+        session,
+        ParsedInvoice(
+            state="charged", reservation_id=RES, guest_name="Austin",
+            total_cents=14040, turo_invoice_id="113672232",
+        ),
+        now=NOW,
+    )
+    assert session.query(ReimbursementInvoice).count() == before
+    assert ours.state == "charged", "the email moved the same row forward"
+
+
+@requires_db
+def test_the_whole_pull_finds_austins_breakdown_unaided(
+    api_client, monkeypatch, session, car, rental
+) -> None:
+    """Details, then hubs, then invoices — the order the extension calls them,
+    with nobody opening a page."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+    _emailed(session, rental, total=5000, lines=[("Tickets", 5000)], invoice_id="7")
+    _emailed(session, rental, total=14040)
+    session.commit()
+
+    detail = {
+        "id": int(RES),
+        "booking": {},
+        "reservationActions": ["VIEW_INVOICE_HUB"],
+    }
+    details = api_client.post("/api/turo/details", json={"details": [detail]}).json()
+    assert details["invoice_hubs"] == [RES]
+
+    hubs = api_client.post(
+        "/api/turo/hubs", json={"hubs": [{"reservation_id": RES, "body": _hub(7, 113672232)}]}
+    ).json()
+    assert hubs["listed"] == 2
+    assert hubs["to_read"] == [[RES, "113672232"]], "the ticket is already answered"
+
+    distance = _body(("ADDITIONAL_DISTANCE", "Additional distance", 140.40))
+    out = api_client.post(
+        "/api/turo/invoices",
+        json={"invoices": [{"reservation_id": RES, "body": distance}]},
+    ).json()
+    assert out["itemised"] == [f"{RES}: none of $140.40 was tolls"]
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "to bill", "freed: the $140.40 was distance"
+    assert api_client.get("/api/invoices/next-draft").json()["total_cents"] == 4071
+
+
+@requires_db
+def test_reading_hubs_needs_the_token(api_client, monkeypatch) -> None:
+    monkeypatch.setenv("TOLLS_TOKEN", "s3cret")
+    assert api_client.post("/api/turo/hubs", json={"hubs": []}).status_code == 401

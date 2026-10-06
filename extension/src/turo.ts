@@ -401,7 +401,13 @@ export function describePull(result: TuroPullResult): string {
   if (result.failed) parts.push(`${result.failed} Turo would not return`);
   if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
   const invoices = result.invoices;
+  if (invoices && !invoices.asked && invoices.hubs) {
+    parts.push(`${invoices.hubs} invoice hub(s) read, nothing new on them`);
+  }
   if (invoices && invoices.asked) {
+    if (invoices.hubs) {
+      parts.push(`${invoices.hubs} invoice hub(s) listing ${invoices.listed ?? 0} invoice(s)`);
+    }
     parts.push(`${invoices.seen} of ${invoices.asked} invoice(s) read`);
     if (invoices.failed) parts.push(`${invoices.failed} invoice(s) Turo would not return`);
     if (invoices.unparsed) parts.push(`${invoices.unparsed} invoice(s) unreadable`);
@@ -432,6 +438,27 @@ export function invoiceOnPage(url: string): [string, string] | null {
   const invoice = parsed.searchParams.get("invoiceId");
   if (!reservation || !invoice || !/^\d+$/.test(invoice)) return null;
   return [reservation[1], invoice];
+}
+
+/** The reservation whose invoice hub a page is showing, or null. */
+export function hubOnPage(url: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)turo\.com$/.test(parsed.hostname)) return null;
+  const found = /\/reservation\/(\d+)\/invoice-hub\/?$/.exec(parsed.pathname);
+  return found ? found[1] : null;
+}
+
+/** Hubs to read: the ones the API named, plus the open page's, once each. */
+export function hubsToRead(named: string[] | undefined, pageUrl: string | undefined): string[] {
+  const onPage = pageUrl ? hubOnPage(pageUrl) : null;
+  return [...new Set([...(onPage ? [onPage] : []), ...(named ?? [])])].filter((id) =>
+    /^\d+$/.test(id)
+  );
 }
 
 /** The invoices a pull should read: the API's list, plus the open page's. */

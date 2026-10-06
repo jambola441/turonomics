@@ -429,7 +429,8 @@
       });
       var state = document.createElement("td");
       state.className = "ledger-state " +
-        (row.state === "to bill" || row.state === "partly billed" ? "tobill" :
+        (row.state === "to bill" || row.state === "partly billed" ||
+         row.state.indexOf("check ") === 0 ? "tobill" :
          row.state === "expired" ? "expired" : "");
       state.textContent = row.state;
       tr.appendChild(state);

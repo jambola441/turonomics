@@ -777,3 +777,74 @@ def test_turos_flag_does_not_change_a_rows_state(
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert row["state"] == "to bill", "there is money here and the window is open"
     assert row["turo_allows_request"] is False
+
+
+# ---------------------------------------------------------------------------
+# Money Turo has asked for without saying what for
+# ---------------------------------------------------------------------------
+
+
+def _turo_invoice(session, rental, *, total, lines, state="charged", toll=None, key="1"):
+    row = ReimbursementInvoice(
+        fingerprint=f"res:{rental.turo_trip_id}:{key}", reservation_id=rental.turo_trip_id,
+        guest_name="Austin", state=state, total_cents=total, lines=lines, toll_cents=toll,
+        trip_id=rental.id, last_seen_at=NOW, charged_at=NOW if state == "charged" else None,
+    )
+    session.add(row)
+    return row
+
+
+@requires_db
+def test_a_rental_with_an_unitemised_charge_is_not_drafted(
+    api_client, session, car, rental
+) -> None:
+    """59077848: $140.40 charged through an email that did not itemise, beside
+    $40.71 of crossings. Nothing here can say the $140.40 was not those tolls,
+    and drafting them asks the guest a second time if it was."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _turo_invoice(session, rental, total=14040, lines=[])
+    session.commit()
+
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "check Turo's invoice"
+    assert "$140.40" in row["note"] and "$40.71" in row["note"]
+
+
+@requires_db
+def test_a_charge_that_names_tolls_with_something_else_is_not_drafted(
+    api_client, session, car, rental
+) -> None:
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    _turo_invoice(session, rental, total=5555, lines=[["Tolls and fuel", 5555]])
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+@requires_db
+def test_a_ticket_alone_does_not_hold_the_tolls_back(
+    api_client, session, car, rental
+) -> None:
+    """The other direction, and the reason this is not "any invoice at all": an
+    itemised ticket asked the guest for nothing to do with these crossings.
+    Blocking on it would leave the tolls uncollected for the sake of a fine."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    _turo_invoice(session, rental, total=5000, lines=[["Tickets", 5000]])
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 200
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "to bill"
+
+
+@requires_db
+def test_one_unitemised_invoice_holds_back_a_rental_with_an_itemised_one(
+    api_client, session, car, rental
+) -> None:
+    """Austin's shape exactly: the ticket itemised, the larger charge did not."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=4071)
+    _turo_invoice(session, rental, total=5000, lines=[["Tickets", 5000]], key="a")
+    _turo_invoice(session, rental, total=14040, lines=[], key="b")
+    session.commit()
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert "$140.40" in row["note"], "only the part nobody can read"

@@ -79,6 +79,7 @@ def record_invoice(
             ReimbursementInvoice.fingerprint == parsed.fingerprint
         )
     )
+    is_new = False
     if invoice is None:
         invoice = ReimbursementInvoice(
             fingerprint=parsed.fingerprint,
@@ -93,6 +94,7 @@ def record_invoice(
         )
         session.add(invoice)
         result.created += 1
+        is_new = True
     else:
         # Forwards only. Mail arrives out of order often enough that a "filed"
         # notification can land after the "charged" one, and treating that as
@@ -124,9 +126,47 @@ def record_invoice(
             invoice.trip_id = trip.id
     session.flush()
 
+    _mark_asked(session, invoice, now=now, first_sighting=is_new)
+
     if invoice.state == INVOICE_CHARGED and invoice.trip_id is not None:
         _recover(session, invoice, result)
     return invoice
+
+
+def _mark_asked(
+    session: Session,
+    invoice: ReimbursementInvoice,
+    *,
+    now: datetime,
+    first_sighting: bool,
+) -> None:
+    """Record that this rental's crossings have been asked for.
+
+    The extension stamps `filed_at` when it files. An invoice filed any other
+    way — by hand in Turo's own UI — reaches this app only as a notification
+    email, and until this existed nothing stamped the crossings: the button
+    would then offer the same rental again, which is a guest asked twice for
+    the same tolls.
+
+    Only on the first sighting of an invoice, and only crossings that exist at
+    that moment. The same email is re-read on every sync, and a crossing that
+    arrives on a later statement was not part of the ask — stamping it on a
+    re-read would strand it, which is the bug per-crossing tracking was built
+    to fix.
+
+    Only an invoice with a toll line. One that charged for refuelling or a
+    ticket asked the guest for nothing to do with these crossings.
+    """
+    if not first_sighting or invoice.trip_id is None or invoice.toll_cents is None:
+        return
+    for toll in session.scalars(
+        select(Toll).where(
+            Toll.trip_id == invoice.trip_id,
+            Toll.filed_at.is_(None),
+            Toll.recovered_at.is_(None),
+        )
+    ):
+        toll.filed_at = now
 
 
 def _recover(

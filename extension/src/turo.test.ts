@@ -13,6 +13,7 @@ import type { TuroPullResult } from "./types.js";
 import {
   CHARGE_KEYS,
   describeFiling,
+  reimbursementRequestPath,
   describePull,
   describeEmbedded,
   findByKey,
@@ -492,4 +493,18 @@ test("a substring of a longer id is not a match", () => {
     urlShape("https://turo.com/api/v2/reimbursement/5842/request", "https://turo.com/", page),
     /<digits\(4\)>/
   );
+});
+
+test("a toll invoice is filed on the v3 route, with the reservation id", () => {
+  // Read unmasked off a filing Turo answered 200. The page's other calls are
+  // v2, and borrowing their segment is what 404'd the first real filing.
+  assert.equal(reimbursementRequestPath("58426608"), "/api/v3/reimbursement/58426608/request");
+});
+
+test("a filing path is never built from something that is not a reservation id", () => {
+  // Thrown in the worker, before the evidence image is uploaded: a bad path
+  // found after the upload leaves a stray photo on somebody's trip.
+  assert.throws(() => reimbursementRequestPath(""));
+  assert.throws(() => reimbursementRequestPath("58426608/../x"));
+  assert.throws(() => reimbursementRequestPath("abc"));
 });

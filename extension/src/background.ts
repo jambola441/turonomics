@@ -25,7 +25,13 @@ import {
   type ScrapedPage,
   type ScrapedTable,
 } from "./tolls.js";
-import { describeEmbedded, summariseCalls, type Embedded, type SeenCall } from "./turo.js";
+import {
+  describeEmbedded,
+  reimbursementRequestPath,
+  summariseCalls,
+  type Embedded,
+  type SeenCall,
+} from "./turo.js";
 import type { Draft, FileInvoiceResult, TuroPullResult, TuroWanted } from "./types.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
@@ -417,7 +423,13 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
   const outcome = await inPage(
     tabId,
     fileInvoiceInPage,
-    [draft.evidence_svg, draft.turo_trip_id, draft.amount_dollars, draft.message],
+    [
+      draft.evidence_svg,
+      draft.turo_trip_id,
+      reimbursementRequestPath(draft.turo_trip_id),
+      draft.amount_dollars,
+      draft.message,
+    ],
     12,
     "MAIN"
   );
@@ -461,7 +473,10 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
  * browser already holds:
  *
  *   POST /api/reservation/image              multipart {file, reservationId}
- *   POST /api/<locale>/reimbursement/<id>/request   with that image's uuid
+ *   POST /api/v3/reimbursement/<id>/request  with that image's uuid
+ *
+ * The second path is built in the worker by `reimbursementRequestPath` and
+ * passed in, because this function runs in the page and can import nothing.
  *
  * The SVG is rasterised here rather than in the worker because a service
  * worker has no DOM to draw one with, and the sheet is self-contained — no
@@ -474,6 +489,7 @@ async function fileInvoice(tabId: number): Promise<FileInvoiceResult> {
 function fileInvoiceInPage(
   svg: string,
   reservationId: string,
+  requestPath: string,
   amount: number,
   message: string
 ): Promise<{ ok: true; reimbursementId: number } | { ok: false; error: string; stage: string }> {
@@ -507,58 +523,7 @@ function fileInvoiceInPage(
       image.src = encoded;
     });
 
-  /**
-   * The segment between `/api/` and the route, read from what this page has
-   * already fetched.
-   *
-   * It was hard-coded to "us", read off `/api/<str(2)>/…` in a masked probe
-   * report. The POST went to a path that does not exist and came back 404 —
-   * after the evidence image had been uploaded. A second reading said the
-   * segment must be a version like "v2", since the masker prints a plain
-   * lowercase segment verbatim and only one containing a digit masks that
-   * way; the operator, looking at their own browser, said "en".
-   *
-   * Both are inferences about somebody else's URL, and one of them is already
-   * known to have been wrong. So neither is used: this takes the segment from
-   * a URL the page actually fetched, whatever it turns out to be, and fails
-   * plainly if it cannot find one.
-   */
-  const apiPrefix = (): string | null => {
-    try {
-      const names = performance.getEntriesByType("resource").map((entry) => entry.name);
-      // Strongest evidence first: a call on the reimbursement route itself.
-      // Then any of the routes observed carrying the same prefix. Whatever
-      // that segment turns out to be — a version, a locale, something else —
-      // this takes it from a URL the page actually fetched rather than from
-      // anybody's reading of a masked report.
-      for (const pattern of [
-        /\/api\/([A-Za-z0-9_-]{1,8})\/reimbursement\//,
-        /\/api\/([A-Za-z0-9_-]{1,8})\/reservations\/\d+\/reimbursement/,
-        /\/api\/([A-Za-z0-9_-]{1,8})\/(?:feeds|driver|reservation)\//,
-      ]) {
-        for (const name of names) {
-          const found = pattern.exec(name);
-          if (found) return found[1];
-        }
-      }
-    } catch {
-      // Resource timing is not something to fail a filing over.
-    }
-    return null;
-  };
-
   return (async () => {
-    const prefix = apiPrefix();
-    if (!prefix) {
-      // Deliberately not falling back to a guess. The last guess uploaded an
-      // evidence image and then 404'd, which leaves a stray photo on the trip
-      // and nothing filed.
-      return fail(
-        "route",
-        "could not read Turo's API path from this page — open a trip page, let it " +
-          "load, and try again"
-      );
-    }
     let png: Blob;
     try {
       png = await rasterise();
@@ -587,7 +552,7 @@ function fileInvoiceInPage(
     }
 
     try {
-      const response = await fetch(`/api/${prefix}/reimbursement/${reservationId}/request`, {
+      const response = await fetch(requestPath, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -611,7 +576,7 @@ function fileInvoiceInPage(
         // be wrong, and a bare status sends somebody back to the network tab.
         return fail(
           "request",
-          `Turo said ${response.status} to /api/${prefix}/reimbursement/${reservationId}/request`
+          `Turo said ${response.status} to ${requestPath}`
         );
       }
       const body = (await response.json()) as { reimbursementId?: number };

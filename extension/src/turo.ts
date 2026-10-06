@@ -403,6 +403,29 @@ export function describePull(result: TuroPullResult): string {
   return parts.join(" · ");
 }
 
+/**
+ * Where a toll invoice is filed, for one reservation.
+ *
+ * `v3`, read unmasked off the operator's own filing of 58426608, which Turo
+ * answered 200. The same page fetched `/api/v2/driver/detail` and
+ * `/api/v2/reservations/<id>/reimbursement/invoice` — Turo versions each route
+ * separately, so no other call's segment says anything about this one.
+ *
+ * It used to be discovered from whatever the page had fetched, which is how it
+ * came to be `v2`: on a filing page the only versioned calls are those two, and
+ * the filing route itself is never fetched until somebody files. Discovery that
+ * can only ever find the wrong route is worse than a constant, because a
+ * constant at least fails the same way every time and names itself.
+ *
+ * The id is the reservation's — the probe placed it as "the one in the page
+ * url" — not a reimbursement or invoice id.
+ */
+export function reimbursementRequestPath(reservationId: string): string {
+  if (!/^\d+$/.test(reservationId)) {
+    throw new Error(`not a reservation id: ${JSON.stringify(reservationId)}`);
+  }
+  return `/api/v3/reimbursement/${reservationId}/request`;
+}
 
 /** What a filing did, in one line. */
 export function describeFiling(result: FileInvoiceResult): string {

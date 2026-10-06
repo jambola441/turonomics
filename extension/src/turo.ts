@@ -400,7 +400,63 @@ export function describePull(result: TuroPullResult): string {
   // read it.
   if (result.failed) parts.push(`${result.failed} Turo would not return`);
   if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
+  const invoices = result.invoices;
+  if (invoices && invoices.asked) {
+    parts.push(`${invoices.seen} of ${invoices.asked} invoice(s) read`);
+    if (invoices.failed) parts.push(`${invoices.failed} invoice(s) Turo would not return`);
+    if (invoices.unparsed) parts.push(`${invoices.unparsed} invoice(s) unreadable`);
+    // The answers themselves, not a count of them: "$40.71 of $140.40 was
+    // tolls" is the thing the operator pulled to find out.
+    parts.push(...invoices.itemised);
+  }
   return parts.join(" · ");
+}
+
+/**
+ * The invoice a Turo page is showing, as [reservation, invoice], or null.
+ *
+ * `turo.com/us/en/reservation/58358939/reimbursement/invoice?invoiceId=113672232`
+ * is the shape observed. An invoice seen only through the "charged" email has
+ * no id this app knows, so the way to read one is to open its page and pull
+ * from there — which needs the page's own URL read.
+ */
+export function invoiceOnPage(url: string): [string, string] | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (!/(^|\.)turo\.com$/.test(parsed.hostname)) return null;
+  const reservation = /\/reservation\/(\d+)\/reimbursement\/invoice\/?$/.exec(parsed.pathname);
+  const invoice = parsed.searchParams.get("invoiceId");
+  if (!reservation || !invoice || !/^\d+$/.test(invoice)) return null;
+  return [reservation[1], invoice];
+}
+
+/** The invoices a pull should read: the API's list, plus the open page's. */
+export function invoicesToRead(
+  wanted: [string, string][] | undefined,
+  pageUrl: string | undefined
+): [string, string][] {
+  const out: [string, string][] = [];
+  const seen = new Set<string>();
+  const onPage = pageUrl ? invoiceOnPage(pageUrl) : null;
+  for (const pair of [...(onPage ? [onPage] : []), ...(wanted ?? [])]) {
+    const key = pair.join("/");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(pair);
+  }
+  return out;
+}
+
+/** Turo's invoice route, filled in. Both parts are digits or this refuses. */
+export function invoicePath(template: string, reservation: string, invoice: string): string {
+  if (!/^\d+$/.test(reservation) || !/^\d+$/.test(invoice)) {
+    throw new Error(`not an invoice: ${reservation}/${invoice}`);
+  }
+  return template.replace("{id}", reservation).replace("{invoice}", invoice);
 }
 
 /**

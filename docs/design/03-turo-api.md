@@ -269,6 +269,30 @@ pulling: email states a trip's times as they were when it was sent, and nothing
 re-states them when a guest extends. Each change is reported rather than
 applied quietly, and a change re-runs toll attribution.
 
+### Invoices the email did not break down
+
+The "has been charged" email links the receipt rather than the invoice and
+often gives only a total. A rental carrying one of those cannot be filed for:
+Austin's 59077848 had $140.40 charged that way beside $40.71 of crossings, and
+nothing here could say the $140.40 was not those tolls. Next-draft skips such a
+rental and the ledger calls it "check Turo's invoice".
+
+The pull reads them. `GET /api/turo/wanted` lists `invoices` — reservation and
+invoice id pairs for invoices with no readable toll line — and the
+`invoice_path` to fetch each from. The extension also adds the invoice page
+that is open, because an invoice seen only through the charged email has no id
+the API knows: opening it on Turo and pressing Pull is how that one is read.
+Bodies go to `POST /api/turo/invoices` unmodified.
+
+`ingest/turo_invoice.py` takes the toll share from `lineItems[].type`, never
+the title. It matches the invoice to the mail's row by either Turo id, then —
+only for a row with no lines — by total, and refuses to guess between two such
+rows of one amount. A toll line learned this way stamps as asked the crossings
+imported before the invoice was first seen, and ticks them off if it was
+charged. An invoice the mail never saw is recorded as filed, not charged,
+because `reimbursementStatus` has not yet been read unmasked; the response
+reports every status it sees until it has.
+
 ## What this does not answer
 
 - Whether a check-out *time* (as opposed to an odometer reading) is in the

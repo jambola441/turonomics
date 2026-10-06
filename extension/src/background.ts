@@ -27,12 +27,20 @@ import {
 } from "./tolls.js";
 import {
   describeEmbedded,
+  invoicePath,
+  invoicesToRead,
   reimbursementRequestPath,
   summariseCalls,
   type Embedded,
   type SeenCall,
 } from "./turo.js";
-import type { Draft, FileInvoiceResult, TuroPullResult, TuroWanted } from "./types.js";
+import type {
+  Draft,
+  FileInvoiceResult,
+  TuroInvoicesResult,
+  TuroPullResult,
+  TuroWanted,
+} from "./types.js";
 import type { ImportResult, MessageType, SendTollsResult, TuroTrip } from "./types.js";
 
 // ---------------------------------------------------------------------------
@@ -395,7 +403,51 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
         : `the API said ${response.status}`;
     throw new Error(detail);
   }
-  return { ...(result as TuroPullResult), asked: wanted.reservations.length, failed };
+  const invoices = await pullInvoices(tabId, wanted, apiBase, tollsToken);
+  return {
+    ...(result as TuroPullResult),
+    asked: wanted.reservations.length,
+    failed,
+    ...(invoices ? { invoices } : {}),
+  };
+}
+
+/**
+ * Read the invoices the mail could not break down, and the one on screen.
+ *
+ * The open page is included because an invoice seen only through the
+ * "charged" email has no id the API knows — opening it on Turo and pressing
+ * Pull is how that one gets read.
+ */
+async function pullInvoices(
+  tabId: number,
+  wanted: TuroWanted,
+  apiBase: string,
+  tollsToken: string | undefined
+): Promise<TuroInvoicesResult | null> {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const pairs = invoicesToRead(wanted.invoices, tab?.url);
+  if (!pairs.length || !wanted.invoice_path) return null;
+  const bodies: { reservation_id: string; body: unknown }[] = [];
+  let failed = 0;
+  for (const [reservation, invoice] of pairs) {
+    const path = invoicePath(wanted.invoice_path, reservation, invoice);
+    const body = await inPage(tabId, fetchJsonInPage, [path], 12, "MAIN");
+    if (body === null) failed += 1;
+    else bodies.push({ reservation_id: reservation, body });
+    await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+  }
+  const response = await fetch(`${apiBase}/api/turo/invoices`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+    },
+    body: JSON.stringify({ invoices: bodies }),
+  });
+  const result: unknown = await response.json().catch(() => null);
+  if (!response.ok) throw new Error(`the API said ${response.status} to the invoices`);
+  return { ...(result as TuroInvoicesResult), asked: pairs.length, failed };
 }
 
 const PULL_GAP_MS = 250;

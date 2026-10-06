@@ -33,6 +33,12 @@ from turonomics_api.ingest.turo_detail import (
     read_grace,
     wanted_reservations,
 )
+from turonomics_api.ingest.turo_invoice import (
+    TuroInvoiceResult,
+    apply_turo_invoice,
+    parse_turo_invoice,
+    wanted_invoices,
+)
 from turonomics_api.routers.tolls import require_token, token_configured
 
 log = logging.getLogger("turonomics.routers.turo")
@@ -50,6 +56,10 @@ class WantedResponse(BaseModel):
     # change to it does not need a side-loaded rebuild to fix.
     detail_path: str = "/api/reservation/detail?reservationId={id}&oppTermsAware=true"
     token_required: bool
+    # Invoices whose breakdown the mail did not give, as [reservation, invoice]
+    # pairs, and where Turo's invoice page reads one from.
+    invoices: list[list[str]] = []
+    invoice_path: str = "/api/v2/reservations/{id}/reimbursement/invoice/{invoice}"
 
 
 class DetailsIn(BaseModel):
@@ -79,6 +89,7 @@ def wanted(session: DbSession) -> WantedResponse:
     return WantedResponse(
         reservations=wanted_reservations(session),
         token_required=token_configured(),
+        invoices=[[reservation, invoice] for reservation, invoice in wanted_invoices(session)],
     )
 
 
@@ -158,4 +169,76 @@ def post_details(
         wrong_plate=result.wrong_plate,
         tolls_rematched=rematched,
         grace_periods=describe_grace_periods(session),
+    )
+
+
+class InvoiceIn(BaseModel):
+    """One invoice-page body, with the reservation it was fetched for.
+
+    The reservation travels beside the body because the body does not carry
+    it: `tripInfo` has the times and the guest's first name, not the id.
+    """
+
+    reservation_id: str
+    body: dict[str, Any]
+
+
+class InvoicesIn(BaseModel):
+    invoices: list[InvoiceIn]
+
+
+class InvoicesResponse(BaseModel):
+    seen: int
+    unparsed: int
+    matched: int
+    created: int
+    # One line per invoice whose toll share is now known, saying what it was.
+    itemised: list[str]
+    tolls_asked: int
+    tolls_recovered: int
+    # Turo's reimbursementStatus values, reported because none has been read
+    # unmasked yet and nothing here acts on them until one has.
+    statuses: list[str]
+
+
+@router.post("/invoices", response_model=InvoicesResponse)
+def post_invoices(
+    payload: InvoicesIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> InvoicesResponse:
+    require_token(authorization)
+    now = datetime.now(UTC)
+    result = TuroInvoiceResult()
+    unparsed = 0
+    for item in payload.invoices:
+        invoice = parse_turo_invoice(item.reservation_id, item.body)
+        if invoice is None:
+            unparsed += 1
+            continue
+        apply_turo_invoice(session, invoice, now=now, result=result)
+    session.commit()
+    log.info(
+        "turo invoices: %d read, %d unparsed, %d matched, %d new, %d crossing(s) "
+        "asked, %d recovered",
+        result.seen,
+        unparsed,
+        result.matched,
+        result.created,
+        result.tolls_asked,
+        result.tolls_recovered,
+    )
+    for line in result.newly_itemised:
+        log.info("turo invoices: %s", line)
+    for line in result.statuses:
+        log.info("turo invoices: status %s", line)
+    return InvoicesResponse(
+        seen=result.seen,
+        unparsed=unparsed,
+        matched=result.matched,
+        created=result.created,
+        itemised=result.newly_itemised,
+        tolls_asked=result.tolls_asked,
+        tolls_recovered=result.tolls_recovered,
+        statuses=result.statuses,
     )

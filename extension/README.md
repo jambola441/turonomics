@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.8.0 | build + reload | Pull also reads Turo invoices the email did not break down, and the invoice page you have open |
 | 1.7.4 | build + reload | toll filing posts to `/api/v3/reimbursement/<reservation>/request` — the route Turo actually uses |
 | 1.7.3 | build + reload | the probe says whether an id in a path is the one in the page URL |
 | 1.7.2 | build + reload | reads the API path from the page, and names it when a call fails |

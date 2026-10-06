@@ -265,6 +265,10 @@ def _rows_for(session: Session, invoice: TuroInvoice) -> list[ReimbursementInvoi
     ]
     if len(by_amount) != 1 or others:
         by_amount = []
+    # Among rows found by id, the one keyed by the invoice id is the one the
+    # "filed" email will keep producing, so it is the one to keep; the
+    # extension's own, keyed by the reimbursement id, is folded into it.
+    by_id.sort(key=lambda row: row.fingerprint != f"inv:{invoice.invoice_id}")
     return by_amount + [row for row in by_id if row not in by_amount]
 
 
@@ -478,17 +482,24 @@ def hub_to_read(
             )
         )
     }
-    # A row the mail made without an id, and that still cannot say what share
-    # was tolls, is one of these invoices — but which, only reading them can
-    # tell. So every invoice on that reservation is read until it is matched.
-    # That is a handful of requests on the rentals where it matters, and it is
-    # how the duplicates an earlier, gross-only match recorded get folded in.
+    # A row this hub cannot account for is one of its invoices under another
+    # name, and only reading them all can say which. Two shapes:
+    #
+    # * no id at all — the "charged" email links the receipt, so its row is
+    #   keyed by amount. Austin's $140.40 was one.
+    # * an id the hub does not list — the extension's own filing, keyed by
+    #   Turo's reimbursement id. Katherine's $39.74 was counted twice this
+    #   way, once under each id.
+    #
+    # Reading folds each into the invoice it is. Until then every invoice on
+    # that reservation is read on each pull, which is a handful of requests on
+    # the rentals where the ledger is wrong, and none anywhere else.
+    listed_ids = {invoice.invoice_id for invoice in listed}
     unmatched = any(
-        _unanswered(row)
+        row.turo_invoice_id is None or row.turo_invoice_id not in listed_ids
         for row in session.scalars(
             select(ReimbursementInvoice).where(
-                ReimbursementInvoice.reservation_id == reservation_id,
-                ReimbursementInvoice.turo_invoice_id.is_(None),
+                ReimbursementInvoice.reservation_id == reservation_id
             )
         )
     )

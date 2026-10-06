@@ -654,3 +654,51 @@ def test_two_invoices_of_one_size_are_not_guessed_between_by_net_either(
 def test_reading_hubs_needs_the_token(api_client, monkeypatch) -> None:
     monkeypatch.setenv("TOLLS_TOKEN", "s3cret")
     assert api_client.post("/api/turo/hubs", json={"hubs": []}).status_code == 401
+
+
+@requires_db
+def test_an_answered_row_without_an_id_still_has_its_hub_read(session, rental) -> None:
+    """58313068: the email itemised its $45.88 of distance, so its row was
+    answered — and the first pull, matching on the gross alone, recorded
+    Turo's invoice beside it. The hub has to be read again to fold them."""
+    _emailed(session, rental, total=4129, lines=[("Additional distance", 4588)])
+    _emailed(session, rental, total=4588, state="filed", invoice_id="1",
+             lines=[("Additional distance", 4588)])
+    listed = parse_hub(_hub(1))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == [(RES, "1")]
+
+
+@requires_db
+def test_the_extensions_own_filing_has_its_hub_read(session, rental) -> None:
+    """Katherine: the extension's row is keyed by reimbursement id, the
+    email's by invoice id, both carry the $39.74 toll line."""
+    for invoice_id in ("5550001", "113672232"):
+        row = _emailed(session, rental, total=3974, state="filed", invoice_id=invoice_id,
+                       lines=[("Tolls", 3974)])
+        row.toll_cents = 3974  # both answered: only the foreign id says to read
+    listed = parse_hub(_hub(113672232))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == [(RES, "113672232")]
+
+
+@requires_db
+def test_a_hub_that_accounts_for_every_row_is_not_read(session, rental) -> None:
+    _emailed(session, rental, total=5000, lines=[("Tickets", 5000)], invoice_id="7")
+    listed = parse_hub(_hub(7))
+    assert listed is not None
+    assert hub_to_read(session, RES, listed) == []
+
+
+@requires_db
+def test_katherines_two_rows_become_the_emails_one(session, car, rental) -> None:
+    ours = _emailed(session, rental, total=3974, state="filed", invoice_id="5550001",
+                    lines=[("Tolls", 3974)])
+    emails = _emailed(session, rental, total=3974, state="filed", invoice_id="113672232",
+                      lines=[("Tolls", 3974)])
+    body = _body(("TOLL_REIMBURSEMENT", "Tolls", 39.74))
+    applied, result = _apply(session, body)
+    session.flush()
+    assert applied.id == emails.id, "the row the filed email keeps producing"
+    assert result.merged == 1
+    assert session.get(ReimbursementInvoice, ours.id) is None

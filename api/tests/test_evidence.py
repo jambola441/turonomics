@@ -753,3 +753,34 @@ def test_a_turo_toll_line_that_did_not_reconcile_is_flagged(
     assert row["state"] == "check Turo's toll line"
     assert "$36.31 of tolls" in row["note"]
     assert "$70.51 still outstanding" in row["note"]
+
+
+@requires_db
+def test_turo_refusing_inside_the_window_is_on_the_row(
+    api_client, session, car, rental
+) -> None:
+    """Found live: 34 rentals worth $1,218 that Turo will not accept a
+    reimbursement for, reaching the operator as a 404 from the filing button —
+    which reads as "nothing to do" rather than "money you cannot collect"."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2), cents=2789)
+    rental.can_file_reimbursement = False
+    session.commit()
+
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "Turo will not take it"
+    assert row["can_file"] is False
+    assert "cannot be requested" in row["note"]
+    assert "day(s) of the window remain" in row["note"], "and that it is not a deadline"
+
+
+@requires_db
+def test_a_rental_turo_has_not_been_asked_about_still_reads_as_to_bill(
+    api_client, session, car, rental
+) -> None:
+    """Null is not false. A rental the pull has never covered must not look
+    like one Turo has refused."""
+    _crossing(session, car, rental, at=ENDS - td(hours=2))
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["can_file"] is None
+    assert row["state"] == "to bill"

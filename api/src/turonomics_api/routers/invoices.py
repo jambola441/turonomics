@@ -330,6 +330,9 @@ class LedgerRow(BaseModel):
     charged_cents: int
     turo_toll_line_cents: int | None
 
+    # Turo's own answer about whether a reimbursement can still be requested,
+    # where the pull has fetched it. Null means it has not been asked.
+    can_file: bool | None
     # A word for the row, so a page does not have to re-derive one and two
     # readers do not reach different conclusions from the same numbers.
     state: str
@@ -354,6 +357,7 @@ def _ledger_state(
     recovered: int,
     toll_line: int | None,
     left: int | None,
+    can_file: bool | None,
 ) -> tuple[str, str | None]:
     """What this rental's crossings amount to, in a word.
 
@@ -396,6 +400,16 @@ def _ledger_state(
             f"Turo charged ${toll_line / 100:,.2f} of tolls against "
             f"${unfiled / 100:,.2f} still outstanding here",
         )
+    if unfiled > 0 and can_file is False:
+        # Turo refusing, inside the window, is the single most consequential
+        # thing this view can report — and it was reaching the operator as a
+        # 404 from the filing button, which reads as "nothing to do" rather
+        # than "money you cannot collect". It belongs on the row.
+        return (
+            "Turo will not take it",
+            "Turo says a reimbursement cannot be requested for this rental, "
+            f"though {left} day(s) of the window remain",
+        )
     if unfiled > 0 and left is not None and left < 0:
         return "expired", "past the 90-day window, so this cannot be filed"
     if unfiled > 0:
@@ -430,6 +444,7 @@ def ledger(session: DbSession) -> LedgerResponse:
             t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
         )
         recovered = sum(t.amount_cents for t in tolls if t.recovered_at is not None)
+        trip = session.get(Trip, invoice.trip_id)
         theirs = asked.get(invoice.trip_id) or []
         charged = sum(r.total_cents for r in theirs if r.state == "charged")
         toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
@@ -441,6 +456,7 @@ def ledger(session: DbSession) -> LedgerResponse:
             recovered=recovered,
             toll_line=sum(toll_lines) if toll_lines else None,
             left=left,
+            can_file=trip.can_file_reimbursement if trip is not None else None,
         )
         rows.append(
             LedgerRow(
@@ -458,6 +474,7 @@ def ledger(session: DbSession) -> LedgerResponse:
                 asked_cents=sum(r.total_cents for r in theirs),
                 charged_cents=charged,
                 turo_toll_line_cents=sum(toll_lines) if toll_lines else None,
+                can_file=trip.can_file_reimbursement if trip is not None else None,
                 state=state,
                 note=note,
             )

@@ -42,6 +42,10 @@ export interface TuroWanted {
   hub_path?: string;
   /** Where Turo lists the account's reservations; `{page}` marks a paged one. */
   reservation_lists?: string[];
+  /** Trips whose photos and message thread are worth reading this pull. */
+  extras?: string[];
+  photos_path?: string;
+  messages_path?: string;
 }
 
 /** What reading Turo's reservation lists found. */
@@ -89,6 +93,8 @@ export interface TuroPullResult {
   /** Reservations whose invoice hub Turo offers, so worth reading. */
   invoice_hubs?: string[];
   discovered?: TuroDiscovery;
+  /** Trips whose photos and messages were read. */
+  extras_read?: number;
   /** How many the API asked for, and how many Turo would not hand over. */
   asked: number;
   failed: number;

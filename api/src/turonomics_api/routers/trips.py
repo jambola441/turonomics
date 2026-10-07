@@ -33,6 +33,7 @@ from turonomics_api.db.models import (
     Vehicle,
 )
 from turonomics_api.ingest.tolls import rematch_unattributed
+from turonomics_api.ingest.turo_extras import photo_groups, thread
 from turonomics_api.routers.tolls import require_token
 from turonomics_api.settings import fleet_timezone
 
@@ -263,6 +264,22 @@ class ViewInvoice(BaseModel):
     url: str | None
 
 
+class ViewPhotos(BaseModel):
+    step: str
+    count: int
+    by: str | None
+    first: datetime | None
+    last: datetime | None
+
+
+class ViewMessage(BaseModel):
+    role: str | None
+    name: str | None
+    sent_at: datetime | None
+    text: str | None
+    images: int
+
+
 class ViewCommand(BaseModel):
     kind: str
     state: str
@@ -290,6 +307,11 @@ class TripView(BaseModel):
     tolls: list[ViewToll]
     invoices: list[ViewInvoice]
     commands: list[ViewCommand]
+    # The trip's photos, counted by step, and its message thread — None until
+    # a pull has read them, which is different from a trip that had none.
+    photos: list[ViewPhotos] | None = None
+    messages: list[ViewMessage] | None = None
+    extras_synced_at: datetime | None = None
 
 
 _TURO = "https://turo.com/us/en"
@@ -480,4 +502,13 @@ def view_trip(
             )
             for c in commands
         ],
+        photos=None if trip.turo_photos is None else [
+            ViewPhotos(step=g.step, count=g.count, by=g.by, first=g.first, last=g.last)
+            for g in photo_groups(trip.turo_photos)
+        ],
+        messages=None if trip.turo_messages is None else [
+            ViewMessage(role=m.role, name=m.name, sent_at=m.sent_at, text=m.text, images=m.images)
+            for m in thread(trip.turo_messages)
+        ],
+        extras_synced_at=trip.extras_synced_at,
     )

@@ -268,6 +268,19 @@ def _trip_view(trip_id: str) -> dict | None:
                         "?invoiceId=113672232"},
             ],
             "commands": [],
+            "photos": [
+                {"step": "RENTER_CHECK_IN", "count": 12, "by": "GUEST",
+                 "first": "2026-07-09T11:02:00Z", "last": "2026-07-09T11:09:00Z"},
+                {"step": "RENTER_CHECK_OUT", "count": 9, "by": "GUEST",
+                 "first": "2026-07-12T17:40:00Z", "last": "2026-07-12T17:44:00Z"},
+            ],
+            "messages": [
+                {"role": "HOST", "name": "Host", "sent_at": "2026-07-09T09:00:00Z",
+                 "text": "Welcome! Keys are in the box.", "images": 0},
+                {"role": "GUEST", "name": "Alice", "sent_at": "2026-07-12T17:45:00Z",
+                 "text": "Returned, thanks", "images": 2},
+            ],
+            "extras_synced_at": NOW.isoformat(),
         }
     for trip in TRIPS:
         if trip["id"] == trip_id:

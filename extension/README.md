@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.12.0 | build + reload | Pull reads each trip's photos and message thread for the trip view |
 | 1.11.0 | build + reload | Pull finds every reservation on the account from Turo's own trip lists, not only the ones the mail mentioned |
 | 1.10.1 | build + reload | after filing, reads that rental's invoice from Turo so Turo's email does not count it twice |
 | 1.10.0 | build + reload | runs what the site queues — Pull from Turo, and File on a ledger row — within a few seconds while Chrome is open |

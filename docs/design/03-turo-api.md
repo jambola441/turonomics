@@ -376,6 +376,15 @@ unlike the lists, because Turo's detail names the guest and the pickup
 address. The site's trips page lists Turo and off-platform rentals together
 and is where off-platform ones are added.
 
+The pull also reads each trip's photos and message thread, the two other
+calls a reservation page makes —
+`GET /api/reservation/photos?reservationId` (`images[]`: `step`, who took it,
+`takenAtTime`; ids, no image URL) and
+`GET /api/v2/reservation/conversation?reservationId` (messages with author
+role, time, text and attached images). Kept whole on the trip; read once a
+trip has started and again until five days after it ends, never-read first.
+Photos are counted by step in the view until their URL pattern is known.
+
 After filing, the extension reads that rental's invoice hub at once. The
 filing is recorded under Turo's reimbursement id and Turo's email arrives keyed
 by the invoice id; reading the hub ties the two together before the email

@@ -33,6 +33,7 @@ from turonomics_api.ingest.turo_detail import (
     read_grace,
     wanted_reservations,
 )
+from turonomics_api.ingest.turo_extras import ExtrasResult, apply_extras, wanted_extras
 from turonomics_api.ingest.turo_invoice import (
     TuroInvoiceResult,
     apply_turo_invoice,
@@ -77,6 +78,11 @@ class WantedResponse(BaseModel):
     # than waited for in the mail. `{page}` and `{size}` are filled in by the
     # extension; a list without `{page}` is read once.
     reservation_lists: list[str] = list(RESERVATION_LISTS)
+    # Trips whose photos and message thread are worth reading this pull, and
+    # where Turo's reservation page reads each from.
+    extras: list[str] = []
+    photos_path: str = "/api/reservation/photos?reservationId={id}"
+    messages_path: str = "/api/v2/reservation/conversation?reservationId={id}"
 
 
 class DetailsIn(BaseModel):
@@ -109,6 +115,7 @@ def wanted(session: DbSession) -> WantedResponse:
         reservations=wanted_reservations(session),
         token_required=token_configured(),
         invoices=[[reservation, invoice] for reservation, invoice in wanted_invoices(session)],
+        extras=wanted_extras(session, now=datetime.now(UTC)),
     )
 
 
@@ -392,3 +399,45 @@ def post_reservations(
         ids=ids,
         num_pages=_num_pages(payload.body),
     )
+
+
+class ExtrasItem(BaseModel):
+    reservation_id: str
+    # Turo's bodies as returned; None when the fetch failed, which is not the
+    # same as a trip with no photos and is not stored as one.
+    photos: Any = None
+    messages: Any = None
+
+
+class ExtrasIn(BaseModel):
+    items: list[ExtrasItem]
+
+
+class ExtrasResponse(BaseModel):
+    stored: int
+    unknown: list[str]
+
+
+@router.post("/extras", response_model=ExtrasResponse)
+def post_extras(
+    payload: ExtrasIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ExtrasResponse:
+    """Keep a batch of trips' photos and message threads for the trip view."""
+    require_token(authorization)
+    now = datetime.now(UTC)
+    result = ExtrasResult()
+    for item in payload.items:
+        apply_extras(
+            session,
+            item.reservation_id,
+            photos=item.photos,
+            messages=item.messages,
+            now=now,
+            result=result,
+        )
+    session.commit()
+    if result.stored:
+        log.info("turo extras: photos and messages for %d trip(s)", result.stored)
+    return ExtrasResponse(stored=result.stored, unknown=result.unknown)

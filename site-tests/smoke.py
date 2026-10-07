@@ -568,6 +568,14 @@ def main() -> int:
                   "Guest check-in" in view and "12 photos by the guest" in view)
             check("and its messages read as a thread",
                   "Welcome! Keys are in the box." in view and "Returned, thanks [2 photos]" in view)
+            page.wait_for_timeout(500)
+            trip_card = page.locator("#trip-11111111-1111-1111-1111-111111111111")
+            check("its route is drawn on a map",
+                  trip_card.locator(".route.leaflet-container").count() == 1
+                  and trip_card.locator(".route path.leaflet-interactive").count() >= 2)
+            route_note = trip_card.locator(".view").inner_text()
+            check("and the map says where the route came from and what it could not place",
+                  "Route from Bouncie" in route_note and "1 toll not placed" in route_note)
             check("a rental to bill can be filed from its view",
                   page.locator(".view .btn.go").count() == 1
                   and "$11.00" in page.locator(".view .btn.go").inner_text())

@@ -517,6 +517,22 @@ class Handler(BaseHTTPRequestHandler):
             self._send(_ledger_payload())
         elif self.path.startswith("/api/invoices"):
             self._send(_invoices_payload())
+        elif self.path.startswith("/api/trips/") and self.path.endswith("/map"):
+            if not self._authorized():
+                return
+            line = [[40.6782, -73.9655], [40.6400, -74.0100], [40.6066, -74.0447]]
+            self._send({
+                "starts_at": "2026-07-09T11:00:00Z", "ends_at": "2026-07-12T18:00:00Z",
+                "drives": [{"starts_at": "2026-07-10T15:00:00Z",
+                            "ends_at": "2026-07-10T15:40:00Z", "points": line}],
+                "tolls": [
+                    {"occurred_at": "2026-07-10T15:15:00Z", "plaza": "BWB", "amount_cents": 679,
+                     "lat": 40.64, "lon": -74.01, "how": "route"},
+                    {"occurred_at": "2026-07-12T13:10:00Z", "plaza": "583", "amount_cents": 1100,
+                     "lat": None, "lon": None, "how": None},
+                ],
+                "route_source": "bouncie", "note": None,
+            })
         elif self.path.startswith("/api/trips/") and self.path.endswith("/view"):
             # Behind the token, as the real one is: Turo's detail names the
             # guest and the pickup address.

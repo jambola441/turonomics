@@ -14,16 +14,27 @@
 
 import {
   chooseStatement,
+  describeForm,
   describeShape,
+  formatForField,
+  maskValue,
   mergeActivityPages,
+  pickDateFields,
   pickPageSize,
+  quarterRanges,
   rankNextControls,
+  rankSubmitControls,
   shouldStopPaging,
+  sumImportResults,
   tableSignature,
+  usableRows,
   type ControlDescriptor,
+  type DateRange,
+  type InputDescriptor,
   type PageSizeOption,
   type ScrapedPage,
   type ScrapedTable,
+  type WindowReport,
 } from "./tolls.js";
 import {
   describeEmbedded,
@@ -72,6 +83,25 @@ function tripsToCSV(trips: TuroTrip[]): string {
 }
 
 const LOG = (...args: unknown[]) => console.log("[turonomics:bg]", ...args);
+
+/**
+ * The E-ZPass run's own log, handed back to the popup.
+ *
+ * Separate from the console because the console is in a service worker most
+ * people cannot find, and a run that went wrong should be debuggable from one
+ * paste. Nothing here may carry account data: row counts and masked shapes
+ * only, never a cell.
+ */
+let trace: string[] = [];
+let traceStart = 0;
+function note(line: string): void {
+  trace.push(`+${((Date.now() - traceStart) / 1000).toFixed(1)}s ${line}`);
+  LOG(line);
+}
+function startTrace(): void {
+  trace = [];
+  traceStart = Date.now();
+}
 
 // ---------------------------------------------------------------------------
 // Download helper
@@ -352,6 +382,81 @@ function setPageSizeInPage(value: string): boolean {
     }
   }
   return false;
+}
+
+interface FormDescriptor {
+  inputs: InputDescriptor[];
+  controls: ControlDescriptor[];
+}
+
+// The selector for anything that might run a search. Duplicated in the click
+// function below, because both are serialised into the page and cannot share it.
+function readFormInPage(): FormDescriptor {
+  const text = (node: Element | null): string =>
+    (node?.textContent ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  const inputs: InputDescriptor[] = Array.from(document.querySelectorAll("input")).map(
+    (input, index) => {
+      const id = input.id;
+      const label =
+        (id ? text(document.querySelector(`label[for="${CSS.escape(id)}"]`)) : "") ||
+        text(input.closest("label"));
+      return {
+        index,
+        type: (input.getAttribute("type") ?? "text").toLowerCase(),
+        hint: [input.name, id, label, input.placeholder, input.getAttribute("aria-label")]
+          .filter(Boolean)
+          .join(" "),
+        placeholder: input.placeholder || undefined,
+      };
+    }
+  );
+
+  const controls: ControlDescriptor[] = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
+    )
+  ).map((node) => ({
+    text: (node as HTMLInputElement).value && node.tagName === "INPUT"
+      ? (node as HTMLInputElement).value
+      : text(node),
+    ariaLabel: node.getAttribute("aria-label") ?? undefined,
+    disabled:
+      (node as HTMLButtonElement).disabled === true ||
+      node.getAttribute("aria-disabled") === "true",
+    className: node.className ? String(node.className) : undefined,
+  }));
+
+  return { inputs, controls };
+}
+
+function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, toValue: string): boolean {
+  const inputs = Array.from(document.querySelectorAll("input"));
+  const set = (index: number, value: string): boolean => {
+    const input = inputs[index];
+    if (!input) return false;
+    // The native setter, so a framework that wraps `value` still sees a change.
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setter) setter.call(input, value);
+    else input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    return true;
+  };
+  return set(fromIndex, fromValue) && set(toIndex, toValue);
+}
+
+function clickSubmitInPage(index: number): boolean {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
+    )
+  );
+  const node = nodes[index];
+  if (!node) return false;
+  node.click();
+  return true;
 }
 
 async function fetchExportInPage(url: string): Promise<string | null> {
@@ -1076,7 +1181,7 @@ function activityOf(descriptor: PageDescriptor): ScrapedTable | null {
  * fallback.
  */
 async function readStatement(tabId: number): Promise<ScrapedPage> {
-  let descriptor = await inPage(tabId, readPageInPage, []);
+  const descriptor = await inPage(tabId, readPageInPage, []);
 
   for (const url of descriptor.downloadLinks.slice(0, 3)) {
     const csv = await inPage(tabId, fetchExportInPage, [url]);
@@ -1091,14 +1196,29 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
     }
   }
 
+  return pageThrough(tabId, descriptor);
+}
+
+/**
+ * Page through the statement the tab is showing, from the page it is on.
+ *
+ * Shared by the one-shot read and by each date window: both end up looking at a
+ * table with a "next" under it.
+ */
+async function pageThrough(tabId: number, start: PageDescriptor): Promise<ScrapedPage> {
+  let descriptor = start;
   // Fewer pages beats cleverer paging.
   const size = pickPageSize(descriptor.pageSizes);
   if (size !== null) {
     const before = tableSignature(activityOf(descriptor));
     if (await inPage(tabId, setPageSizeInPage, [size])) {
       descriptor = await waitForChange(tabId, before, descriptor);
-      LOG(`asked for ${size} rows per page`);
+      note(`  page size: asked for value "${size}" of ${descriptor.pageSizes.length} options`);
+    } else {
+      note(`  page size: could not set "${size}"`);
     }
+  } else {
+    note("  page size: no rows-per-page control recognised");
   }
 
   const pages: ScrapedTable[] = [];
@@ -1108,6 +1228,12 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
   for (;;) {
     pages.push(...descriptor.tables);
     signatures.push(tableSignature(activityOf(descriptor)));
+    const here = activityOf(descriptor);
+    note(
+      `  page ${signatures.length}: ${here?.rows.length ?? 0} rows` +
+        (here?.rows[0] ? `, first row shaped ${here.rows[0].map(maskValue).join("|")}` : "") +
+        `, tables on page: ${descriptor.tables.length}, next candidates: ${rankNextControls(descriptor.nextControls).length}`
+    );
 
     stopped = shouldStopPaging(signatures);
     if (stopped) break;
@@ -1115,6 +1241,7 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
     const ranked = rankNextControls(descriptor.nextControls);
     if (!ranked.length) {
       stopped = "no next page";
+      note("  no control looked like next");
       break;
     }
 
@@ -1130,6 +1257,7 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
       }
       // That control did nothing. Try the next candidate rather than
       // concluding the statement ends here.
+      note(`  clicked candidate ${index}: the table did not change`);
     }
     if (!advanced) {
       stopped = "no next page";
@@ -1138,7 +1266,7 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
   }
 
   const merged = mergeActivityPages(pages);
-  LOG(`read ${signatures.length} page(s): ${stopped}`);
+  note(`  read ${signatures.length} page(s), ${merged?.rows.length ?? 0} rows merged: ${stopped}`);
   return {
     url: descriptor.url,
     tables: descriptor.tables,
@@ -1147,6 +1275,169 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
     pagesRead: signatures.length,
     pagingStopped: stopped ?? undefined,
   };
+}
+
+/**
+ * Read the statement three months at a time and post each window as it is read.
+ *
+ * Posting per window rather than at the end means a run that dies on window
+ * three has still delivered one and two, and re-running is harmless because the
+ * API fingerprints each crossing. When the page has no date fields or no search
+ * button the tool recognises, this falls back to reading what is on screen, as
+ * before — a page it cannot drive is no worse off than it was.
+ *
+ * The site's own CSV download is not used here: its link is built for whatever
+ * range the page last showed, and a stale link would deliver the same rows for
+ * every window and read as complete.
+ */
+async function sendStatement(tabId: number): Promise<SendTollsResult> {
+  startTrace();
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  note(
+    `extension ${chrome.runtime.getManifest().version}, page ${(tab?.url ?? "?").replace(/\?.*$/, "")}`
+  );
+  let result: SendTollsResult;
+  try {
+    result = await sendStatementTraced(tabId);
+  } catch (error) {
+    // Keep the trace: the steps before the throw are the whole diagnosis.
+    const message = error instanceof Error ? error.message : String(error);
+    note(`THREW: ${message}`);
+    return { result: null, source: "none", rowCount: 0, problem: `the run failed: ${message}`, log: trace };
+  }
+  note(
+    result.problem
+      ? `finished with a problem: ${result.problem}`
+      : result.result
+        ? `finished: ${result.result.rows} rows read, ${result.result.imported} new, ${result.result.already_known} known, ${result.result.matched} attributed`
+        : "finished with nothing sent"
+  );
+  return { ...result, log: trace };
+}
+
+async function sendStatementTraced(tabId: number): Promise<SendTollsResult> {
+  const form = await inPage(tabId, readFormInPage, []);
+  const fields = pickDateFields(form.inputs);
+  for (const line of describeForm(form.inputs, form.controls)) note(line);
+  if (!fields || !rankSubmitControls(form.controls).length) {
+    note("falling back: reading what the page shows (no date range driven)");
+    return sendTolls(await readStatement(tabId));
+  }
+
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+
+  const windows: WindowReport[] = [];
+  const results: ImportResult[] = [];
+  let amountsLookPositive = false;
+  let firstReport: string | undefined;
+  let source: SendTollsResult["source"] = "none";
+  let problem: string | undefined;
+
+  note(`today is ${today}; reading ${quarterRanges(today).length} windows, newest first`);
+  for (const range of quarterRanges(today)) {
+    note(`window ${range.from} to ${range.to}`);
+    const sent = await sendWindow(tabId, range);
+    note(
+      `  window done: ${sent.rowCount} rows` +
+        (sent.result
+          ? `, API: ${sent.result.imported} new, ${sent.result.already_known} known, ${sent.result.matched} attributed`
+          : "") +
+        (sent.problem ? `, PROBLEM: ${sent.problem}` : "")
+    );
+    const report: WindowReport = {
+      ...range,
+      rows: sent.rowCount,
+      pagesRead: sent.pagesRead,
+      pagingStopped: sent.pagingStopped,
+      problem: sent.problem,
+    };
+    windows.push(report);
+    firstReport ??= sent.report;
+    amountsLookPositive ||= sent.amountsLookPositive === true;
+    if (sent.result) {
+      results.push(sent.result);
+      source = sent.source;
+    }
+    if (sent.problem) {
+      // The same headers would be refused again; stop and say which window.
+      problem = `${range.from} to ${range.to}: ${sent.problem}`;
+      break;
+    }
+  }
+
+  const rowCount = windows.reduce((n, w) => n + w.rows, 0);
+  const pagesRead = windows.reduce((n, w) => n + (w.pagesRead ?? 0), 0);
+  return {
+    windows,
+    pagesRead,
+    result: results.length ? sumImportResults(results) : null,
+    source,
+    rowCount,
+    amountsLookPositive,
+    ...(problem ? { problem } : {}),
+    ...(!results.length && !problem ? { report: firstReport } : {}),
+  };
+}
+
+/** Put one range in the form, run the search, page through it, post it. */
+async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsResult> {
+  // Re-read the form every time: a search that reloads the page can renumber
+  // the inputs, and indices from the last window would then type into the wrong
+  // box.
+  const form = await inPage(tabId, readFormInPage, []);
+  const fields = pickDateFields(form.inputs);
+  const submit = rankSubmitControls(form.controls)[0];
+  if (!fields || submit === undefined) {
+    note("  the date fields or search button are gone from the page");
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      problem: "the date fields went away after the previous search",
+    };
+  }
+
+  const before = await inPage(tabId, readPageInPage, []);
+  const fromText = formatForField(range.from, fields.from);
+  const toText = formatForField(range.to, fields.to);
+  const filled = await inPage(tabId, fillDatesInPage, [
+    fields.from.index,
+    fields.to.index,
+    fromText,
+    toText,
+  ]);
+  note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${filled ? "ok" : "FAILED"}`);
+  const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
+  note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
+  if (!clicked) {
+    return { result: null, source: "none", rowCount: 0, problem: "could not run the date search" };
+  }
+
+  const after = await waitForChange(tabId, tableSignature(activityOf(before)), before);
+  const stillThere = pickDateFields((await inPage(tabId, readFormInPage, [])).inputs);
+  note(
+    `  rows before search: ${activityOf(before)?.rows.length ?? 0}, after: ${activityOf(after)?.rows.length ?? 0}` +
+      `, url now ${after.url.replace(/\?.*$/, "")}, date fields still on page: ${stillThere ? "yes" : "NO"}`
+  );
+  const page = await pageThrough(tabId, after);
+  const table = page.merged;
+  if (!table || !usableRows(table).length) {
+    // Three months with no crossings is ordinary, not an error.
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      pagesRead: page.pagesRead,
+      pagingStopped: page.pagingStopped,
+      report: describeShape(page),
+    };
+  }
+  return sendTolls(page);
 }
 
 /** Re-read until the table changes, or long enough to be sure it will not. */
@@ -1161,6 +1452,7 @@ async function waitForChange(
     if (tableSignature(activityOf(descriptor)) !== before) return descriptor;
     fallback = descriptor;
   }
+  note("  waited 8s and the table never changed");
   return fallback;
 }
 
@@ -1183,8 +1475,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "SEND_TOLLS") {
-    readStatement(message.tabId)
-      .then(sendTolls)
+    sendStatement(message.tabId)
       .then(
       (result) => sendResponse({ type: "SEND_TOLLS_RESULT", result } satisfies MessageType),
       (error: unknown) =>

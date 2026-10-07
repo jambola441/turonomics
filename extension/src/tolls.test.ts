@@ -14,18 +14,26 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  addDays,
+  addMonths,
   amountsLookPositive,
   chooseStatement,
   classifyHeaders,
   cleanCell,
+  describeForm,
   describeShape,
+  formatForField,
   MAX_PAGES,
   maskValue,
   mergeActivityPages,
   pickActivityTable,
+  pickDateFields,
   pickPageSize,
+  quarterRanges,
   rankNextControls,
+  rankSubmitControls,
   shouldStopPaging,
+  sumImportResults,
   tableSignature,
   toCsv,
   usableRows,
@@ -435,4 +443,165 @@ test("'>>' text beats a label claiming it is next", () => {
   // is the worse mistake, so for this one signal the text wins.
   assert.deepEqual(rankNextControls([{ text: ">>", ariaLabel: "Next page" }]), []);
   assert.deepEqual(rankNextControls([{ text: "»", ariaLabel: "Next" }]), []);
+});
+
+// ---------------------------------------------------------------------------
+// Date windows
+// ---------------------------------------------------------------------------
+test("months are added with the day clamped to the month's length", () => {
+  assert.equal(addMonths("2026-05-31", -3), "2026-02-28");
+  assert.equal(addMonths("2024-05-31", -3), "2024-02-29");
+  assert.equal(addMonths("2026-01-15", -3), "2025-10-15");
+  assert.equal(addMonths("2026-11-30", 3), "2027-02-28");
+});
+
+test("days roll over month and year ends", () => {
+  assert.equal(addDays("2026-03-01", -1), "2026-02-28");
+  assert.equal(addDays("2026-01-01", -1), "2025-12-31");
+});
+
+test("windows run newest first, three months each, ending today", () => {
+  const ranges = quarterRanges("2026-10-07", 12);
+  assert.equal(ranges.length, 4);
+  assert.deepEqual(ranges[0], { from: "2026-07-08", to: "2026-10-07" });
+  assert.equal(ranges[3].from, "2025-10-08");
+});
+
+test("windows leave no gap and no overlap, whatever day it is", () => {
+  // A gap is a crossing never read. Checked across every day of two years so
+  // the month-end clamping cannot hide one.
+  for (let i = 0; i < 730; i++) {
+    const today = addDays("2025-01-01", i);
+    const ranges = quarterRanges(today, 12);
+    assert.equal(ranges[0].to, today);
+    for (let w = 0; w < ranges.length; w++) {
+      assert.ok(ranges[w].from <= ranges[w].to, `${today}: empty window ${w}`);
+      if (w > 0) {
+        assert.equal(addDays(ranges[w].to, 1), ranges[w - 1].from, `${today}: gap before window ${w - 1}`);
+      }
+    }
+  }
+});
+
+test("a history that is not a multiple of three still covers it", () => {
+  assert.equal(quarterRanges("2026-10-07", 4).length, 2);
+});
+
+test("finds the from and to fields by what they say", () => {
+  const fields = pickDateFields([
+    { index: 0, type: "text", hint: "q search" },
+    { index: 1, type: "text", hint: "endDate End Date" },
+    { index: 2, type: "text", hint: "startDate Start Date" },
+  ]);
+  assert.equal(fields?.from.index, 2);
+  assert.equal(fields?.to.index, 1);
+});
+
+test("two unlabelled date inputs are taken in document order", () => {
+  const fields = pickDateFields([
+    { index: 4, type: "date", hint: "" },
+    { index: 5, type: "date", hint: "" },
+  ]);
+  assert.equal(fields?.from.index, 4);
+  assert.equal(fields?.to.index, 5);
+});
+
+test("never types a date into something that is not a date field", () => {
+  assert.equal(
+    pickDateFields([
+      { index: 0, type: "text", hint: "tag number" },
+      { index: 1, type: "text", hint: "plate" },
+    ]),
+    null
+  );
+});
+
+test("a lone date field is not enough to drive a range", () => {
+  assert.equal(pickDateFields([{ index: 0, type: "date", hint: "from" }]), null);
+});
+
+test("three unlabelled date fields are ambiguous, not guessed", () => {
+  assert.equal(
+    pickDateFields([
+      { index: 0, type: "date", hint: "" },
+      { index: 1, type: "date", hint: "" },
+      { index: 2, type: "date", hint: "" },
+    ]),
+    null
+  );
+});
+
+test("dates are written the way the field expects them", () => {
+  assert.equal(formatForField("2026-07-08", { index: 0, type: "date", hint: "" }), "2026-07-08");
+  assert.equal(formatForField("2026-07-08", { index: 0, type: "text", hint: "date" }), "07/08/2026");
+  assert.equal(
+    formatForField("2026-07-08", { index: 0, type: "text", hint: "", placeholder: "yyyy-mm-dd" }),
+    "2026-07-08"
+  );
+});
+
+test("the search button is found, and export, clear and paging never are", () => {
+  const ranked = rankSubmitControls([
+    { text: "Export to CSV" },
+    { text: "Clear" },
+    { text: "Next" },
+    { text: "Search" },
+    { text: "", ariaLabel: "Apply filter" },
+  ]);
+  assert.deepEqual(ranked, [3, 4]);
+});
+
+test("a control that starts like a search word but exports or pages is excluded", () => {
+  // The exclusion list only matters for text the submit pattern would accept.
+  assert.deepEqual(
+    rankSubmitControls([
+      { text: "Show previous" },
+      { text: "View last page" },
+      { text: "Get download" },
+      { text: "Search" },
+    ]),
+    [3]
+  );
+});
+
+test("a disabled search button is not clicked", () => {
+  assert.deepEqual(rankSubmitControls([{ text: "Search", disabled: true }]), []);
+});
+
+test("counts add across windows and unbound tags are listed once", () => {
+  const total = sumImportResults([
+    { rows: 10, imported: 8, already_known: 2, matched: 6, unmatched: 2, unknown_tags: ["A", "B"] },
+    { rows: 5, imported: 5, already_known: 0, matched: 4, unmatched: 1, unknown_tags: ["B", "C"] },
+  ]);
+  assert.deepEqual(total, {
+    rows: 15, imported: 13, already_known: 2, matched: 10, unmatched: 3, unknown_tags: ["A", "B", "C"],
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The run log
+// ---------------------------------------------------------------------------
+test("the form report names the fields it chose and the button it would click", () => {
+  const lines = describeForm(
+    [
+      { index: 3, type: "text", hint: "startDate Start Date", placeholder: "mm/dd/yyyy" },
+      { index: 4, type: "text", hint: "endDate End Date", placeholder: "mm/dd/yyyy" },
+    ],
+    [{ text: "Search" }]
+  ).join("\n");
+  assert.match(lines, /input\[3\].*FROM/);
+  assert.match(lines, /input\[4\].*TO/);
+  assert.match(lines, /submit candidate \[0\] "Search"/);
+});
+
+test("the form report says so when it recognised nothing", () => {
+  const lines = describeForm([{ index: 0, type: "text", hint: "q" }], [{ text: "Export" }]).join("\n");
+  assert.match(lines, /no from\/to pair recognised/);
+  assert.match(lines, /no search button recognised/);
+});
+
+test("the form report leaves out the page's other buttons", () => {
+  // A nav bar can carry an account holder's name; the report is for pasting.
+  const lines = describeForm([], [{ text: "Welcome, Jane Doe" }, { text: "Search" }]).join("\n");
+  assert.ok(!lines.includes("Jane Doe"));
 });

@@ -127,15 +127,31 @@ const tollsTokenEl = document.getElementById("tollsToken") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("saveSettings") as HTMLButtonElement;
 const settingsSavedEl = document.getElementById("settingsSaved") as HTMLDivElement;
 
-function showReport(report: string | undefined): void {
+function showReport(report: string | undefined, open = true): void {
   if (!report) {
     tollsReportWrap.classList.add("hidden");
     return;
   }
   tollsReportEl.textContent = report;
   tollsReportWrap.classList.remove("hidden");
-  tollsReportWrap.open = true;
+  tollsReportWrap.open = open;
 }
+
+/** The page report, if there is one, then the run log. */
+function fullReport(result: SendTollsResult): string | undefined {
+  const parts = [
+    result.report,
+    result.log?.length ? "=== run log ===\n" + result.log.join("\n") : undefined,
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n\n") : undefined;
+}
+
+const copyLogBtn = document.getElementById("copyLogBtn") as HTMLButtonElement;
+copyLogBtn.addEventListener("click", () => {
+  void navigator.clipboard.writeText(tollsReportEl.textContent ?? "").then(() => {
+    copyLogBtn.textContent = "Copied";
+  });
+});
 
 async function getActiveEzPassTab(): Promise<chrome.tabs.Tab | null> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -165,7 +181,7 @@ function send<T extends MessageType>(target: number | null, message: MessageType
 /** What came back, in a sentence, including the cases that are not successes. */
 function describeImport(result: SendTollsResult): { text: string; isError: boolean } {
   if (result.problem) {
-    return { text: `The API refused the file: ${result.problem}`, isError: true };
+    return { text: `Stopped: ${result.problem}`, isError: true };
   }
   if (!result.result) {
     return {
@@ -187,13 +203,19 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
     };
   }
   const parts: string[] = [];
+  if (result.windows?.length) {
+    const first = result.windows[result.windows.length - 1];
+    parts.push(`${result.windows.length} date ranges since ${first.from}`);
+  }
   if (result.pagesRead && result.pagesRead > 1) {
     parts.push(`${result.pagesRead} pages`);
   }
   // "stopped at 40 pages" means rows may be missing, which has to reach the
   // operator rather than looking like a clean read.
-  if (result.pagingStopped && /stopped at/.test(result.pagingStopped)) {
-    parts.push(`⚠ ${result.pagingStopped}`);
+  const ranges = result.windows ?? [{ from: "", to: "", pagingStopped: result.pagingStopped }];
+  for (const w of ranges) {
+    if (!/stopped at/.test(w.pagingStopped ?? "")) continue;
+    parts.push(`⚠ ${w.from ? `${w.from} to ${w.to}: ` : ""}${w.pagingStopped}`);
   }
   parts.push(`${rows} rows read`, `${imported} new`);
   if (already_known) parts.push(`${already_known} already on file`);
@@ -222,19 +244,21 @@ tollsBtn.addEventListener("click", async () => {
     // The worker reads every page of the statement and posts it. Driven from
     // there rather than from a content script, because a "next" link that
     // navigates would tear a content script down mid-loop.
-    showStatus("Reading the statement — this pages through it...");
+    showStatus("Reading the statement three months at a time — this can take a minute...");
     const sent = await send(null, { type: "SEND_TOLLS", tabId: tab.id });
     if (sent.type === "SEND_TOLLS_ERROR") throw new Error(sent.error);
     if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");
 
     const described = describeImport(sent.result);
+    copyLogBtn.textContent = "Copy log";
     if (described.isError) {
       showStatus(described.text, true);
-      showReport(sent.result.report);
+      showReport(fullReport(sent.result));
     } else {
       statusEl.classList.add("hidden");
       tollsResultEl.textContent = described.text;
       tollsResultEl.classList.remove("hidden");
+      showReport(fullReport(sent.result), false);
     }
   } catch (err) {
     showStatus(err instanceof Error ? err.message : String(err), true);

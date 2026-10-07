@@ -1053,3 +1053,49 @@ def test_rematching_picks_up_overruns_imported_before_the_grace_existed(
     monkeypatch.setenv("TOLL_OVERRUN_GRACE_MINUTES", "120")
     assert api_client.post("/api/tolls/rematch").json()["matched"] == 1
     assert api_client.get("/api/tolls").json()["tolls"][0]["guest_name"] == "Dylan"
+
+
+# ---------------------------------------------------------------------------
+# Which road a plaza is on
+# ---------------------------------------------------------------------------
+
+
+@requires_db
+def test_the_agency_and_entry_plaza_are_kept(session, jerry):
+    """A plaza code alone is ambiguous: "15" is on the NJ Turnpike and the NY
+    Thruway. Locating a crossing needs the statement's Agency column."""
+    statement = _csv(
+        "900,NY LZA7293,NJTP,11,15W,1,10/04/2026,11:10:36 AM,$-4.65",
+    )
+    import_tolls(session, statement)
+    toll = session.scalars(select(Toll)).one()
+    assert (toll.agency, toll.entry_plaza, toll.plaza) == ("NJTP", "11", "15W")
+
+
+@requires_db
+def test_re_importing_fills_in_the_agency_of_crossings_already_on_file(session, jerry):
+    """Statements imported before the agency was kept are described by
+    importing them again — without a single crossing counted twice."""
+    statement = _csv(_row("33237138399", "NY LZA7293", "10/04/2026", "11:10:36 AM", "-9.11"))
+    import_tolls(session, statement)
+    toll = session.scalars(select(Toll)).one()
+    toll.agency = None
+    session.flush()
+
+    again = import_tolls(session, statement)
+    assert again.imported == 0 and again.already_known == 1
+    assert again.described == 1
+    assert toll.agency == "MTAB&T"
+
+
+@requires_db
+def test_a_statement_without_the_column_does_not_erase_one_that_had_it(session, jerry):
+    with_agency = _csv(_row("33237138399", "NY LZA7293", "10/04/2026", "11:10:36 AM", "-9.11"))
+    import_tolls(session, with_agency)
+    bare = (
+        "Lane Txn ID,Tag/Plate #,Exit Plaza,Date,Exit Time,Amount\n"
+        "33237138399,NY LZA7293,RKB,10/04/2026,11:10:36 AM,$-9.11\n"
+    )
+    again = import_tolls(session, bare)
+    assert again.described == 0
+    assert session.scalars(select(Toll)).one().agency == "MTAB&T"

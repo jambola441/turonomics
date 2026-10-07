@@ -48,6 +48,9 @@ class ImportResult:
     matched: int = 0
     unmatched: int = 0
     unknown_tags: set[str] = field(default_factory=set)
+    # Crossings already on file that this statement told the agency of —
+    # statements imported before it was kept are filled in by re-importing.
+    described: int = 0
 
     def summary(self) -> str:
         tags = f", {len(self.unknown_tags)} unknown tag(s)" if self.unknown_tags else ""
@@ -294,8 +297,17 @@ def import_tolls(
 
     for toll in tolls:
         key = fingerprint(toll)
-        if session.scalar(select(Toll.id).where(Toll.fingerprint == key)) is not None:
+        known = session.scalar(select(Toll).where(Toll.fingerprint == key))
+        if known is not None:
             result.already_known += 1
+            # Filled, never overwritten: the first statement to say is as good
+            # as any, and a scraped page that leaves the column blank must not
+            # erase what an official statement said.
+            if known.agency is None and toll.agency:
+                known.agency = toll.agency
+                result.described += 1
+            if known.entry_plaza is None and toll.entry_plaza:
+                known.entry_plaza = toll.entry_plaza
             continue
 
         vehicle = _vehicle_for(session, toll)
@@ -323,6 +335,8 @@ def import_tolls(
                 amount_cents=int(round(toll.amount * 100)),
                 transponder_id=toll.transponder_id,
                 license_plate=toll.license_plate,
+                agency=toll.agency,
+                entry_plaza=toll.entry_plaza,
                 vehicle_id=vehicle.id if vehicle else None,
                 trip_id=trip.id if trip else None,
             )

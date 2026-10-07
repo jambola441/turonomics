@@ -238,6 +238,8 @@ def parse_ezpass_csv(
                     amount=amount,
                     transponder_id=transponder_id,
                     license_plate=license_plate,
+                    agency=agency or None,
+                    entry_plaza=entry_plaza or None,
                 )
             )
 

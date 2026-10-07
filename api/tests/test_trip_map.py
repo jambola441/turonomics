@@ -25,6 +25,7 @@ from turonomics_api.ingest.trip_map import (
     decode_polyline,
     parse_drive,
     place,
+    shape,
 )
 
 from .conftest import requires_db
@@ -246,3 +247,14 @@ def test_drives_are_in_the_order_they_happened() -> None:
     fake = FakeBouncie([_raw(T0 + td(hours=2)), _raw(T0)])
     route = bouncie_route(fake, "imei", starts=T0 - td(hours=1), ends=T0 + td(hours=4))
     assert [d.starts_at for d in route.drives] == [T0, T0 + td(hours=2)]
+
+
+def test_the_logged_layout_carries_no_values() -> None:
+    """What goes in the log to learn Bouncie's shape must not be a route."""
+    raw = {"transactionId": "abc123", "startTime": "2026-07-10T14:00:00Z",
+           "distance": 12.5, "gps": {"type": "LineString",
+                                     "coordinates": [[-73.9655, 40.6782]] * 40}}
+    said = shape(raw)
+    assert "transactionId: str(6)" in said and "distance: float" in said
+    assert "coordinates: [40 × [2 × float]]" in said
+    assert "40.6782" not in said and "abc123" not in said

@@ -22,6 +22,8 @@ import {
   cleanCell,
   dateCoverage,
   describeForm,
+  describePager,
+  parsePagerRange,
   parseSiteDate,
   sameDate,
   describeShape,
@@ -683,4 +685,32 @@ test("the same table is not a new page, a different one is", () => {
 
 test("a table appearing after an empty one is a page", () => {
   assert.equal(pageChanged("90#c#d", "empty"), true);
+});
+
+test("reads MUI's pager count", () => {
+  assert.deepEqual(parsePagerRange("1\u201310 of 96"), { from: 1, to: 10, total: 96 });
+  assert.deepEqual(parsePagerRange("1-100 of 1,234"), { from: 1, to: 100, total: 1234 });
+  assert.deepEqual(parsePagerRange(" 91\u201396 of 96 "), { from: 91, to: 96, total: 96 });
+});
+
+test("text that merely contains a count is not a pager", () => {
+  assert.equal(parsePagerRange("Showing 1-10 of 96 results"), null);
+  assert.equal(parsePagerRange("Rows 1-10 of 96"), null, "leading text");
+  assert.equal(parsePagerRange(""), null);
+  assert.equal(parsePagerRange("1-10 of many"), null);
+});
+
+test("the pager report lists its own controls and not the rest of the page", () => {
+  const lines = describePager([
+    { text: "Welcome, Jane Doe" },
+    { text: "", ariaLabel: "Go to next page", className: "MuiPaginationItem-root Mui-disabled" },
+    { text: "3", ariaLabel: "Go to page 3", className: "MuiPaginationItem-root" },
+  ]).join("\n");
+  assert.ok(!lines.includes("Jane Doe"));
+  assert.match(lines, /\[1\].*Go to next page.*disabled=true/);
+  assert.match(lines, /\[2\].*Go to page 3.*disabled=false/);
+});
+
+test("the pager report says so when nothing looked like a pager", () => {
+  assert.match(describePager([{ text: "Home" }]).join("\n"), /no control looked like part of a pager/);
 });

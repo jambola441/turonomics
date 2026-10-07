@@ -219,7 +219,7 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
   }
   const ranges = result.windows ?? [{ from: "", to: "", pagingStopped: result.pagingStopped }];
   for (const w of ranges) {
-    if (!/stopped at/.test(w.pagingStopped ?? "")) continue;
+    if (!/stopped at|incomplete/.test(w.pagingStopped ?? "")) continue;
     parts.push(`⚠ ${w.from ? `${w.from} to ${w.to}: ` : ""}${w.pagingStopped}`);
   }
   parts.push(`${rows} rows read`, `${imported} new`);

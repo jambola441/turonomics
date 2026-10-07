@@ -1,8 +1,9 @@
 """Tests for a rental's route and where its tolls go on it.
 
-The placement is an estimate — even speed within one drive — so what is
-tested hard is that it is on the right drive, at the right end of it, and that
-nothing is placed where nothing honest can say.
+A toll goes at its plaza or nowhere. The route never moves a marker; it only
+flags a plaza the car never came near, so what is tested hard is that the
+check measures to the track's legs (not its sampled fixes) and that nothing is
+placed where the app does not know the plaza.
 """
 
 from __future__ import annotations
@@ -20,7 +21,6 @@ from turonomics_api.ingest.trip_map import (
     Drive,
     Route,
     _metres,
-    along,
     bouncie_route,
     decode_polyline,
     parse_drive,
@@ -64,21 +64,6 @@ def test_a_drive_without_times_or_a_track_is_not_one(raw: dict) -> None:
     assert parse_drive(raw) is None
 
 
-def test_along_measures_by_distance_not_by_point_count() -> None:
-    start = along(LINE, 0.0)
-    end = along(LINE, 1.0)
-    middle = along(LINE, 0.5)
-    assert start == LINE[0] and end == LINE[-1]
-    # Half the distance travelled, to the metre — whichever leg that falls on.
-    legs = [_metres(LINE[0], LINE[1]), _metres(LINE[1], LINE[2])]
-    if middle[0] >= LINE[1][0]:
-        travelled = _metres(LINE[0], middle)
-    else:
-        travelled = legs[0] + _metres(LINE[1], middle)
-    assert abs(travelled - sum(legs) / 2) < 1.0
-    assert along(LINE, 7.0) == LINE[-1], "clamped"
-
-
 def _route(*drives: Drive) -> Route:
     return Route(drives=list(drives), source="bouncie")
 
@@ -86,53 +71,54 @@ def _route(*drives: Drive) -> Route:
 DRIVE = Drive(starts_at=T0, ends_at=T0 + td(minutes=40), points=LINE)
 
 
-def test_a_crossing_at_an_unknown_plaza_goes_on_the_drive_under_way() -> None:
-    late = place(T0 + td(minutes=38), "XYZ", _route(DRIVE))
-    assert late is not None and late.how == "route"
-    assert abs(late.lat - LINE[-1][0]) < 0.01, "near the end of the drive, as timed"
-
-
-def test_a_known_plaza_beats_the_estimate_when_the_two_agree() -> None:
-    """The Verrazzano gantry is a kilometre or two from where the even-speed
-    estimate puts the car; the gantry is where the charge was."""
-    placed = place(T0 + td(minutes=38), "VNB", _route(DRIVE))
+def test_a_known_plaza_goes_at_the_plaza_whatever_the_route_says() -> None:
+    """No estimate of where the car was: the gantry is where the charge was."""
+    placed = place("VNB", _route(DRIVE))
     assert placed is not None and placed.how == "plaza"
     assert (placed.lat, placed.lon) == (40.6022, -74.0628)
     assert placed.name and "Verrazzano" in placed.name
     assert placed.source and placed.source.startswith("https://")
+    assert placed.off_route_km is None, "the route ends a kilometre or two from it"
 
 
-def test_a_plaza_far_from_where_the_car_was_is_flagged_and_the_track_used() -> None:
-    """A code that means something else on another road: the tracker had the
-    car in Brooklyn, and the plaza says the Thruway at Albany."""
-    placed = place(T0 + td(minutes=38), "24", _route(DRIVE))
-    assert placed is not None and placed.how == "route"
-    assert placed.off_route_km is not None and placed.off_route_km > 100
+def test_an_unknown_plaza_is_not_placed_even_with_a_route() -> None:
+    """The time-split estimate this replaced put these miles from the truth."""
+    assert place("XYZ", _route(DRIVE)) is None
+    assert place("583", Route()) is None
 
 
-def test_a_zone_charge_goes_on_the_track_or_else_the_zone() -> None:
-    on_track = place(T0 + td(minutes=20), "CRZ", _route(DRIVE))
-    assert on_track is not None and on_track.how == "route"
-    off_track = place(T0, "CRZ", Route())
-    assert off_track is not None and off_track.how == "zone"
-
-
-def test_a_crossing_slightly_outside_a_drive_is_still_that_drive() -> None:
-    """The statement's clock against the tracker's."""
-    placed = place(T0 + td(minutes=45), "XYZ", _route(DRIVE))
-    assert placed is not None and placed.how == "route"
-    assert placed.lat == LINE[-1][0], "clamped to the end"
-
-
-def test_without_a_route_a_known_plaza_is_placed_at_the_plaza() -> None:
-    placed = place(T0, "rkb", Route())
+def test_a_plaza_the_car_never_came_near_is_flagged_but_not_moved() -> None:
+    """A code meaning something else on another road: the car drove Brooklyn
+    to the Verrazzano, and "24" says the Thruway at Albany."""
+    placed = place("24", _route(DRIVE))
     assert placed is not None and placed.how == "plaza"
+    assert placed.off_route_km is not None and placed.off_route_km > 100
+    assert placed.name and "Albany" in placed.name, "still drawn where the plaza is"
+
+
+def test_a_gantry_between_two_fixes_is_not_flagged() -> None:
+    """Tracks are sampled: the car passes the gantry between two points, and
+    neither point is near it. Distance to the leg, not to the fixes."""
+    plaza = (40.6022, -74.0628)
+    far_a = (plaza[0] + 0.04, plaza[1] + 0.04)
+    far_b = (plaza[0] - 0.04, plaza[1] - 0.04)
+    sparse = Drive(starts_at=T0, ends_at=T0 + td(minutes=30), points=[far_a, far_b])
+    assert _metres(far_a, plaza) > 4000 and _metres(far_b, plaza) > 4000
+    placed = place("VNB", _route(sparse))
+    assert placed is not None and placed.off_route_km is None
+
+
+def test_without_a_route_nothing_is_flagged() -> None:
+    placed = place("rkb", Route())
+    assert placed is not None and placed.how == "plaza" and placed.off_route_km is None
     assert (round(placed.lat, 2), round(placed.lon, 2)) == (40.80, -73.92), "the gantry"
 
 
-def test_an_unknown_plaza_with_no_route_is_not_guessed() -> None:
-    assert place(T0, "583", Route()) is None
-    assert place(T0 + td(hours=5), "583", _route(DRIVE)) is None, "no drive at that time"
+def test_a_zone_charge_is_the_zone_and_is_never_flagged() -> None:
+    """CRZ's point is the zone's middle; a car can drive all over the zone
+    without passing it."""
+    placed = place("CRZ", _route(DRIVE))
+    assert placed is not None and placed.how == "zone" and placed.off_route_km is None
 
 
 class FakeBouncie:
@@ -229,13 +215,15 @@ def test_the_trackers_stored_positions_make_a_route(api_client, session, car, re
             vehicle_id=car.id, event_type="poll", occurred_at=T0 + td(minutes=20 * i),
             location=f"SRID=4326;POINT({lon} {lat})", payload={},
         ))
-    _toll(session, car, rental, T0 + td(minutes=39), "XYZ")
+    _toll(session, car, rental, T0 + td(minutes=39), "VNB")
+    _toll(session, car, rental, T0 + td(minutes=50), "24")
     session.commit()
     out = api_client.get(f"/api/trips/{rental.id}/map").json()
     assert out["route_source"] == "telemetry"
     assert len(out["drives"]) == 1 and len(out["drives"][0]["points"]) == 3
-    [toll] = out["tolls"]
-    assert toll["how"] == "route"
+    vnb, albany = out["tolls"]
+    assert vnb["how"] == "plaza" and vnb["off_route_km"] is None
+    assert albany["how"] == "plaza" and albany["off_route_km"] > 100
     assert "fix every few minutes" in out["note"]
 
 
@@ -258,12 +246,6 @@ def test_the_map_needs_the_token(api_client, monkeypatch, rental) -> None:
     """Where a car went is as private as anything Turo says about the guest."""
     monkeypatch.setenv("TOLLS_TOKEN", "s3cret")
     assert api_client.get(f"/api/trips/{rental.id}/map").status_code == 401
-
-
-def test_a_crossing_just_before_a_drive_is_placed_at_its_start_not_beyond_it() -> None:
-    placed = place(T0 - td(minutes=4), "XYZ", _route(DRIVE))
-    assert placed is not None
-    assert placed.lat == LINE[0][0] and placed.lon == LINE[0][1]
 
 
 def test_drives_are_in_the_order_they_happened() -> None:

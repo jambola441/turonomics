@@ -16,6 +16,9 @@ import {
   chooseStatement,
   dateCoverage,
   describeForm,
+  describePager,
+  parsePagerRange,
+  type PagerRange,
   describeShape,
   formatForField,
   maskValue,
@@ -297,6 +300,8 @@ interface PageDescriptor {
   downloadLinks: string[];
   nextControls: ControlDescriptor[];
   pageSizes: PageSizeOption[];
+  /** The pager's "1–10 of 96", verbatim, or "" when the page has none. */
+  pagerText: string;
 }
 
 function readPageInPage(): PageDescriptor {
@@ -360,7 +365,19 @@ function readPageInPage(): PageDescriptor {
     if (looksLikeSize) pageSizes = options;
   });
 
-  return { url: location.href, tables, downloadLinks, nextControls, pageSizes };
+  // MUI prints "1–10 of 96" in its own element; match on the whole text so a
+  // sentence that merely contains such a phrase is not taken for it.
+  let pagerText = "";
+  for (const node of Array.from(document.querySelectorAll("p, span, div"))) {
+    if (node.children.length > 0) continue;
+    const content = text(node);
+    if (/^\d[\d,]*\s*[\u2013\u2014-]\s*\d[\d,]*\s+of\s+\d[\d,]*$/i.test(content)) {
+      pagerText = content;
+      break;
+    }
+  }
+
+  return { url: location.href, tables, downloadLinks, nextControls, pageSizes, pagerText };
 }
 
 function clickControlInPage(index: number): boolean {
@@ -450,6 +467,53 @@ function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, 
     return true;
   };
   return set(fromIndex, fromValue) && set(toIndex, toValue);
+}
+
+/**
+ * MUI's rows-per-page control is a div, not a <select>: it opens a listbox on
+ * mousedown. These four do the least possible and every decision stays in
+ * `pickPageSize`.
+ */
+function findRowsPerPageInPage(): { index: number; current: string } | null {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>("[role='combobox'], [aria-haspopup='listbox']")
+  );
+  const labelled = nodes.findIndex((node) => {
+    const scope = node.closest("[class*='Pagination'], [class*='pagination']") ?? node.parentElement;
+    return /rows per page/i.test(scope?.textContent ?? "");
+  });
+  // A control showing nothing but a number is the next best thing; one that
+  // merely contains a digit (a year picker) is not.
+  const index =
+    labelled >= 0
+      ? labelled
+      : nodes.findIndex((node) => /^\s*\d+\s*$/.test(node.textContent ?? ""));
+  if (index < 0) return null;
+  return { index, current: (nodes[index].textContent ?? "").replace(/\s+/g, " ").trim() };
+}
+
+function openRowsPerPageInPage(index: number): boolean {
+  const node = Array.from(
+    document.querySelectorAll<HTMLElement>("[role='combobox'], [aria-haspopup='listbox']")
+  )[index];
+  if (!node) return false;
+  node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  return true;
+}
+
+function readListboxInPage(): { value: string; label: string }[] {
+  return Array.from(document.querySelectorAll<HTMLElement>("[role='listbox'] [role='option']")).map(
+    (node, i) => ({ value: String(i), label: (node.textContent ?? "").replace(/\s+/g, " ").trim() })
+  );
+}
+
+function chooseListboxOptionInPage(index: number): boolean {
+  const node = Array.from(
+    document.querySelectorAll<HTMLElement>("[role='listbox'] [role='option']")
+  )[index];
+  if (!node) return false;
+  node.click();
+  return true;
 }
 
 function readValuesInPage(indices: number[]): string[] {
@@ -1241,6 +1305,38 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
  * Shared by the one-shot read and by each date window: both end up looking at a
  * table with a "next" under it.
  */
+/**
+ * Ask a MUI table for the most rows per page it offers.
+ *
+ * The default is ten, so a statement of a hundred crossings is ten pages and
+ * every page is a chance to stop early. Returns the descriptor to carry on
+ * from, which is the old one when nothing could be done.
+ */
+async function raiseRowsPerPage(tabId: number, descriptor: PageDescriptor): Promise<PageDescriptor> {
+  const found = await inPage(tabId, findRowsPerPageInPage, []);
+  if (!found) {
+    note("  rows per page: no MUI selector found");
+    return descriptor;
+  }
+  if (!(await inPage(tabId, openRowsPerPageInPage, [found.index]))) {
+    note("  rows per page: could not open the selector");
+    return descriptor;
+  }
+  await sleep(350);
+  const options = await inPage(tabId, readListboxInPage, []);
+  const pick = pickPageSize(options);
+  note(
+    `  rows per page: currently "${found.current}", options [${options.map((o) => o.label).join(", ")}]` +
+      `, choosing ${pick === null ? "nothing" : `"${options[Number(pick)]?.label}"`}`
+  );
+  if (pick === null) return descriptor;
+  const before = tableSignature(activityOf(descriptor));
+  if (!(await inPage(tabId, chooseListboxOptionInPage, [Number(pick)]))) return descriptor;
+  const after = await waitForChange(tabId, before, descriptor, 8000);
+  note(`  rows per page: now ${activityOf(after)?.rows.length ?? 0} rows on the page, pager "${after.pagerText}"`);
+  return after;
+}
+
 async function pageThrough(tabId: number, start: PageDescriptor): Promise<ScrapedPage> {
   let descriptor = start;
   // Fewer pages beats cleverer paging.
@@ -1254,30 +1350,54 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
       note(`  page size: could not set "${size}"`);
     }
   } else {
-    note("  page size: no rows-per-page control recognised");
+    descriptor = await raiseRowsPerPage(tabId, descriptor);
   }
 
   const pages: ScrapedTable[] = [];
   const signatures: string[] = [];
   let stopped: string | null = null;
+  let lastRange: PagerRange | null = null;
 
   for (;;) {
     pages.push(...descriptor.tables);
     signatures.push(tableSignature(activityOf(descriptor)));
     const here = activityOf(descriptor);
+    lastRange = parsePagerRange(descriptor.pagerText);
     note(
       `  page ${signatures.length}: ${here?.rows.length ?? 0} rows` +
+        (lastRange ? `, pager says ${lastRange.from}-${lastRange.to} of ${lastRange.total}` : ", no pager text") +
         (here?.rows[0] ? `, first row shaped ${here.rows[0].map(maskValue).join("|")}` : "") +
-        `, tables on page: ${descriptor.tables.length}, next candidates: ${rankNextControls(descriptor.nextControls).length}`
+        `, next candidates: ${rankNextControls(descriptor.nextControls).length}`
     );
 
     stopped = shouldStopPaging(signatures);
     if (stopped) break;
 
-    const ranked = rankNextControls(descriptor.nextControls);
+    // The pager's own count is the authority on the end: a next control going
+    // missing is also what a re-render looks like.
+    if (lastRange && lastRange.to >= lastRange.total) {
+      stopped = "last page";
+      break;
+    }
+
+    let ranked = rankNextControls(descriptor.nextControls);
+    if (!ranked.length && lastRange) {
+      // The pager says there is more and offers no way to it. Re-read for a
+      // few seconds before believing that: the bar is re-rendered after each
+      // page and can be missing for a moment.
+      for (let attempt = 0; attempt < 8 && !ranked.length; attempt++) {
+        await sleep(500);
+        descriptor = await inPage(tabId, readPageInPage, []);
+        ranked = rankNextControls(descriptor.nextControls);
+      }
+      note(`  pager says more, next control ${ranked.length ? "reappeared after a wait" : "never reappeared"}`);
+    }
     if (!ranked.length) {
-      stopped = "no next page";
-      note("  no control looked like next");
+      stopped = lastRange
+        ? `incomplete: no next control, but the pager says ${lastRange.to} of ${lastRange.total}`
+        : "no next page";
+      note("  no control looked like next; pager controls:");
+      for (const line of describePager(descriptor.nextControls)) note(line);
       break;
     }
 
@@ -1299,13 +1419,18 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
       note(`  clicked candidate ${index}: ${landed === "empty" ? "the next page never loaded" : "the table did not change"}`);
     }
     if (!advanced) {
-      stopped = "no next page";
+      stopped = lastRange
+        ? `incomplete: clicking next changed nothing at ${lastRange.to} of ${lastRange.total}`
+        : "no next page";
       break;
     }
   }
 
   const merged = mergeActivityPages(pages);
-  note(`  read ${signatures.length} page(s), ${merged?.rows.length ?? 0} rows merged: ${stopped}`);
+  note(
+    `  read ${signatures.length} page(s), ${merged?.rows.length ?? 0} rows merged: ${stopped}` +
+      (lastRange ? ` (pager total ${lastRange.total}; refill credits are not shown, so fewer rows than that is expected)` : "")
+  );
   return {
     url: descriptor.url,
     tables: descriptor.tables,

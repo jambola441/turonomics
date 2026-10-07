@@ -180,6 +180,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.14.2 | build + reload | sets MUI rows-per-page to the largest option, reads the pager's "1–10 of N" to know the real last page, and calls a stop short of it incomplete (with the pager's controls in the log) |
 | 1.14.1 | build + reload | paging no longer stops at page one: an empty table while the next page loads is waited out, not read as the end; the form is not touched mid-load |
 | 1.14.0 | build + reload | the Turo probe buttons also work on the E-ZPass activity page, and show how its date search is requested |
 | 1.13.1 | build + reload | date fields get the year width they ask for (MM/DD/YY); the run log checks the rows really fall in each window |

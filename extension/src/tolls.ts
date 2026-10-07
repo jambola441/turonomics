@@ -349,6 +349,42 @@ export function tableSignature(table: ScrapedTable | null): string {
   return `${table.rows.length}#${first}#${last}`;
 }
 
+export interface PagerRange {
+  from: number;
+  to: number;
+  total: number;
+}
+
+/**
+ * "1–10 of 96", as MUI's table pagination prints it, or null.
+ *
+ * The one authoritative statement of where in the result the page is. With it
+ * the end is known rather than inferred from a control going missing, and a
+ * stop short of the total can be called incomplete instead of "no next page" —
+ * which is what a run that "stopped after 4 pages for no reason" looked like.
+ */
+export function parsePagerRange(text: string): PagerRange | null {
+  const match = /^\s*(\d[\d,]*)\s*[\u2013\u2014-]\s*(\d[\d,]*)\s+of\s+(\d[\d,]*)\s*$/i.exec(text);
+  if (!match) return null;
+  const n = (value: string): number => Number(value.replace(/,/g, ""));
+  return { from: n(match[1]), to: n(match[2]), total: n(match[3]) };
+}
+
+/** The pager's own controls, described for the log when paging stops. */
+export function describePager(controls: ControlDescriptor[]): string[] {
+  const lines: string[] = [];
+  controls.forEach((control, index) => {
+    const label = control.ariaLabel ?? "";
+    const cls = control.className ?? "";
+    if (!/page|pagination/i.test(label) && !/pagination/i.test(cls)) return;
+    lines.push(
+      `    [${index}] text="${control.text.slice(0, 12)}" aria="${label}" ` +
+        `disabled=${disabledLooking(control)} class="${cls.slice(0, 60)}"`
+    );
+  });
+  return lines.length ? lines : ["    (no control looked like part of a pager)"];
+}
+
 /**
  * Whether a re-read table is a new page rather than the old one or a gap.
  *

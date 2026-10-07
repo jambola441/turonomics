@@ -23,6 +23,8 @@
  * names it found — which is how to learn them, rather than by guessing.
  */
 
+import type { ImportResult } from "./types.js";
+
 export interface ScrapedTable {
   /** Header cell text, verbatim. These are column names, not account data. */
   headers: string[];
@@ -399,6 +401,179 @@ export function mergeActivityPages(pages: ScrapedTable[]): ScrapedTable | null {
   }
   if (headers === null || !rows.length) return null;
   return { headers, rows };
+}
+
+// ---------------------------------------------------------------------------
+// Date ranges
+// ---------------------------------------------------------------------------
+// An account-activity page answers for the range in its date fields, and a long
+// range is slow or refused. So the statement is read three months at a time,
+// newest first (an interrupted run has then got the part most likely to still be
+// unbilled), each window paged through and posted before the next is started.
+//
+// Dates are "YYYY-MM-DD" strings throughout. A `Date` would drag the machine's
+// time zone into arithmetic that is only ever about calendar days.
+
+export interface DateRange {
+  /** Inclusive. */
+  from: string;
+  to: string;
+}
+
+export const WINDOW_MONTHS = 3;
+/** How far back an automatic read goes. */
+export const HISTORY_MONTHS = 12;
+
+function parseIso(iso: string): { y: number; m: number; d: number } {
+  const [y, m, d] = iso.split("-").map(Number);
+  return { y, m, d };
+}
+
+function formatIso(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** `iso` moved by whole months, the day clamped to the target month's length. */
+export function addMonths(iso: string, months: number): string {
+  const { y, m, d } = parseIso(iso);
+  const index = y * 12 + (m - 1) + months;
+  const year = Math.floor(index / 12);
+  const month = index - year * 12; // 0-based
+  const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+  return formatIso(Date.UTC(year, month, Math.min(d, lastDay)));
+}
+
+export function addDays(iso: string, days: number): string {
+  const { y, m, d } = parseIso(iso);
+  return formatIso(Date.UTC(y, m - 1, d + days));
+}
+
+/**
+ * Consecutive three-month windows ending on `today`, newest first.
+ *
+ * Each window starts the day after the previous (older) one ends, both ends
+ * inclusive, so together they cover the history exactly once: a gap would be a
+ * crossing never read, and an overlap only costs the API a fingerprint check.
+ */
+export function quarterRanges(
+  today: string,
+  historyMonths = HISTORY_MONTHS,
+  windowMonths = WINDOW_MONTHS
+): DateRange[] {
+  const count = Math.max(1, Math.ceil(historyMonths / windowMonths));
+  const ranges: DateRange[] = [];
+  let to = today;
+  for (let i = 0; i < count; i++) {
+    const from = addDays(addMonths(to, -windowMonths), 1);
+    ranges.push({ from, to });
+    to = addDays(from, -1);
+  }
+  return ranges;
+}
+
+export interface InputDescriptor {
+  /** Position among the page's inputs, so the worker can find it again. */
+  index: number;
+  type: string;
+  /** name, id, label text, placeholder and aria-label, space-joined. */
+  hint: string;
+  placeholder?: string;
+}
+
+const FROM_HINT = /\b(?:from|start|begin|since)/i;
+const TO_HINT = /\b(?:to|end|through|thru|until)\b/i;
+
+/**
+ * Which inputs are the start and end of the range, or null.
+ *
+ * Two inputs that both look like dates are taken in document order when
+ * neither says which it is; one that does not look like a date is never picked.
+ * Better to read what the page shows and say so than to type a date into a
+ * search box.
+ */
+export function pickDateFields(
+  inputs: InputDescriptor[]
+): { from: InputDescriptor; to: InputDescriptor } | null {
+  const dates = inputs.filter(
+    (input) =>
+      input.type === "date" ||
+      (["text", "", "search"].includes(input.type) &&
+        (/date/i.test(input.hint) || /mm\W*dd|yyyy/i.test(input.placeholder ?? "")))
+  );
+  const from = dates.find((input) => FROM_HINT.test(input.hint));
+  const to = dates.find((input) => input !== from && TO_HINT.test(input.hint));
+  if (from && to) return { from, to };
+  if (!from && !to && dates.length === 2) return { from: dates[0], to: dates[1] };
+  return null;
+}
+
+/** The date as the field wants it: ISO for a date input or a yyyy placeholder. */
+export function formatForField(iso: string, field: InputDescriptor): string {
+  if (field.type === "date" || /y{4}\W*m{2}/i.test(field.placeholder ?? "")) return iso;
+  const { y, m, d } = parseIso(iso);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${pad(m)}/${pad(d)}/${y}`;
+}
+
+const SUBMIT_TEXT = /^(?:search|submit|go|view|apply|filter|show|update|display|get|find|refresh)\b/i;
+const NOT_SUBMIT = /export|download|print|reset|clear|cancel|prev|next|last|first|logout|log out/i;
+
+/**
+ * Indices of the controls that plausibly run the date search, best first.
+ *
+ * Ranked so the worker has an order to try; anything that exports, resets or
+ * pages is excluded outright, since clicking "Clear" after typing the dates
+ * would put the old range back and read it as the new one.
+ */
+export function rankSubmitControls(controls: ControlDescriptor[]): number[] {
+  const scored: { index: number; score: number }[] = [];
+  controls.forEach((control, index) => {
+    const text = control.text.trim();
+    const label = (control.ariaLabel ?? "").trim();
+    if (disabledLooking(control)) return;
+    if (NOT_SUBMIT.test(text) || NOT_SUBMIT.test(label)) return;
+    let score = 0;
+    if (SUBMIT_TEXT.test(text)) score = 100;
+    else if (SUBMIT_TEXT.test(label)) score = 90;
+    else return;
+    scored.push({ index, score });
+  });
+  scored.sort((a, b) => b.score - a.score || a.index - b.index);
+  return scored.map((entry) => entry.index);
+}
+
+/** One window's outcome, for the popup to say what was and was not read. */
+export interface WindowReport {
+  from: string;
+  to: string;
+  rows: number;
+  pagesRead?: number;
+  pagingStopped?: string;
+  /** Set when the API refused this window's CSV, verbatim. */
+  problem?: string;
+}
+
+/** Counts added across windows; the tag list is a union. */
+export function sumImportResults(results: ImportResult[]): ImportResult {
+  const total: ImportResult = {
+    rows: 0,
+    imported: 0,
+    already_known: 0,
+    matched: 0,
+    unmatched: 0,
+    unknown_tags: [],
+  };
+  for (const r of results) {
+    total.rows += r.rows;
+    total.imported += r.imported;
+    total.already_known += r.already_known;
+    total.matched += r.matched;
+    total.unmatched += r.unmatched;
+    for (const tag of r.unknown_tags) {
+      if (!total.unknown_tags.includes(tag)) total.unknown_tags.push(tag);
+    }
+  }
+  return total;
 }
 
 // ---------------------------------------------------------------------------

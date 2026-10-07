@@ -28,13 +28,29 @@ Nothing stores your E-ZPass credentials — this extension never sees them.
    new, how many it could attribute to a guest, and any transponder that is not
    bound to a car.
 
-It prefers a CSV the site generates (there is usually a download link on that
-page) and falls back to scraping the activity table — **paging through it
-itself**. If the page has a rows-per-page control it asks for the largest option
-first, because a page not loaded is a page that cannot go wrong, then clicks
-through what remains and merges the result. It stops when a page repeats, when
-the click changes nothing, or at 40 pages — and the last of those is reported as
-a warning, because rows may be missing.
+### Reading three months at a time
+
+When the page has a from/to date pair and a search button the extension
+recognises, it drives them itself: it asks for the last 12 months as four
+consecutive three-month windows, **newest first**, and for each one fills in the
+dates, runs the search, pages through the results, and posts that window to the
+API before starting the next. Posting per window means a run that dies on the
+third has still delivered the first two. The windows meet exactly — each starts
+the day after the older one ends — so nothing falls between them. A window with
+no crossings is normal and is not an error.
+
+In this mode the site's own CSV download is **not** used: its link is built for
+whatever range the page last showed, and a stale one would return the same rows
+for every window and look complete.
+
+If the page has no date fields or search button it recognises, it falls back to
+reading what is on screen. In that mode it prefers a CSV the site generates
+(there is usually a download link on that page) and otherwise scrapes the
+activity table, **paging through it itself**. If the page has a rows-per-page
+control it asks for the largest option first, because a page not loaded is a page
+that cannot go wrong, then clicks through what remains and merges the result. It
+stops when a page repeats, when the click changes nothing, or at 40 pages — and
+the last of those is reported as a warning, because rows may be missing.
 
 Re-sending is harmless either way: the API fingerprints each crossing and skips
 the ones it has.
@@ -75,7 +91,10 @@ its header has a date, an amount and a tag or plate column" — because the
 logged-in activity page is behind a login and a WAF and could not be opened
 while this was written. The scoring, the CSV assembly, the row cleanup and the
 masking are all covered by `npm test`. Which table on the real page wins is not,
-and cannot be until somebody runs it on the real page. The first run is
+and cannot be until somebody runs it on the real page. The same goes for the date
+fields and search button: they are found by what they are called and what type
+they are, not by selector, and whether that finds the real ones is only known by
+running it. If it does not, it reads the page as shown rather than guessing. The first run is
 therefore the test: if it picks the wrong table or the API rejects the columns,
 the report in the popup says so and names what it saw.
 
@@ -107,8 +126,8 @@ npm test             # compile, then node --test over dist/
 
 `src/tolls.ts` holds everything the E-ZPass side decides, and nothing that
 touches the DOM: which table is the statement, which control advances a page,
-which page size to ask for, when paging has finished, and how to merge the
-pages. The functions injected into the page live in `src/background.ts` and do
+which page size to ask for, when paging has finished, how to merge the pages,
+and the date windows with the fields and button that drive them. The functions injected into the page live in `src/background.ts` and do
 the least possible — read the DOM, click a thing, set a select — so that every
 judgement is reachable by `npm test` without a browser.
 
@@ -135,6 +154,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.13.0 | build + reload | Send tolls reads the last 12 months in three-month date windows, paging each and posting it as it goes |
 | 1.12.0 | build + reload | Pull reads each trip's photos and message thread for the trip view |
 | 1.11.0 | build + reload | Pull finds every reservation on the account from Turo's own trip lists, not only the ones the mail mentioned |
 | 1.10.1 | build + reload | after filing, reads that rental's invoice from Turo so Turo's email does not count it twice |

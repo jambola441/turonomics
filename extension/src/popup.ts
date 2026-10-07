@@ -187,13 +187,19 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
     };
   }
   const parts: string[] = [];
+  if (result.windows?.length) {
+    const first = result.windows[result.windows.length - 1];
+    parts.push(`${result.windows.length} date ranges since ${first.from}`);
+  }
   if (result.pagesRead && result.pagesRead > 1) {
     parts.push(`${result.pagesRead} pages`);
   }
   // "stopped at 40 pages" means rows may be missing, which has to reach the
   // operator rather than looking like a clean read.
-  if (result.pagingStopped && /stopped at/.test(result.pagingStopped)) {
-    parts.push(`⚠ ${result.pagingStopped}`);
+  const ranges = result.windows ?? [{ from: "", to: "", pagingStopped: result.pagingStopped }];
+  for (const w of ranges) {
+    if (!/stopped at/.test(w.pagingStopped ?? "")) continue;
+    parts.push(`⚠ ${w.from ? `${w.from} to ${w.to}: ` : ""}${w.pagingStopped}`);
   }
   parts.push(`${rows} rows read`, `${imported} new`);
   if (already_known) parts.push(`${already_known} already on file`);
@@ -222,7 +228,7 @@ tollsBtn.addEventListener("click", async () => {
     // The worker reads every page of the statement and posts it. Driven from
     // there rather than from a content script, because a "next" link that
     // navigates would tear a content script down mid-loop.
-    showStatus("Reading the statement — this pages through it...");
+    showStatus("Reading the statement three months at a time — this can take a minute...");
     const sent = await send(null, { type: "SEND_TOLLS", tabId: tab.id });
     if (sent.type === "SEND_TOLLS_ERROR") throw new Error(sent.error);
     if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");

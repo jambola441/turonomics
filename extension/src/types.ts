@@ -1,3 +1,5 @@
+import type { WindowReport } from "./tolls.js";
+
 export interface TuroTrip {
   tripId: string;
   startTime: string; // ISO 8601
@@ -16,6 +18,11 @@ export interface ImportResult {
 }
 
 export interface SendTollsResult {
+  /**
+   * One entry per date window, when the statement was read a window at a time.
+   * `result` is then the sum over them.
+   */
+  windows?: WindowReport[];
   /** How many pages of the statement were read, and why reading stopped. */
   pagesRead?: number;
   pagingStopped?: string;

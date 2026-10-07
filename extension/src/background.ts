@@ -15,15 +15,24 @@
 import {
   chooseStatement,
   describeShape,
+  formatForField,
   mergeActivityPages,
+  pickDateFields,
   pickPageSize,
+  quarterRanges,
   rankNextControls,
+  rankSubmitControls,
   shouldStopPaging,
+  sumImportResults,
   tableSignature,
+  usableRows,
   type ControlDescriptor,
+  type DateRange,
+  type InputDescriptor,
   type PageSizeOption,
   type ScrapedPage,
   type ScrapedTable,
+  type WindowReport,
 } from "./tolls.js";
 import {
   describeEmbedded,
@@ -352,6 +361,81 @@ function setPageSizeInPage(value: string): boolean {
     }
   }
   return false;
+}
+
+interface FormDescriptor {
+  inputs: InputDescriptor[];
+  controls: ControlDescriptor[];
+}
+
+// The selector for anything that might run a search. Duplicated in the click
+// function below, because both are serialised into the page and cannot share it.
+function readFormInPage(): FormDescriptor {
+  const text = (node: Element | null): string =>
+    (node?.textContent ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
+
+  const inputs: InputDescriptor[] = Array.from(document.querySelectorAll("input")).map(
+    (input, index) => {
+      const id = input.id;
+      const label =
+        (id ? text(document.querySelector(`label[for="${CSS.escape(id)}"]`)) : "") ||
+        text(input.closest("label"));
+      return {
+        index,
+        type: (input.getAttribute("type") ?? "text").toLowerCase(),
+        hint: [input.name, id, label, input.placeholder, input.getAttribute("aria-label")]
+          .filter(Boolean)
+          .join(" "),
+        placeholder: input.placeholder || undefined,
+      };
+    }
+  );
+
+  const controls: ControlDescriptor[] = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
+    )
+  ).map((node) => ({
+    text: (node as HTMLInputElement).value && node.tagName === "INPUT"
+      ? (node as HTMLInputElement).value
+      : text(node),
+    ariaLabel: node.getAttribute("aria-label") ?? undefined,
+    disabled:
+      (node as HTMLButtonElement).disabled === true ||
+      node.getAttribute("aria-disabled") === "true",
+    className: node.className ? String(node.className) : undefined,
+  }));
+
+  return { inputs, controls };
+}
+
+function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, toValue: string): boolean {
+  const inputs = Array.from(document.querySelectorAll("input"));
+  const set = (index: number, value: string): boolean => {
+    const input = inputs[index];
+    if (!input) return false;
+    // The native setter, so a framework that wraps `value` still sees a change.
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setter) setter.call(input, value);
+    else input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    return true;
+  };
+  return set(fromIndex, fromValue) && set(toIndex, toValue);
+}
+
+function clickSubmitInPage(index: number): boolean {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
+    )
+  );
+  const node = nodes[index];
+  if (!node) return false;
+  node.click();
+  return true;
 }
 
 async function fetchExportInPage(url: string): Promise<string | null> {
@@ -1076,7 +1160,7 @@ function activityOf(descriptor: PageDescriptor): ScrapedTable | null {
  * fallback.
  */
 async function readStatement(tabId: number): Promise<ScrapedPage> {
-  let descriptor = await inPage(tabId, readPageInPage, []);
+  const descriptor = await inPage(tabId, readPageInPage, []);
 
   for (const url of descriptor.downloadLinks.slice(0, 3)) {
     const csv = await inPage(tabId, fetchExportInPage, [url]);
@@ -1091,6 +1175,17 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
     }
   }
 
+  return pageThrough(tabId, descriptor);
+}
+
+/**
+ * Page through the statement the tab is showing, from the page it is on.
+ *
+ * Shared by the one-shot read and by each date window: both end up looking at a
+ * table with a "next" under it.
+ */
+async function pageThrough(tabId: number, start: PageDescriptor): Promise<ScrapedPage> {
+  let descriptor = start;
   // Fewer pages beats cleverer paging.
   const size = pickPageSize(descriptor.pageSizes);
   if (size !== null) {
@@ -1149,6 +1244,124 @@ async function readStatement(tabId: number): Promise<ScrapedPage> {
   };
 }
 
+/**
+ * Read the statement three months at a time and post each window as it is read.
+ *
+ * Posting per window rather than at the end means a run that dies on window
+ * three has still delivered one and two, and re-running is harmless because the
+ * API fingerprints each crossing. When the page has no date fields or no search
+ * button the tool recognises, this falls back to reading what is on screen, as
+ * before — a page it cannot drive is no worse off than it was.
+ *
+ * The site's own CSV download is not used here: its link is built for whatever
+ * range the page last showed, and a stale link would deliver the same rows for
+ * every window and read as complete.
+ */
+async function sendStatement(tabId: number): Promise<SendTollsResult> {
+  const form = await inPage(tabId, readFormInPage, []);
+  const fields = pickDateFields(form.inputs);
+  if (!fields || !rankSubmitControls(form.controls).length) {
+    LOG("no date range to drive; reading what the page shows");
+    return sendTolls(await readStatement(tabId));
+  }
+
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+
+  const windows: WindowReport[] = [];
+  const results: ImportResult[] = [];
+  let amountsLookPositive = false;
+  let firstReport: string | undefined;
+  let source: SendTollsResult["source"] = "none";
+  let problem: string | undefined;
+
+  for (const range of quarterRanges(today)) {
+    const sent = await sendWindow(tabId, range);
+    const report: WindowReport = {
+      ...range,
+      rows: sent.rowCount,
+      pagesRead: sent.pagesRead,
+      pagingStopped: sent.pagingStopped,
+      problem: sent.problem,
+    };
+    windows.push(report);
+    firstReport ??= sent.report;
+    amountsLookPositive ||= sent.amountsLookPositive === true;
+    if (sent.result) {
+      results.push(sent.result);
+      source = sent.source;
+    }
+    if (sent.problem) {
+      // The same headers would be refused again; stop and say which window.
+      problem = `${range.from} to ${range.to}: ${sent.problem}`;
+      break;
+    }
+  }
+
+  const rowCount = windows.reduce((n, w) => n + w.rows, 0);
+  const pagesRead = windows.reduce((n, w) => n + (w.pagesRead ?? 0), 0);
+  return {
+    windows,
+    pagesRead,
+    result: results.length ? sumImportResults(results) : null,
+    source,
+    rowCount,
+    amountsLookPositive,
+    ...(problem ? { problem } : {}),
+    ...(!results.length && !problem ? { report: firstReport } : {}),
+  };
+}
+
+/** Put one range in the form, run the search, page through it, post it. */
+async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsResult> {
+  // Re-read the form every time: a search that reloads the page can renumber
+  // the inputs, and indices from the last window would then type into the wrong
+  // box.
+  const form = await inPage(tabId, readFormInPage, []);
+  const fields = pickDateFields(form.inputs);
+  const submit = rankSubmitControls(form.controls)[0];
+  if (!fields || submit === undefined) {
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      problem: "the date fields went away after the previous search",
+    };
+  }
+
+  const before = await inPage(tabId, readPageInPage, []);
+  const filled = await inPage(tabId, fillDatesInPage, [
+    fields.from.index,
+    fields.to.index,
+    formatForField(range.from, fields.from),
+    formatForField(range.to, fields.to),
+  ]);
+  if (!filled || !(await inPage(tabId, clickSubmitInPage, [submit]))) {
+    return { result: null, source: "none", rowCount: 0, problem: "could not run the date search" };
+  }
+
+  const after = await waitForChange(tabId, tableSignature(activityOf(before)), before);
+  LOG(`window ${range.from} to ${range.to}`);
+  const page = await pageThrough(tabId, after);
+  const table = page.merged;
+  if (!table || !usableRows(table).length) {
+    // Three months with no crossings is ordinary, not an error.
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      pagesRead: page.pagesRead,
+      pagingStopped: page.pagingStopped,
+      report: describeShape(page),
+    };
+  }
+  return sendTolls(page);
+}
+
 /** Re-read until the table changes, or long enough to be sure it will not. */
 async function waitForChange(
   tabId: number,
@@ -1183,8 +1396,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "SEND_TOLLS") {
-    readStatement(message.tabId)
-      .then(sendTolls)
+    sendStatement(message.tabId)
       .then(
       (result) => sendResponse({ type: "SEND_TOLLS_RESULT", result } satisfies MessageType),
       (error: unknown) =>

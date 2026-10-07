@@ -51,9 +51,39 @@ def test_a_known_agency_with_a_code_it_does_not_have_is_not_moved_to_another_roa
     assert locate("24") is not None
 
 
-@pytest.mark.parametrize("code", ["TCN", "104", "109", "521", "522", "583"])
+@pytest.mark.parametrize("code", ["TCN", "109", "521", "522", "583"])
 def test_the_codes_nobody_could_identify_are_not_placed(code: str) -> None:
     assert locate(code) is None
+
+
+def test_104_is_delaware_unless_the_statement_says_massachusetts() -> None:
+    """Delaware's own E-ZPass map signs its Dover plaza as Exit 104; the Mass
+    Pike gantry at milepost 104.9 is a reading only MassDOT can confirm."""
+    found = locate("104")
+    assert found is not None and found.agency == "DELDOT" and "Dover" in found.name
+    pike = locate("104", "MassDOT")
+    assert pike is not None and "Hopkinton" in pike.name
+
+
+@pytest.mark.parametrize(("code", "agency"), [("TCN", "BCBC"), ("109", "MassDOT")])
+def test_a_milepost_or_letters_match_needs_the_agency(code: str, agency: str) -> None:
+    found = locate(code, agency)
+    assert found is not None and found.confidence == "low"
+
+
+def test_jfk_is_marylands_without_an_agency_and_delawares_with_one() -> None:
+    """Both states call their I-95 the JFK Memorial Highway; MDTA's reports use
+    the code, so it is Maryland's unless the statement says DelDOT."""
+    found = locate("JFK")
+    assert found is not None and "Perryville" in found.name
+    delaware = locate("JFK", "DelDOT")
+    assert delaware is not None and "Newark" in delaware.name
+
+
+def test_bedford_could_be_either_state_and_is_left_unplaced() -> None:
+    assert locate("BDF") is None
+    nh, pa = locate("BDF", "NHDOT"), locate("BDF", "PA Turnpike")
+    assert nh is not None and pa is not None and nh.lat != pa.lat
 
 
 def test_every_row_is_sane() -> None:
@@ -62,9 +92,10 @@ def test_every_row_is_sane() -> None:
         key = (plaza.agency, plaza.code)
         assert key not in seen, f"{key} twice"
         seen.add(key)
-        # The north-east, where E-ZPass New York's statements reach.
+        # The north-east, where E-ZPass New York's statements reach (as far
+        # west as the PA Turnpike's Bedford interchange).
         assert 38.0 < plaza.lat < 45.5, plaza
-        assert -77.5 < plaza.lon < -70.0, plaza
+        assert -80.6 < plaza.lon < -70.0, plaza
         assert plaza.confidence in USABLE | {"low"}, plaza
         assert plaza.source.startswith("https://"), plaza
         assert plaza.name, plaza

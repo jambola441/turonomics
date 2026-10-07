@@ -1,7 +1,7 @@
 """Where each E-ZPass plaza is, by the code a statement names it with.
 
 Researched from the agencies' own plaza lists and OpenStreetMap's toll gantries
-(sources on every row), for the 68 codes on this fleet's statements. Kept as
+(sources on every row), for the codes on this fleet's statements. Kept as
 data in the code rather than a table: it changes when a statement shows a new
 code, which is a reviewed edit, not something to write from a request.
 
@@ -15,8 +15,18 @@ sourced; ``medium`` — the facility is sourced and the point is approximate;
 ``low`` — the code's meaning was a guess. A low row is used only when the
 statement's agency agrees with it, which turns the guess into a match.
 
-Six codes were not identified at all and are not here: TCN, 104, 109, 521,
-522, 583. A crossing at one of them is listed on the map, not placed.
+Three codes were not identified at all and are not here: 521, 522, 583. A
+crossing at one of them is listed on the map, not placed; the statement's
+Agency column is the likeliest thing to say what they are.
+
+Some codes are read differently by different agencies, and the low rows are
+the second readings: ``104`` is Delaware's Dover plaza (its own E-ZPass map
+signs it as Exit 104), and only a statement naming MassDOT makes it the Mass
+Pike's Hopkinton gantry, whose milepost happens to be 104.9. ``109`` and
+``TCN`` are matched by nothing better than that — a milepost, a name's
+letters (E-ZPass NJ's own code for Tacony-Palmyra is TPB) — so they too need
+the agency. JFK, FMT and DRB are the agencies' own abbreviations, in MDTA's
+traffic reports and the PA Turnpike's 2025 toll schedule ("43 DRB ORT").
 """
 
 from __future__ import annotations
@@ -84,12 +94,18 @@ DRJTBC,I78,I-78 Toll Bridge,40.6748,-75.2008,high,,https://www.openstreetmap.org
 DRJTBC,O78,I-78 Toll Bridge (open-road lanes),40.6748,-75.2008,high,,https://www.openstreetmap.org/node/1858756598
 DRBA,DMB,Delaware Memorial Bridge,39.6963,-75.5454,high,,https://www.openstreetmap.org/way/70949350
 DELDOT,D95,"I-95 Delaware Turnpike, Newark",39.6459,-75.7621,low,,https://www.openstreetmap.org/node/6003259281
-MDTA,JFK,"I-95 JFK Memorial Highway, Perryville",39.5855,-76.0882,low,,https://www.openstreetmap.org/node/9876571478
-MDTA,FMT,Fort McHenry Tunnel,39.2644,-76.5651,low,,https://www.openstreetmap.org/node/11146586023
-PTC,DRB,PA Turnpike Delaware River Bridge,40.1211,-74.8448,low,,https://www.openstreetmap.org/node/6276572480
+MDTA,JFK,"I-95 JFK Memorial Highway, Perryville",39.5855,-76.0882,high,,https://www.openstreetmap.org/node/9876571478
+MDTA,FMT,Fort McHenry Tunnel,39.2644,-76.5651,high,,https://www.openstreetmap.org/node/11146586023
+PTC,DRB,"PA Turnpike Delaware River Bridge (I-95, westbound only)",40.1211,-74.8448,high,,https://www.openstreetmap.org/node/6276572480
 NHDOT,HAM,"Hampton tolls, I-95 NH",42.9625,-70.8563,low,,https://www.openstreetmap.org/node/885709933
 NHDOT,BDF,"Bedford tolls, F.E. Everett Tpk NH",42.9150,-71.4652,low,,https://www.openstreetmap.org/way/136954717
 MAINE,YRK,Maine Turnpike York toll,43.1802,-70.6487,low,,https://www.openstreetmap.org/node/10074126633
+DELDOT,104,"SR 1 Dover toll plaza (Exit 104, N. Dover/Scarborough Rd)",39.1849,-75.5146,medium,,https://www.ezpassde.com/pdfs/EZPassMap.pdf
+DELDOT,JFK,"I-95 Delaware Turnpike (JFK Memorial Hwy), Newark",39.6459,-75.7621,low,,https://www.openstreetmap.org/node/6003259281
+MASSDOT,104,"I-90 Mass Pike gantry, Hopkinton (mile 104.9)",42.2496,-71.5867,low,,https://www.openstreetmap.org/node/6040835544
+MASSDOT,109,"I-90 Mass Pike gantry, Southborough (mile 109.1)",42.2797,-71.5182,low,,https://www.openstreetmap.org/node/6040835542
+BCBC,TCN,"Tacony-Palmyra Bridge, Palmyra",40.0069,-75.0386,low,,https://www.openstreetmap.org/node/7063207956
+PTC,BDF,"PA Turnpike Bedford interchange 146",40.0517,-78.5122,low,,https://www.openstreetmap.org/way/197222808
 """
 
 
@@ -137,6 +153,8 @@ _AGENCY_NAMES: dict[str, str] = {
     "MDTA": "MDTA",
     "PTC": "PTC", "PATURNPIKE": "PTC", "PATPK": "PTC",
     "NHDOT": "NHDOT",
+    "MASSDOT": "MASSDOT", "MASSPIKE": "MASSDOT", "MA": "MASSDOT", "MASSTPK": "MASSDOT",
+    "BCBC": "BCBC", "BURLINGTONCOUNTYBRIDGECOMMISSION": "BCBC",
     "MAINETPK": "MAINE", "MAINETURNPIKE": "MAINE", "MTURNPIKE": "MAINE",
 }
 

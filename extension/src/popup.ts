@@ -127,15 +127,31 @@ const tollsTokenEl = document.getElementById("tollsToken") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("saveSettings") as HTMLButtonElement;
 const settingsSavedEl = document.getElementById("settingsSaved") as HTMLDivElement;
 
-function showReport(report: string | undefined): void {
+function showReport(report: string | undefined, open = true): void {
   if (!report) {
     tollsReportWrap.classList.add("hidden");
     return;
   }
   tollsReportEl.textContent = report;
   tollsReportWrap.classList.remove("hidden");
-  tollsReportWrap.open = true;
+  tollsReportWrap.open = open;
 }
+
+/** The page report, if there is one, then the run log. */
+function fullReport(result: SendTollsResult): string | undefined {
+  const parts = [
+    result.report,
+    result.log?.length ? "=== run log ===\n" + result.log.join("\n") : undefined,
+  ].filter(Boolean);
+  return parts.length ? parts.join("\n\n") : undefined;
+}
+
+const copyLogBtn = document.getElementById("copyLogBtn") as HTMLButtonElement;
+copyLogBtn.addEventListener("click", () => {
+  void navigator.clipboard.writeText(tollsReportEl.textContent ?? "").then(() => {
+    copyLogBtn.textContent = "Copied";
+  });
+});
 
 async function getActiveEzPassTab(): Promise<chrome.tabs.Tab | null> {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -165,7 +181,7 @@ function send<T extends MessageType>(target: number | null, message: MessageType
 /** What came back, in a sentence, including the cases that are not successes. */
 function describeImport(result: SendTollsResult): { text: string; isError: boolean } {
   if (result.problem) {
-    return { text: `The API refused the file: ${result.problem}`, isError: true };
+    return { text: `Stopped: ${result.problem}`, isError: true };
   }
   if (!result.result) {
     return {
@@ -234,13 +250,15 @@ tollsBtn.addEventListener("click", async () => {
     if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");
 
     const described = describeImport(sent.result);
+    copyLogBtn.textContent = "Copy log";
     if (described.isError) {
       showStatus(described.text, true);
-      showReport(sent.result.report);
+      showReport(fullReport(sent.result));
     } else {
       statusEl.classList.add("hidden");
       tollsResultEl.textContent = described.text;
       tollsResultEl.classList.remove("hidden");
+      showReport(fullReport(sent.result), false);
     }
   } catch (err) {
     showStatus(err instanceof Error ? err.message : String(err), true);

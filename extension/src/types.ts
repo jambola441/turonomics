@@ -19,6 +19,12 @@ export interface ImportResult {
 
 export interface SendTollsResult {
   /**
+   * What the run did, step by step, with account data masked. Always present on
+   * a read made a window at a time; the popup shows it so it can be pasted into
+   * a bug report.
+   */
+  log?: string[];
+  /**
    * One entry per date window, when the statement was read a window at a time.
    * `result` is then the sum over them.
    */

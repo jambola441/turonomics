@@ -16,11 +16,12 @@
         <p class="subtitle">On an E-ZPass account activity page</p>
         <button id="tollsBtn" class="btn">Send tolls to Turonomics</button>
         <div id="tollsResult" class="result hidden"></div>
-        <!-- Shown only when the page did not yield a statement, or the API
-             refused it. It names the page's columns and masks their values, so
-             it can be pasted into a bug report as is. -->
+        <!-- The run log, and the page report when nothing was found. Both name
+             columns and mask values, so they can be pasted into a bug report
+             as is. Always present after a run, closed when it went fine. -->
         <details id="tollsReportWrap" class="report hidden">
-          <summary>What was on the page</summary>
+          <summary>Run log (paste this if something went wrong)</summary>
+          <button id="copyLogBtn" class="btn" type="button">Copy log</button>
           <pre id="tollsReport"></pre>
         </details>
       </section>

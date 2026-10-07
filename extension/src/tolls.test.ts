@@ -20,6 +20,7 @@ import {
   chooseStatement,
   classifyHeaders,
   cleanCell,
+  describeForm,
   describeShape,
   formatForField,
   MAX_PAGES,
@@ -575,4 +576,32 @@ test("counts add across windows and unbound tags are listed once", () => {
   assert.deepEqual(total, {
     rows: 15, imported: 13, already_known: 2, matched: 10, unmatched: 3, unknown_tags: ["A", "B", "C"],
   });
+});
+
+// ---------------------------------------------------------------------------
+// The run log
+// ---------------------------------------------------------------------------
+test("the form report names the fields it chose and the button it would click", () => {
+  const lines = describeForm(
+    [
+      { index: 3, type: "text", hint: "startDate Start Date", placeholder: "mm/dd/yyyy" },
+      { index: 4, type: "text", hint: "endDate End Date", placeholder: "mm/dd/yyyy" },
+    ],
+    [{ text: "Search" }]
+  ).join("\n");
+  assert.match(lines, /input\[3\].*FROM/);
+  assert.match(lines, /input\[4\].*TO/);
+  assert.match(lines, /submit candidate \[0\] "Search"/);
+});
+
+test("the form report says so when it recognised nothing", () => {
+  const lines = describeForm([{ index: 0, type: "text", hint: "q" }], [{ text: "Export" }]).join("\n");
+  assert.match(lines, /no from\/to pair recognised/);
+  assert.match(lines, /no search button recognised/);
+});
+
+test("the form report leaves out the page's other buttons", () => {
+  // A nav bar can carry an account holder's name; the report is for pasting.
+  const lines = describeForm([], [{ text: "Welcome, Jane Doe" }, { text: "Search" }]).join("\n");
+  assert.ok(!lines.includes("Jane Doe"));
 });

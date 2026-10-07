@@ -542,6 +542,37 @@ export function rankSubmitControls(controls: ControlDescriptor[]): number[] {
   return scored.map((entry) => entry.index);
 }
 
+/**
+ * The form as the run saw it, for a log meant to be pasted into a bug report.
+ *
+ * Lists only the date-looking inputs and the controls that ranked as a search
+ * button. The page's other links and buttons are left out: a nav bar can carry
+ * an account holder's name, and what was wrong is almost always in the fields.
+ */
+export function describeForm(
+  inputs: InputDescriptor[],
+  controls: ControlDescriptor[]
+): string[] {
+  const lines = [`inputs on page: ${inputs.length}, controls: ${controls.length}`];
+  const fields = pickDateFields(inputs);
+  const dateLike = inputs.filter(
+    (i) => i.type === "date" || /date|from|to\b|start|end/i.test(i.hint) || i.placeholder
+  );
+  for (const input of dateLike) {
+    const role = fields?.from === input ? "FROM" : fields?.to === input ? "TO" : "-";
+    lines.push(
+      `  input[${input.index}] type=${input.type} ${role} hint="${input.hint}" placeholder="${input.placeholder ?? ""}"`
+    );
+  }
+  if (!fields) lines.push("  no from/to pair recognised");
+  const ranked = rankSubmitControls(controls);
+  for (const index of ranked.slice(0, 3)) {
+    lines.push(`  submit candidate [${index}] "${controls[index].text.slice(0, 40)}"`);
+  }
+  if (!ranked.length) lines.push("  no search button recognised");
+  return lines;
+}
+
 /** One window's outcome, for the popup to say what was and was not read. */
 export interface WindowReport {
   from: string;

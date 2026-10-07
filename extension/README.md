@@ -58,6 +58,16 @@ the ones it has.
 The paging is driven from the service worker rather than a content script, since
 a "next" link that navigates would tear a content script down mid-loop.
 
+### The run log
+
+After every send the popup has a **Run log** under the result (closed when it
+went fine, open when it did not) with a **Copy log** button. It records, step by
+step: which fields it took for the date range and which button it would click,
+what it typed into each, whether the table changed after the search, how many
+rows each page had, why paging stopped, and what the API said per window. Tag
+numbers, plates and amounts never go in it — rows appear only as masked shapes
+like `###|aa aaa####|$-#.##` — so it can be pasted as is.
+
 ### If it cannot find the activity
 
 The popup shows a **What was on the page** report naming each table's columns

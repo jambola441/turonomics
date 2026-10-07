@@ -389,14 +389,17 @@ Photos are counted by step in the view until their URL pattern is known.
 charged (`ingest/trip_map.py`). The route is the car's Bouncie drives over the
 rental (`/v1/trips`, a week at a time, Bouncie's limit), falling back to the
 positions the poller stored. A crossing goes at its plaza where
-`ingest/plazas.py` knows it — 62 codes researched from the agencies' plaza
-lists and OpenStreetMap's gantries, a source on every row — matched on the
-statement's agency where the code is ambiguous ("17" is the Thruway's Newburgh
-exit and the Turnpike's Secaucus one). The route checks the plaza: one more than
-5 km from where the car was at that moment is flagged and the track used.
-Without a known plaza, a crossing goes on the drive under way when it was
-charged, at the fraction of that drive that had passed — an estimate along the
-right road, said as such. Anything neither can place is listed, not guessed.
+`ingest/plazas.py` knows it — researched from the agencies' plaza lists and
+OpenStreetMap's gantries, a source on every row — matched on the statement's
+agency where the code is ambiguous ("17" is the Thruway's Newburgh exit and the
+Turnpike's Secaucus one). A plaza this app does not know is listed, not placed.
+
+An earlier version estimated where the car was at the moment of charge by
+splitting a drive's duration evenly along its track. Traffic and stops made
+that miles wrong, and the operator called it, rightly, worse than useless; it
+is gone. The route checks plazas without timing instead: one more than 3 km
+from anywhere the car drove during the rental is flagged, since the code
+probably means another plaza.
 
 After filing, the extension reads that rental's invoice hub at once. The
 filing is recorded under Turo's reimbursement id and Turo's email arrives keyed

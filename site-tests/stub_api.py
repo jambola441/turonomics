@@ -532,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
                      "source": "https://www.openstreetmap.org/node/5621353068",
                      "off_route_km": None},
                     {"occurred_at": "2026-07-10T15:30:00Z", "plaza": "24", "amount_cents": 400,
-                     "lat": 40.62, "lon": -74.03, "how": "route",
+                     "lat": 42.6978, "lon": -73.8455, "how": "plaza",
                      "name": "Exit 24 Albany (I-90)", "source": None, "off_route_km": 213.4},
                     {"occurred_at": "2026-07-12T13:10:00Z", "plaza": "583", "amount_cents": 1100,
                      "lat": None, "lon": None, "how": None},

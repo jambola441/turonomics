@@ -8,21 +8,23 @@ Two sources for the route, best first:
 * **The fleet's own telemetry**, the positions the poller has stored. Coarser
   — a fix every few minutes while driving — but on hand without a call out.
 
-A crossing is placed on the route at the moment it was charged: the drive that
-was under way then, at the fraction of that drive's duration that had passed.
-That assumes an even speed within one drive, so it is an estimate along the
-right road rather than a point on the gantry — said as such on the map.
+Crossings go at their plaza (``ingest/plazas.py``) and nowhere else. An
+earlier version estimated where the car was at the moment of charge by
+splitting a drive's duration evenly along its track; traffic and stops make
+that miles wrong, and a guess drawn as a position is worse than no marker. A
+plaza this app does not know is listed, not placed.
 
-Without a route, a crossing at a plaza this file knows is placed at the plaza.
-Only the major crossings around the city are listed, at approximate positions,
-and anything else is left off the map rather than guessed at.
+The route still checks the plazas, without timing: a plaza more than a few
+kilometres from anywhere the car drove during the rental is the wrong plaza
+for that crossing — a code meaning something else on another road — and is
+flagged.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
@@ -39,16 +41,12 @@ log = logging.getLogger("turonomics.ingest.trip_map")
 
 # Bouncie's own limit on one request.
 BOUNCIE_WINDOW = timedelta(days=7)
-# A crossing a few minutes outside a drive — the statement's clock against the
-# tracker's — is still that drive's.
-ALIGN_WITHIN = timedelta(minutes=10)
 
-# How far a researched plaza may sit from where the tracker had the car at that
-# moment before the two are called a disagreement. The route estimate assumes
-# an even speed within a drive, so it can be a few kilometres out on a long
-# one; more than this, and the plaza is wrong for this crossing — a code
-# meaning something else on another road — rather than the estimate.
-DISAGREE_KM = 5.0
+# How far a plaza may sit from the nearest point the car drove past before it is
+# flagged. Tracks are sampled, not continuous, so a gantry between two fixes on
+# a fast road can be a kilometre or two from both; beyond this, the car was not
+# there.
+DISAGREE_KM = 3.0
 
 
 class DrivesSource(Protocol):
@@ -239,78 +237,75 @@ def _metres(a: tuple[float, float], b: tuple[float, float]) -> float:
     return math.hypot(dx, dy)
 
 
-def along(points: Sequence[tuple[float, float]], fraction: float) -> tuple[float, float]:
-    """The point a fraction of the way along a track, by distance."""
-    if len(points) == 1:
-        return points[0]
-    fraction = min(1.0, max(0.0, fraction))
-    legs = [_metres(points[i], points[i + 1]) for i in range(len(points) - 1)]
-    total = sum(legs)
-    if total == 0:
-        return points[0]
-    target = fraction * total
-    for i, leg in enumerate(legs):
-        if target <= leg or i == len(legs) - 1:
-            t = 0.0 if leg == 0 else min(1.0, target / leg)
-            a, b = points[i], points[i + 1]
-            return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
-        target -= leg
-    return points[-1]
+def _segment_metres(
+    p: tuple[float, float], a: tuple[float, float], b: tuple[float, float]
+) -> float:
+    """Distance from a point to a straight leg of a track, in metres.
+
+    On a local flat projection, which is accurate to well under a percent at
+    the few-kilometre scale this is used at.
+    """
+    lat = math.radians(p[0])
+    kx, ky = 111_320 * math.cos(lat), 111_320
+
+    def xy(q: tuple[float, float]) -> tuple[float, float]:
+        return ((q[1] - p[1]) * kx, (q[0] - p[0]) * ky)
+
+    ax, ay = xy(a)
+    bx, by = xy(b)
+    dx, dy = bx - ax, by - ay
+    length = dx * dx + dy * dy
+    t = 0.0 if length == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / length))
+    return math.hypot(ax + t * dx, ay + t * dy)
+
+
+def nearest_km(route: Route, point: tuple[float, float]) -> float | None:
+    """How close the car came to a point at any time on the route, or None
+    when there is no route to say."""
+    best: float | None = None
+    for drive in route.drives:
+        pts = drive.points
+        legs = zip(pts, pts[1:], strict=False) if len(pts) > 1 else [(pts[0], pts[0])]
+        for a, b in legs:
+            d = _segment_metres(point, a, b)
+            best = d if best is None or d < best else best
+    return None if best is None else best / 1000
 
 
 @dataclass(frozen=True)
 class Placed:
     lat: float
     lon: float
-    # "plaza" — at the researched plaza; "route" — on the car's track at that
-    # moment; "zone" — the middle of a charging zone, with no track to say more.
+    # "plaza" — at the researched plaza; "zone" — the middle of a charging
+    # zone, which is not a gantry.
     how: str
     name: str | None = None
     source: str | None = None
-    # Set when the plaza and the track disagree, in kilometres: the track was
-    # used, and the plaza is worth a second look.
+    # Set when the car's route never came within DISAGREE_KM of the plaza:
+    # how close it got, in kilometres. The plaza is worth a second look.
     off_route_km: float | None = None
 
 
-def _on_route(occurred_at: datetime, route: Route) -> tuple[float, float] | None:
-    for drive in route.drives:
-        if drive.starts_at - ALIGN_WITHIN <= occurred_at <= drive.ends_at + ALIGN_WITHIN:
-            span = (drive.ends_at - drive.starts_at).total_seconds()
-            fraction = (
-                0.5 if span <= 0 else (occurred_at - drive.starts_at).total_seconds() / span
-            )
-            return along(drive.points, fraction)
-    return None
+def place(plaza: str, route: Route, agency: str | None = None) -> Placed | None:
+    """Where on the map a crossing goes: its plaza, or nowhere.
 
-
-def place(
-    occurred_at: datetime, plaza: str, route: Route, agency: str | None = None
-) -> Placed | None:
-    """Where on the map a crossing goes, or None if nothing honest can say.
-
-    The researched plaza first: it is where the gantry is, which beats an
-    even-speed estimate along a drive. The track checks it — a plaza far from
-    where the car was at that moment is the wrong plaza for this crossing, and
-    the track is used and the gap reported. A zone charge goes on the track
-    when there is one, since its point is only the zone's middle.
+    The route checks a plaza but never moves the marker. A zone charge is
+    not checked: its point is only the zone's middle, which a car can drive
+    all over without passing.
     """
     found = locate(plaza, agency)
-    track = _on_route(occurred_at, route)
-    if found is not None and not found.zone:
-        if track is not None:
-            gap = _metres(track, (found.lat, found.lon)) / 1000
-            if gap > DISAGREE_KM:
-                return Placed(
-                    lat=track[0], lon=track[1], how="route",
-                    name=found.name, source=found.source, off_route_km=round(gap, 1),
-                )
-        return Placed(lat=found.lat, lon=found.lon, how="plaza",
-                      name=found.name, source=found.source)
-    if track is not None:
-        return Placed(lat=track[0], lon=track[1], how="route",
-                      name=found.name if found else None,
-                      source=found.source if found else None)
-    if found is not None:
-        return Placed(lat=found.lat, lon=found.lon, how="zone",
-                      name=found.name, source=found.source)
-    return None
+    if found is None:
+        return None
+    off: float | None = None
+    if not found.zone:
+        gap = nearest_km(route, (found.lat, found.lon))
+        if gap is not None and gap > DISAGREE_KM:
+            off = round(gap, 1)
+    return Placed(
+        lat=found.lat,
+        lon=found.lon,
+        how="zone" if found.zone else "plaza",
+        name=found.name,
+        source=found.source,
+        off_route_km=off,
+    )

@@ -528,13 +528,14 @@ class MapToll(BaseModel):
     amount_cents: int
     lat: float | None
     lon: float | None
-    # "plaza": at the researched plaza. "route": on the car's track at that
-    # moment. "zone": the middle of a charging zone. None: not placed.
+    # "plaza": at the researched plaza. "zone": the middle of a charging zone.
+    # None: a plaza this app does not know — listed, not placed.
     how: str | None
     # The plaza's name and where its position comes from, where it is known.
     name: str | None = None
     source: str | None = None
-    # How far the plaza sat from the car's track, when they disagreed.
+    # How close the car's route came to the plaza, when that was too far for
+    # the car to have passed it: the plaza is worth a second look.
     off_route_km: float | None = None
 
 
@@ -597,7 +598,7 @@ def trip_map(
     ).all()
     placed_tolls = []
     for toll in tolls:
-        spot = place(toll.occurred_at, toll.plaza, route, toll.agency)
+        spot = place(toll.plaza, route, toll.agency)
         placed_tolls.append(
             MapToll(
                 occurred_at=toll.occurred_at,

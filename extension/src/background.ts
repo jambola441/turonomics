@@ -14,6 +14,7 @@
 
 import {
   chooseStatement,
+  dateCoverage,
   describeForm,
   describeShape,
   formatForField,
@@ -47,6 +48,8 @@ import {
   invoicesToRead,
   reimbursementRequestPath,
   summariseCalls,
+  EZPASS_SUMMARY,
+  type SummaryOptions,
   type Embedded,
   type SeenCall,
 } from "./turo.js";
@@ -445,6 +448,11 @@ function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, 
     return true;
   };
   return set(fromIndex, fromValue) && set(toIndex, toValue);
+}
+
+function readValuesInPage(indices: number[]): string[] {
+  const inputs = Array.from(document.querySelectorAll("input"));
+  return indices.map((i) => inputs[i]?.value ?? "<missing>");
 }
 
 function clickSubmitInPage(index: number): boolean {
@@ -1046,11 +1054,12 @@ async function watchTuro(tabId: number): Promise<void> {
   // seconds and uninstalls, which is right for "what does this page load" and
   // useless for "what happens when I submit this form" — the submit is minutes
   // away, long after it has stopped listening.
-  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  const target = await hookTarget(tabId);
+  await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   await chrome.scripting.registerContentScripts([
     {
-      id: HOOK_ID,
-      matches: ["https://turo.com/*"],
+      id: target.id,
+      matches: target.matches,
       js: ["dist/turo-hook.js"],
       runAt: "document_start",
       world: "MAIN",
@@ -1065,6 +1074,7 @@ async function watchTuro(tabId: number): Promise<void> {
 
 /** Collect what the watch recorded, without reloading away the page. */
 async function reportWatch(tabId: number): Promise<string> {
+  const target = await hookTarget(tabId);
   try {
     const calls = await inPage(tabId, () => {
       const w = window as Window & { __turonomicsCalls?: unknown[] };
@@ -1072,19 +1082,20 @@ async function reportWatch(tabId: number): Promise<string> {
     }, [], 12, "MAIN");
     return [
       "=== what it fetched ===",
-      summariseCalls(calls),
+      summariseCalls(calls, target.summary),
     ].join("\n");
   } finally {
-    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+    await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   }
 }
 
 async function probeTuro(tabId: number): Promise<string> {
-  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  const target = await hookTarget(tabId);
+  await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   await chrome.scripting.registerContentScripts([
     {
-      id: HOOK_ID,
-      matches: ["https://turo.com/*"],
+      id: target.id,
+      matches: target.matches,
       js: ["dist/turo-hook.js"],
       runAt: "document_start",
       world: "MAIN",
@@ -1118,14 +1129,37 @@ async function probeTuro(tabId: number): Promise<string> {
     const embedded = await inPage(tabId, readEmbeddedInPage, [], 12, "MAIN");
     return [
       "=== what it fetched ===",
-      summariseCalls(calls),
+      summariseCalls(calls, target.summary),
       "",
       "=== what the document carries ===",
       describeEmbedded(embedded),
     ].join("\n");
   } finally {
-    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+    await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   }
+}
+
+/**
+ * Which site a tab is on, and so which hook to install and how to report it.
+ * One recorder serves both: it wraps fetch and XHR and knows nothing of the
+ * host, and the report is where the host's own backend is told from analytics.
+ */
+interface HookTarget {
+  id: string;
+  matches: string[];
+  summary: SummaryOptions;
+}
+
+async function hookTarget(tabId: number): Promise<HookTarget> {
+  const tab = await chrome.tabs.get(tabId);
+  if ((tab.url ?? "").includes("e-zpassny.com")) {
+    return {
+      id: "turonomics-ezpass-hook",
+      matches: ["https://*.e-zpassny.com/*"],
+      summary: EZPASS_SUMMARY,
+    };
+  }
+  return { id: HOOK_ID, matches: ["https://turo.com/*"], summary: {} };
 }
 
 const HOOK_ID = "turonomics-turo-hook";
@@ -1249,6 +1283,8 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
     let advanced = false;
     for (const index of ranked) {
       if (!(await inPage(tabId, clickControlInPage, [index]))) continue;
+      const clicked = descriptor.nextControls[index];
+      note(`  clicked next candidate ${index}: text "${clicked?.text.slice(0, 30)}" aria "${clicked?.ariaLabel ?? ""}" class "${(clicked?.className ?? "").slice(0, 40)}"`);
       const after = await waitForChange(tabId, before, descriptor);
       if (tableSignature(activityOf(after)) !== before) {
         descriptor = after;
@@ -1355,6 +1391,8 @@ async function sendStatementTraced(tabId: number): Promise<SendTollsResult> {
       pagesRead: sent.pagesRead,
       pagingStopped: sent.pagingStopped,
       problem: sent.problem,
+      outside: sent.outside,
+      span: sent.span,
     };
     windows.push(report);
     firstReport ??= sent.report;
@@ -1412,6 +1450,11 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
     toText,
   ]);
   note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${filled ? "ok" : "FAILED"}`);
+  // What the fields hold once the page has had a moment to react: a mask or a
+  // date picker can rewrite or reject what was typed.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
+  note(`  fields now read "${fromNow}" and "${toNow}"${fromNow === fromText && toNow === toText ? "" : "  <-- NOT WHAT WAS TYPED"}`);
   const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
   note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
   if (!clicked) {
@@ -1426,6 +1469,16 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   );
   const page = await pageThrough(tabId, after);
   const table = page.merged;
+  const coverage = dateCoverage(table ?? null, range);
+  note(
+    `  rows dated ${coverage.first ?? "?"} to ${coverage.last ?? "?"}` +
+      `, ${coverage.outside} outside ${range.from}..${range.to}, ${coverage.undated} undated of ${coverage.total}` +
+      (coverage.outside ? "  <-- THE DATE FILTER DID NOT TAKE" : "")
+  );
+  const seen = {
+    outside: coverage.outside,
+    span: `${coverage.first ?? "?"} to ${coverage.last ?? "?"}`,
+  };
   if (!table || !usableRows(table).length) {
     // Three months with no crossings is ordinary, not an error.
     return {
@@ -1435,9 +1488,10 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
       pagesRead: page.pagesRead,
       pagingStopped: page.pagingStopped,
       report: describeShape(page),
+      ...seen,
     };
   }
-  return sendTolls(page);
+  return { ...(await sendTolls(page)), ...seen };
 }
 
 /** Re-read until the table changes, or long enough to be sure it will not. */

@@ -20,7 +20,9 @@ import {
   chooseStatement,
   classifyHeaders,
   cleanCell,
+  dateCoverage,
   describeForm,
+  parseSiteDate,
   describeShape,
   formatForField,
   MAX_PAGES,
@@ -604,4 +606,52 @@ test("the form report leaves out the page's other buttons", () => {
   // A nav bar can carry an account holder's name; the report is for pasting.
   const lines = describeForm([], [{ text: "Welcome, Jane Doe" }, { text: "Search" }]).join("\n");
   assert.ok(!lines.includes("Jane Doe"));
+});
+
+// ---------------------------------------------------------------------------
+// What a real run showed
+// ---------------------------------------------------------------------------
+test("a two-digit-year field gets a two-digit year", () => {
+  // E-ZPass's fields are MM/DD/YY. Typing 07/08/2026 into one was the first
+  // version's mistake, and a mask can read it as 2020.
+  const field = { index: 0, type: "text", hint: "startDate Start Date MM/DD/YY", placeholder: "MM/DD/YY" };
+  assert.equal(formatForField("2026-07-08", field), "07/08/26");
+  assert.equal(formatForField("2025-12-31", field), "12/31/25");
+});
+
+test("a four-digit-year field still gets four digits", () => {
+  const field = { index: 0, type: "text", hint: "Date", placeholder: "MM/DD/YYYY" };
+  assert.equal(formatForField("2026-07-08", field), "07/08/2026");
+});
+
+test("site dates are read with either year width", () => {
+  assert.equal(parseSiteDate("7/8/26"), "2026-07-08");
+  assert.equal(parseSiteDate("07/08/2026"), "2026-07-08");
+  assert.equal(parseSiteDate("PAYMENT"), null);
+});
+
+test("rows inside the window are not flagged, rows outside are", () => {
+  const table: ScrapedTable = {
+    headers: ["Tag/Plate #", "Date", "Amount"],
+    rows: [
+      ["a", "7/9/26", "$-1.00"],
+      ["b", "10/7/26", "$-1.00"],
+      ["c", "6/30/26", "$-1.00"],
+      ["d", "no date", "$-1.00"],
+    ],
+  };
+  const c = dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" });
+  assert.equal(c.outside, 1);
+  assert.equal(c.undated, 1);
+  assert.equal(c.first, "2026-06-30");
+  assert.equal(c.last, "2026-10-07");
+});
+
+test("a search that ignored its dates shows up as rows outside the window", () => {
+  // The failure that reads as success: every row imports as already known.
+  const table: ScrapedTable = {
+    headers: ["Tag/Plate #", "Date", "Amount"],
+    rows: [["a", "10/1/25", "$-1.00"], ["b", "11/1/25", "$-1.00"]],
+  };
+  assert.equal(dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" }).outside, 2);
 });

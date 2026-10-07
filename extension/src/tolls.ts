@@ -507,12 +507,68 @@ export function pickDateFields(
   return null;
 }
 
-/** The date as the field wants it: ISO for a date input or a yyyy placeholder. */
+/**
+ * The date as the field wants it.
+ *
+ * ISO for a date input or a yyyy-first placeholder; a two-digit year when the
+ * placeholder ends in "YY" rather than "YYYY". E-ZPass's fields say MM/DD/YY,
+ * and typing a four-digit year into a two-digit mask is read as year 20xx at
+ * best and silently truncated at worst — the first version did exactly that.
+ */
 export function formatForField(iso: string, field: InputDescriptor): string {
+  const shown = `${field.placeholder ?? ""} ${field.hint}`;
   if (field.type === "date" || /y{4}\W*m{2}/i.test(field.placeholder ?? "")) return iso;
   const { y, m, d } = parseIso(iso);
   const pad = (n: number): string => String(n).padStart(2, "0");
-  return `${pad(m)}/${pad(d)}/${y}`;
+  const twoDigitYear = /d{2}\W*y{2}(?!y)/i.test(shown);
+  return `${pad(m)}/${pad(d)}/${twoDigitYear ? pad(y % 100) : y}`;
+}
+
+/** "7/8/26" or "07/08/2026" as "2026-07-08"; null for anything else. */
+export function parseSiteDate(text: string): string | null {
+  const match = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\s*$/.exec(text);
+  if (!match) return null;
+  const year = match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  return `${year}-${pad(Number(match[1]))}-${pad(Number(match[2]))}`;
+}
+
+export interface DateCoverage {
+  /** Earliest and latest row date, ISO; null when no row had a readable date. */
+  first: string | null;
+  last: string | null;
+  /** Rows dated outside the range asked for. */
+  outside: number;
+  /** Rows with no readable date at all. */
+  undated: number;
+  total: number;
+}
+
+/**
+ * Where the rows actually fall, against the range that was asked for.
+ *
+ * This is the check that the date filter did what it was told. A search that
+ * ignores its dates still returns a table, and every row in it still imports
+ * as "already known" — so without looking at the dates, a read that covered one
+ * range four times is indistinguishable from one that covered four.
+ */
+export function dateCoverage(table: ScrapedTable | null, range: DateRange): DateCoverage {
+  const result: DateCoverage = { first: null, last: null, outside: 0, undated: 0, total: 0 };
+  if (!table) return result;
+  let column = table.headers.findIndex((h) => /^\s*date\s*$/i.test(h));
+  if (column < 0) column = table.headers.findIndex((h) => /date/i.test(h) && !/time/i.test(h));
+  for (const row of table.rows) {
+    result.total++;
+    const iso = column >= 0 ? parseSiteDate(cleanCell(row[column] ?? "")) : null;
+    if (!iso) {
+      result.undated++;
+      continue;
+    }
+    if (result.first === null || iso < result.first) result.first = iso;
+    if (result.last === null || iso > result.last) result.last = iso;
+    if (iso < range.from || iso > range.to) result.outside++;
+  }
+  return result;
 }
 
 const SUBMIT_TEXT = /^(?:search|submit|go|view|apply|filter|show|update|display|get|find|refresh)\b/i;
@@ -582,6 +638,10 @@ export interface WindowReport {
   pagingStopped?: string;
   /** Set when the API refused this window's CSV, verbatim. */
   problem?: string;
+  /** Rows dated outside the window: the date filter did not take. */
+  outside?: number;
+  /** "first to last" date actually seen. */
+  span?: string;
 }
 
 /** Counts added across windows; the tag list is a union. */

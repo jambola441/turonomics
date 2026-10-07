@@ -29,6 +29,7 @@ import {
   jsonShape,
   stringShape,
   summariseCalls,
+  EZPASS_SUMMARY,
   TRIP_KEYS,
   urlShape,
 } from "./turo.js";
@@ -685,4 +686,70 @@ test("a page of repeats mid-list does not count toward the end", () => {
   const served = walk((p) => shifted[p] ?? [], null);
   const seen = new Set(served.flatMap((p) => shifted[p] ?? []));
   assert.deepEqual([...seen].sort(), ["1", "2", "3", "4", "5"]);
+});
+
+// ---------------------------------------------------------------------------
+// The same probe on E-ZPass
+// ---------------------------------------------------------------------------
+// The question there is how a date range is asked for, so the report has to
+// show the *format* of a date and nothing of what it was.
+test("a slash date is shown by its width, not its value", () => {
+  assert.equal(stringShape("07/08/26"), "us-date(##/##/##)");
+  assert.equal(stringShape("07/08/2026"), "us-date(##/##/####)");
+});
+
+test("query values are shaped only when asked for", () => {
+  const url = "https://www.e-zpassny.com/api/activity?startDate=07/08/26&page=2&tag=00414500433";
+  assert.equal(
+    urlShape(url, "https://www.e-zpassny.com/"),
+    "https://www.e-zpassny.com/api/activity?page&startDate&tag"
+  );
+  const shaped = urlShape(url, "https://www.e-zpassny.com/", undefined, true);
+  assert.match(shaped, /startDate=us-date\(##\/##\/##\)/);
+  assert.ok(!shaped.includes("00414500433"), "a tag number is never printed");
+  assert.ok(!shaped.includes("07/08"), "nor a date");
+});
+
+test("the E-ZPass report finds its own backend and ignores analytics", () => {
+  const report = summariseCalls(
+    [
+      {
+        method: "GET",
+        url: "https://www.e-zpassny.com/api/transactions?from=07/08/26&to=10/07/26",
+        status: 200,
+        body: { rows: [{ amount: "$-2.86", plate: "LZA7293" }] },
+      },
+      { method: "GET", url: "https://www.googletagmanager.com/gtm.js", status: 200, body: null },
+      { method: "GET", url: "https://www.e-zpassny.com/static/app.js", status: 200, body: null },
+    ],
+    EZPASS_SUMMARY
+  );
+  assert.match(report, /1 data endpoint/);
+  assert.match(report, /from=us-date\(##\/##\/##\)/);
+  assert.ok(!report.includes("LZA7293"), "no plate");
+  assert.ok(!report.includes("2.86"), "no amount");
+});
+
+test("a Turo-only report still rejects an E-ZPass call", () => {
+  // Default options must be unchanged: the Turo probe is not for E-ZPass hosts.
+  const report = summariseCalls([
+    { method: "GET", url: "https://www.e-zpassny.com/api/transactions", status: 200, body: {} },
+  ]);
+  assert.match(report, /no data calls seen/);
+});
+
+test("the E-ZPass report shows the shape of a POST's date fields", () => {
+  const report = summariseCalls(
+    [
+      {
+        method: "POST",
+        url: "https://www.e-zpassny.com/api/transactions/search",
+        status: 200,
+        request: { startDate: "07/08/26", endDate: "10/07/26", page: 1 },
+        body: { total: 96 },
+      },
+    ],
+    EZPASS_SUMMARY
+  );
+  assert.match(report, /sent: \{startDate: us-date\(##\/##\/##\), endDate: us-date\(##\/##\/##\), page: int\}/);
 });

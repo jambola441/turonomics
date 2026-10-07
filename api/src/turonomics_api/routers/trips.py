@@ -528,9 +528,14 @@ class MapToll(BaseModel):
     amount_cents: int
     lat: float | None
     lon: float | None
-    # "route": on the car's track at that moment. "plaza": at the plaza's
-    # approximate position. None: not placed — listed, not guessed.
+    # "plaza": at the researched plaza. "route": on the car's track at that
+    # moment. "zone": the middle of a charging zone. None: not placed.
     how: str | None
+    # The plaza's name and where its position comes from, where it is known.
+    name: str | None = None
+    source: str | None = None
+    # How far the plaza sat from the car's track, when they disagreed.
+    off_route_km: float | None = None
 
 
 class MapDrive(BaseModel):
@@ -592,7 +597,7 @@ def trip_map(
     ).all()
     placed_tolls = []
     for toll in tolls:
-        spot = place(toll.occurred_at, toll.plaza, route)
+        spot = place(toll.occurred_at, toll.plaza, route, toll.agency)
         placed_tolls.append(
             MapToll(
                 occurred_at=toll.occurred_at,
@@ -601,6 +606,9 @@ def trip_map(
                 lat=spot.lat if spot else None,
                 lon=spot.lon if spot else None,
                 how=spot.how if spot else None,
+                name=spot.name if spot else None,
+                source=spot.source if spot else None,
+                off_route_km=spot.off_route_km if spot else None,
             )
         )
     return TripMap(

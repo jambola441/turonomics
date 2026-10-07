@@ -86,12 +86,35 @@ def _route(*drives: Drive) -> Route:
 DRIVE = Drive(starts_at=T0, ends_at=T0 + td(minutes=40), points=LINE)
 
 
-def test_a_crossing_is_placed_on_the_drive_under_way_at_that_moment() -> None:
-    late = place(T0 + td(minutes=38), "VNB", _route(DRIVE))
+def test_a_crossing_at_an_unknown_plaza_goes_on_the_drive_under_way() -> None:
+    late = place(T0 + td(minutes=38), "XYZ", _route(DRIVE))
     assert late is not None and late.how == "route"
-    # Near the Verrazzano end of the drive, not at the plaza's listed spot
-    # merely because the code is known: the track wins.
-    assert abs(late.lat - LINE[-1][0]) < 0.01
+    assert abs(late.lat - LINE[-1][0]) < 0.01, "near the end of the drive, as timed"
+
+
+def test_a_known_plaza_beats_the_estimate_when_the_two_agree() -> None:
+    """The Verrazzano gantry is a kilometre or two from where the even-speed
+    estimate puts the car; the gantry is where the charge was."""
+    placed = place(T0 + td(minutes=38), "VNB", _route(DRIVE))
+    assert placed is not None and placed.how == "plaza"
+    assert (placed.lat, placed.lon) == (40.6022, -74.0628)
+    assert placed.name and "Verrazzano" in placed.name
+    assert placed.source and placed.source.startswith("https://")
+
+
+def test_a_plaza_far_from_where_the_car_was_is_flagged_and_the_track_used() -> None:
+    """A code that means something else on another road: the tracker had the
+    car in Brooklyn, and the plaza says the Thruway at Albany."""
+    placed = place(T0 + td(minutes=38), "24", _route(DRIVE))
+    assert placed is not None and placed.how == "route"
+    assert placed.off_route_km is not None and placed.off_route_km > 100
+
+
+def test_a_zone_charge_goes_on_the_track_or_else_the_zone() -> None:
+    on_track = place(T0 + td(minutes=20), "CRZ", _route(DRIVE))
+    assert on_track is not None and on_track.how == "route"
+    off_track = place(T0, "CRZ", Route())
+    assert off_track is not None and off_track.how == "zone"
 
 
 def test_a_crossing_slightly_outside_a_drive_is_still_that_drive() -> None:
@@ -104,7 +127,7 @@ def test_a_crossing_slightly_outside_a_drive_is_still_that_drive() -> None:
 def test_without_a_route_a_known_plaza_is_placed_at_the_plaza() -> None:
     placed = place(T0, "rkb", Route())
     assert placed is not None and placed.how == "plaza"
-    assert (round(placed.lat, 2), round(placed.lon, 2)) == (40.78, -73.93)
+    assert (round(placed.lat, 2), round(placed.lon, 2)) == (40.80, -73.92), "the gantry"
 
 
 def test_an_unknown_plaza_with_no_route_is_not_guessed() -> None:

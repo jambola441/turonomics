@@ -18,6 +18,9 @@ import {
   hubOnPage,
   hubsToRead,
   invoiceOnPage,
+  listPath,
+  MAX_LIST_PAGES,
+  nextPage,
   invoicePath,
   invoicesToRead,
   describeEmbedded,
@@ -607,4 +610,79 @@ test("a pull that read hubs says how many invoices they listed", () => {
     invoices: { ...base, itemised: [], seen: 0, asked: 0, hubs: 12, listed: 20 },
   });
   assert.match(quiet, /12 invoice hub\(s\) read, nothing new on them/);
+});
+
+// ---------------------------------------------------------------------------
+// Paging through Turo's reservation lists
+// ---------------------------------------------------------------------------
+
+/** Walk a list the way the pull does, against pages served by `serve`. */
+function walk(serve: (page: number) => string[], numPages: number | null): number[] {
+  const read: number[] = [];
+  const seen = new Set<string>();
+  let page: number | null = 0;
+  let quiet = 0;
+  while (page !== null) {
+    read.push(page);
+    const fresh = serve(page).filter((id) => !seen.has(id));
+    fresh.forEach((id) => seen.add(id));
+    const step = nextPage(page, fresh.length, quiet, numPages);
+    page = step.next;
+    quiet = step.quiet;
+  }
+  return read;
+}
+
+const PAGES = [["1", "2"], ["3", "4"], ["5"]];
+
+test("a list counted from zero is read to its end", () => {
+  const served = walk((p) => PAGES[p] ?? [], null);
+  assert.deepEqual(served, [0, 1, 2, 3, 4], "two empty pages past the end, then stop");
+});
+
+test("a list counted from one is read in full, though page 0 repeats page 1", () => {
+  // The case one quiet page would get wrong: page 0 and page 1 are the same,
+  // and stopping at the first page with nothing new would read one page.
+  const served = walk((p) => PAGES[Math.max(p, 1) - 1] ?? [], null);
+  const seen = new Set(served.flatMap((p) => PAGES[Math.max(p, 1) - 1] ?? []));
+  assert.equal(seen.size, 5);
+});
+
+test("Turo's page count stops it without reading past the end", () => {
+  assert.deepEqual(walk((p) => PAGES[p] ?? [], 3), [0, 1, 2, 3]);
+});
+
+test("a list that never ends is cut off", () => {
+  let n = 0;
+  const served = walk(() => [String(n++)], null);
+  assert.equal(served.length, MAX_LIST_PAGES);
+});
+
+test("a list path is only ever built from whole numbers", () => {
+  const template = "/api/v2/feeds/trip-history?driverRoles=HOST&itemsPerPage={size}&page={page}";
+  assert.equal(listPath(template, 2, 50),
+    "/api/v2/feeds/trip-history?driverRoles=HOST&itemsPerPage=50&page=2");
+  assert.equal(listPath("/api/v2/feeds/upcoming-trips?appMode=HOST", 0, 50),
+    "/api/v2/feeds/upcoming-trips?appMode=HOST");
+  assert.throws(() => listPath(template, -1, 50));
+  assert.throws(() => listPath(template, 1.5, 50));
+});
+
+test("a pull says how many reservations Turo has, first", () => {
+  const out = describePull({
+    ...EMPTY, asked: 70, stored: 70,
+    discovered: { found: 72, created: 9, unmatched: ["123: ABC1234"], pages: 4, failed: [] },
+  });
+  assert.ok(out.startsWith("72 reservation(s) on Turo · 9 new trip(s) added"), out);
+  assert.match(out, /1 on a car not in the fleet/);
+});
+
+test("a page of repeats mid-list does not count toward the end", () => {
+  // A booking landing mid-pull shifts every trip down one, so a page can
+  // repeat ones already read. Each repeat must start the count afresh, or two
+  // of them anywhere in a long history would end the read early.
+  const shifted = [["1", "2"], ["1", "2"], ["2", "3"], ["3"], ["4", "5"]];
+  const served = walk((p) => shifted[p] ?? [], null);
+  const seen = new Set(served.flatMap((p) => shifted[p] ?? []));
+  assert.deepEqual([...seen].sort(), ["1", "2", "3", "4", "5"]);
 });

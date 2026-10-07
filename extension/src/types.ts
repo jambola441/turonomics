@@ -40,6 +40,21 @@ export interface TuroWanted {
   invoices?: [string, string][];
   invoice_path?: string;
   hub_path?: string;
+  /** Where Turo lists the account's reservations; `{page}` marks a paged one. */
+  reservation_lists?: string[];
+}
+
+/** What reading Turo's reservation lists found. */
+export interface TuroDiscovery {
+  /** Reservations seen across every list and page, counted once. */
+  found: number;
+  /** Ones this app did not have, and added. */
+  created: number;
+  /** On a car the app could not place, with the plate. */
+  unmatched: string[];
+  pages: number;
+  /** Lists Turo would not return at all, by path. */
+  failed: string[];
 }
 
 /** What the API made of the invoice pages it was sent. */
@@ -73,6 +88,7 @@ export interface TuroPullResult {
   grace_periods: string[];
   /** Reservations whose invoice hub Turo offers, so worth reading. */
   invoice_hubs?: string[];
+  discovered?: TuroDiscovery;
   /** How many the API asked for, and how many Turo would not hand over. */
   asked: number;
   failed: number;

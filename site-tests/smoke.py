@@ -530,6 +530,59 @@ def main() -> int:
 
             check("no uncaught errors on the invoices page", not errors)
 
+            # The trips page: every rental, Turo's and typed-in, and everything
+            # linked to one.
+            page.goto(f"{SITE}/trips/?api={API}", wait_until="domcontentloaded")
+            page.wait_for_timeout(800)
+            trips_text = page.locator("#list").inner_text().lower()
+            # Counted off the page, not the fixture: the stub is another
+            # process, and the tolls page above removed one typed-in rental.
+            typed_in = page.locator(".badge.off").count()
+            check("the trips page lists Turo and off-platform rentals",
+                  typed_in >= 1 and page.locator(".trip").count() == typed_in + 1)
+            check("a Turo rental shows its ledger state beside it",
+                  "partly billed" in trips_text and "$11.00" in trips_text)
+            page.locator("#seg button[data-f=off]").click()
+            check("the off-platform filter shows only typed-in rentals",
+                  page.locator(".trip").count() == typed_in
+                  and page.locator(".badge.off").count() == typed_in)
+            page.locator("#seg button[data-f=all]").click()
+            page.fill("#q", "58626257")
+            check("search finds a rental by its reservation",
+                  page.locator(".trip").count() == 1)
+            page.fill("#q", "")
+            page.locator("#trip-11111111-1111-1111-1111-111111111111 .trip-head").click()
+            page.wait_for_timeout(700)
+            view = page.locator("#trip-11111111-1111-1111-1111-111111111111 .view").inner_text()
+            check("opening a rental shows Turo's side",
+                  "$212.50" in view and "156 mi" in view)
+            check("and its invoices with Turo's status",
+                  "Tickets $50.00" in view and "Turo: ACCEPTED" in view)
+            check("and its crossings with what became of each",
+                  "BWB" in view and "asked" in view and "to bill" in view)
+            check("and a link to the reservation on Turo",
+                  page.locator(".view a", has_text="Reservation on Turo").count() == 1)
+            check("and everything Turo said, folded away",
+                  page.locator(".view details.raw").count() == 1)
+            check("a rental to bill can be filed from its view",
+                  page.locator(".view .btn.go").count() == 1
+                  and "$11.00" in page.locator(".view .btn.go").inner_text())
+            check("the trip view does not push the page sideways",
+                  page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+
+            # Linked from the invoices ledger by its id, so it opens itself.
+            page.goto(f"{SITE}/trips/?api={API}#eeee0000-0000-0000-0000-00000000000f",
+                      wait_until="domcontentloaded")
+            page.wait_for_timeout(900)
+            typed = page.locator("#trip-eeee0000-0000-0000-0000-00000000000f .view")
+            check("a trip opens from a link to it",
+                  typed.count() == 1 and "outside Turo" in typed.inner_text())
+            check("a typed-in rental can be removed from its view",
+                  page.locator(".view .btn.drop").count() == 1)
+            check("an off-platform rental can be added here",
+                  page.locator("#a-save").count() == 1 and page.locator("#a-car option").count() > 0)
+            check("no uncaught errors on the trips page", not errors)
+
             if errors:
                 print("\nconsole/page errors:")
                 for message in errors[:10]:

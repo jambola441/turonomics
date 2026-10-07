@@ -1,0 +1,533 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0e171e">
+<meta name="turonomics-api" content="https://turonomics.onrender.com">
+<title>Turonomics — Trips</title>
+<link rel="apple-touch-icon" href="../fleet/icons/icon-180.png">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../uniform.css">
+<style>
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:var(--u-font-sans);
+    background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased;
+    padding-top:env(safe-area-inset-top,0px);
+    padding-bottom:calc(32px + env(safe-area-inset-bottom,0px));
+  }
+  main{max-width:820px;margin:0 auto;padding:0 16px}
+  header{padding:16px 0 14px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
+  h2{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+     color:var(--dim);margin:18px 0 8px}
+  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .nav{display:flex;gap:7px}
+  .nav a{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+       color:var(--muted);text-decoration:none;border:1px solid var(--border);
+       border-radius:var(--u-radius-md);padding:7px 10px}
+  .nav a:hover{border-color:var(--border2);color:var(--text)}
+  .err{padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);
+       border:1px solid var(--u-err-line);color:var(--red);font-size:13px;line-height:1.45;
+       margin-bottom:14px}
+
+  .tools{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  .tools input{flex:1;min-width:160px}
+  input,select{font:inherit;font-size:13px;color:var(--text);background:var(--surface2);
+       border:1px solid var(--border);border-radius:var(--u-radius-md);padding:8px 10px;
+       min-width:0}
+  .seg{display:flex;border:1px solid var(--border);border-radius:var(--u-radius-md);overflow:hidden}
+  .seg button{font:inherit;font-size:12px;background:none;border:0;color:var(--muted);
+       padding:8px 11px;cursor:pointer}
+  .seg button.on{background:var(--surface2);color:var(--text);font-weight:600}
+  .btn{font:inherit;font-size:12.5px;font-weight:600;color:var(--text);background:var(--surface2);
+       border:1px solid var(--border);border-radius:var(--u-radius-md);padding:7px 12px;
+       cursor:pointer}
+  .btn:hover{border-color:var(--muted)}
+  .btn.go{color:var(--green);border-color:var(--u-ok-line)}
+  .btn.drop{color:var(--red)}
+
+  details.add{margin-bottom:14px;border:1px solid var(--border);border-radius:var(--u-radius-md);
+       padding:10px 12px}
+  details.add summary{cursor:pointer;font-size:13px;color:var(--muted)}
+  .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+  .form label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--dim)}
+  .form .wide{grid-column:1 / -1}
+  .result{font-size:12.5px;color:var(--muted);margin-top:8px}
+
+  .trip{border:1px solid var(--border);border-radius:var(--u-radius-lg);margin-bottom:8px;
+        background:var(--surface)}
+  .trip-head{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;cursor:pointer}
+  .trip-head:hover{background:var(--surface2)}
+  .trip-body{flex:1;min-width:0}
+  .who{font-size:14.5px;font-weight:600}
+  .meta{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
+  .badge{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;
+         border:1px solid var(--border);border-radius:999px;padding:2px 7px;margin-left:6px;
+         color:var(--muted);vertical-align:2px}
+  .badge.off{color:var(--blue);border-color:var(--blue)}
+  .side{text-align:right;flex-shrink:0}
+  .state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--dim)}
+  .state.tobill{color:var(--amber)}
+  .amt{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:2px}
+
+  .view{border-top:1px solid var(--border);padding:4px 12px 14px}
+  .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+  .links a{font-size:12.5px;color:var(--blue)}
+  dl.facts{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:4px 12px;font-size:12.5px}
+  dl.facts dt{color:var(--dim)}
+  dl.facts dd{font-family:var(--mono);font-size:11.5px;word-break:break-word}
+  table{width:100%;border-collapse:collapse;font-size:12px}
+  th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
+     text-transform:uppercase;color:var(--dim);padding:5px 6px;border-bottom:1px solid var(--border)}
+  td{padding:6px;border-bottom:1px solid var(--line);vertical-align:top}
+  .num{text-align:right;font-family:var(--mono);white-space:nowrap}
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+  .inv{border:1px solid var(--line);border-radius:var(--u-radius-md);padding:8px 10px;
+       margin-bottom:6px;font-size:12.5px}
+  .inv .top{display:flex;justify-content:space-between;gap:8px}
+  .inv .sub{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
+  .note{font-size:12px;color:var(--amber);margin-top:6px;line-height:1.45}
+  .quiet{font-size:12.5px;color:var(--dim)}
+  pre{font-family:var(--mono);font-size:10.5px;line-height:1.45;white-space:pre-wrap;
+      word-break:break-word;max-height:420px;overflow:auto;background:var(--surface2);
+      border-radius:var(--u-radius-md);padding:10px;margin-top:8px}
+  details.raw summary{cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:14px}
+  .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="row">
+      <h1>Trips<span class="u-dot">.</span></h1>
+      <div class="nav"><a href="../invoices/">Invoices</a><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
+    </div>
+    <div class="stamp" id="stamp">loading…</div>
+  </header>
+
+  <div class="err" id="err" hidden></div>
+
+  <!-- Off-platform rentals are typed in here: nothing else knows about them,
+       and without one their crossings belong to nobody. -->
+  <details class="add" id="addWrap">
+    <summary>Add an off-platform rental</summary>
+    <div class="form">
+      <label>Car<select id="a-car"></select></label>
+      <label>Guest<input id="a-guest" placeholder="name"></label>
+      <label>From<input id="a-from" type="datetime-local"></label>
+      <label>To<input id="a-to" type="datetime-local"></label>
+      <label>Earned ($)<input id="a-earned" inputmode="decimal" placeholder="optional"></label>
+      <label>&nbsp;<button class="btn go" id="a-save" type="button">Add rental</button></label>
+    </div>
+    <div class="result" id="a-result" hidden></div>
+  </details>
+
+  <div class="tools">
+    <input id="q" type="search" placeholder="Search guest, car or reservation">
+    <div class="seg" id="seg">
+      <button type="button" data-f="all" class="on">All</button>
+      <button type="button" data-f="turo">Turo</button>
+      <button type="button" data-f="off">Off-platform</button>
+    </div>
+  </div>
+
+  <div id="list"></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var API = (function () {
+    var override = new URLSearchParams(location.search).get("api");
+    if (override) return override.replace(/\/$/, "");
+    var meta = document.querySelector('meta[name="turonomics-api"]');
+    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
+  })();
+
+  // Shared with the invoices and tolls pages, so the token is asked for once.
+  var TOKEN_KEY = "turonomics.tolls.token";
+  var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false };
+
+  function el(id) { return document.getElementById(id); }
+  function add(parent, tag, cls, text) {
+    var node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    parent.appendChild(node);
+    return node;
+  }
+  function money(cents) {
+    var v = (cents || 0) / 100;
+    return (v < 0 ? "-$" : "$") + Math.abs(v).toLocaleString("en-US",
+      { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+  function when(iso, withTime) {
+    var d = new Date(iso);
+    if (isNaN(d)) return String(iso || "");
+    var opts = { timeZone: "America/New_York", month: "short", day: "numeric" };
+    if (withTime) { opts.hour = "numeric"; opts.minute = "2-digit"; }
+    var year = d.getFullYear() !== new Date().getFullYear();
+    if (year) opts.year = "numeric";
+    return d.toLocaleString("en-US", opts);
+  }
+  function fail(message) { var box = el("err"); box.textContent = message; box.hidden = false; }
+
+  function token() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
+  function rememberToken(v) {
+    try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); }
+    catch (e) { /* private window */ }
+  }
+  function authHeaders() { var v = token(); return v ? { Authorization: "Bearer " + v } : {}; }
+  function askToken() {
+    var entered = window.prompt("This needs the tolls token (TOLLS_TOKEN).");
+    if (!entered) return false;
+    rememberToken(entered.trim());
+    return true;
+  }
+
+  // A request that may need the token: tried as is, and once more after
+  // asking if the API refuses it.
+  function authed(path, init) {
+    init = init || {};
+    var go = function () {
+      return fetch(API + path, Object.assign({}, init, {
+        headers: Object.assign({}, init.headers || {}, authHeaders())
+      }));
+    };
+    return go().then(function (r) {
+      if (r.status !== 401) return r;
+      rememberToken("");
+      if (!askToken()) throw new Error("the token is needed for this");
+      return go();
+    });
+  }
+  function json(r) {
+    return r.json().catch(function () { return {}; }).then(function (b) {
+      if (!r.ok) throw new Error(b.detail || ("the API said " + r.status));
+      return b;
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // The list
+  // -------------------------------------------------------------------------
+
+  function off(trip) { return trip.source === "manual"; }
+
+  function matches(trip) {
+    if (state.filter === "turo" && off(trip)) return false;
+    if (state.filter === "off" && !off(trip)) return false;
+    if (!state.q) return true;
+    var hay = [trip.guest_name, trip.vehicle_nickname, trip.turo_trip_id].join(" ").toLowerCase();
+    return hay.indexOf(state.q) !== -1;
+  }
+
+  function render() {
+    var list = el("list");
+    list.textContent = "";
+    var shown = state.trips.filter(matches);
+    if (!shown.length) {
+      add(list, "div", "empty", state.trips.length ? "Nothing matches." : "No trips yet.");
+      return;
+    }
+    shown.forEach(function (trip) { renderTrip(trip, list); });
+  }
+
+  function renderTrip(trip, into) {
+    var card = add(into, "div", "trip");
+    card.id = "trip-" + trip.id;
+    var head = add(card, "div", "trip-head");
+    var body = add(head, "div", "trip-body");
+    var who = add(body, "div", "who",
+        (trip.guest_name || "No name") + " — " + (trip.vehicle_nickname || "?"));
+    add(who, "span", "badge" + (off(trip) ? " off" : ""), off(trip) ? "off-platform" : "Turo");
+    add(body, "div", "meta",
+        when(trip.starts_at) + " → " + when(trip.ends_at) +
+        (trip.turo_trip_id ? " · " + trip.turo_trip_id : "") +
+        " · " + trip.toll_count + (trip.toll_count === 1 ? " crossing" : " crossings"));
+    var side = add(head, "div", "side");
+    var row = state.ledger[trip.id];
+    if (row) {
+      var tobill = row.state === "to bill" || row.state === "partly billed" ||
+        row.state.indexOf("check ") === 0 || row.state === "no statement yet";
+      add(side, "div", "state" + (tobill ? " tobill" : ""), row.state);
+      if (row.unfiled_cents) add(side, "div", "amt", money(row.unfiled_cents));
+    } else if (trip.earnings_cents) {
+      add(side, "div", "amt", money(trip.earnings_cents));
+    }
+    head.addEventListener("click", function () { toggle(trip.id); });
+    if (state.open === trip.id) renderView(trip, card);
+  }
+
+  function toggle(id) {
+    state.open = state.open === id ? null : id;
+    try { history.replaceState(null, "", state.open ? "#" + state.open : location.pathname + location.search); }
+    catch (e) { /* file:// */ }
+    if (state.open && !state.views[id]) loadView(id); else render();
+  }
+
+  // -------------------------------------------------------------------------
+  // One trip
+  // -------------------------------------------------------------------------
+
+  function loadView(id) {
+    state.views[id] = { loading: true };
+    render();
+    authed("/api/trips/" + id + "/view")
+      .then(json)
+      .then(function (view) { state.views[id] = view; })
+      .catch(function (e) { state.views[id] = { error: e.message }; })
+      .then(function () {
+        render();
+        var card = el("trip-" + id);
+        if (card && card.scrollIntoView) card.scrollIntoView({ block: "start" });
+      });
+  }
+
+  function renderView(trip, card) {
+    var view = state.views[trip.id];
+    var box = add(card, "div", "view");
+    if (!view || view.loading) { add(box, "div", "quiet", "Loading…"); return; }
+    if (view.error) { add(box, "div", "note", "Could not load it: " + view.error); return; }
+
+    var links = add(box, "div", "links");
+    if (view.reservation_url) {
+      var a = add(links, "a", null, "Reservation on Turo");
+      a.href = view.reservation_url; a.target = "_blank"; a.rel = "noopener";
+    }
+    if (view.invoice_hub_url) {
+      var h = add(links, "a", null, "Invoices on Turo");
+      h.href = view.invoice_hub_url; h.target = "_blank"; h.rel = "noopener";
+    }
+
+    // Money first: it is what this page is mostly opened to check.
+    var L = view.ledger;
+    add(box, "h2", null, "Money");
+    if (L && L.state) {
+      var dl = add(box, "dl", "facts");
+      [["State", L.state],
+       ["Tolls", money(L.tolls_cents)],
+       ["To bill", money(L.unfiled_cents)],
+       ["Asked", money(L.filed_cents)],
+       ["Settled", money(L.recovered_cents)],
+       ["Turo charged", money(L.charged_cents)],
+       ["Turo: tolls", money(L.turo_tolls_cents)],
+       ["Turo: tickets", money(L.turo_tickets_cents)],
+       ["Turo: distance", money(L.turo_distance_cents)],
+       ["Turo: other", money(L.turo_other_cents) +
+         (L.turo_unknown_cents ? " · +" + money(L.turo_unknown_cents) + " not broken down" : "")],
+       ["Days left to file", L.days_left == null ? "—" : L.days_left < 0 ? "closed" : String(L.days_left)]
+      ].forEach(function (pair) { add(dl, "dt", null, pair[0]); add(dl, "dd", null, pair[1]); });
+      if (L.note) add(box, "div", "note", L.note);
+    } else {
+      add(box, "div", "quiet", trip.earnings_cents
+        ? "Earned " + money(trip.earnings_cents) + "." : "Nothing on the ledger.");
+    }
+    if (view.fileable && L && L.unfiled_cents) {
+      var file = add(box, "button", "btn go", "File " + money(L.unfiled_cents) + " on Turo");
+      file.type = "button";
+      file.style.marginTop = "10px";
+      file.addEventListener("click", function () { queueFiling(trip, L); });
+    } else if (view.held_because && L && L.unfiled_cents) {
+      add(box, "div", "note", "Not offered for filing: " + view.held_because);
+    }
+
+    add(box, "h2", null, "Turo");
+    if (view.turo_facts && view.turo_facts.length) {
+      var facts = add(box, "dl", "facts");
+      view.turo_facts.forEach(function (f) { add(facts, "dt", null, f.label); add(facts, "dd", null, f.value); });
+      if (view.turo_synced_at) add(box, "div", "quiet", "As of the pull on " + when(view.turo_synced_at, true) + ".");
+    } else {
+      add(box, "div", "quiet", off(trip)
+        ? "Arranged outside Turo, so Turo has nothing on it."
+        : "Not pulled from Turo yet — press Pull from Turo on the invoices page.");
+    }
+
+    add(box, "h2", null, "Invoices");
+    if (view.invoices && view.invoices.length) {
+      view.invoices.forEach(function (inv) {
+        var card = add(box, "div", "inv");
+        var top = add(card, "div", "top");
+        add(top, "div", null, (inv.lines.map(function (l) { return l.label + " " + l.value; }).join(" · ")) ||
+            "not broken down");
+        add(top, "div", "num", money(inv.total_cents));
+        add(card, "div", "sub",
+            inv.state + (inv.turo_status ? " · Turo: " + inv.turo_status : "") +
+            (inv.charged_at ? " · charged " + when(inv.charged_at) : "") +
+            (inv.toll_cents != null ? " · tolls " + money(inv.toll_cents) : ""));
+        if (inv.url) {
+          var link = add(card, "a", null, "Open on Turo");
+          link.href = inv.url; link.target = "_blank"; link.rel = "noopener";
+          link.style.fontSize = "12px";
+        }
+      });
+    } else {
+      add(box, "div", "quiet", "None.");
+    }
+
+    add(box, "h2", null, "Crossings");
+    if (view.tolls && view.tolls.length) {
+      var wrap = add(box, "div", "scroll");
+      var table = add(wrap, "table");
+      var hr = add(add(table, "thead"), "tr");
+      ["When", "Plaza", "Amount", ""].forEach(function (t, i) { add(hr, "th", i === 2 ? "num" : null, t); });
+      var tb = add(table, "tbody");
+      view.tolls.forEach(function (t) {
+        var tr = add(tb, "tr");
+        add(tr, "td", null, when(t.occurred_at, true));
+        add(tr, "td", null, t.plaza);
+        add(tr, "td", "num", money(t.amount_cents));
+        add(tr, "td", "quiet", t.recovered_at ? "settled" : t.filed_at ? "asked " + when(t.filed_at) : "to bill");
+      });
+    } else {
+      add(box, "div", "quiet", "None on the imported statements.");
+    }
+
+    if (view.commands && view.commands.length) {
+      add(box, "h2", null, "From this site");
+      view.commands.forEach(function (c) {
+        add(box, "div", "quiet", when(c.requested_at, true) + " · " + c.kind + " · " + c.state +
+            (c.result ? " — " + c.result : ""));
+      });
+    }
+
+    if (view.turo_detail) {
+      var raw = add(box, "details", "raw");
+      add(raw, "summary", null, "Everything Turo said about this reservation");
+      add(raw, "pre", null, JSON.stringify(view.turo_detail, null, 2));
+    }
+
+    if (off(trip)) {
+      var drop = add(box, "button", "btn drop", "Remove this rental");
+      drop.type = "button";
+      drop.style.marginTop = "14px";
+      drop.addEventListener("click", function () { dropRental(trip); });
+    }
+  }
+
+  function queueFiling(trip, row) {
+    if (!window.confirm("File " + money(row.unfiled_cents) + " of tolls to " +
+        (trip.guest_name || "this guest") + " on Turo?\n\nYour browser's extension files it, " +
+        "with the evidence sheet attached.")) return;
+    authed("/api/commands", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ kind: "file", trip_id: trip.id })
+    })
+      .then(json)
+      .then(function () {
+        window.alert("Queued. The extension files it within a few seconds while Chrome is open; " +
+                     "the invoices page shows the result.");
+      })
+      .catch(function (e) { fail("Could not queue that: " + e.message); });
+  }
+
+  function dropRental(trip) {
+    if (!window.confirm("Remove the rental for " + (trip.guest_name || "no name") +
+                        "?\n\nIts tolls go back to unattributed; they are not deleted.")) return;
+    authed("/api/trips/" + trip.id, { method: "DELETE" })
+      .then(json)
+      .then(function () { state.open = null; delete state.views[trip.id]; return load(); })
+      .catch(function (e) { fail("Could not remove it: " + e.message); });
+  }
+
+  // -------------------------------------------------------------------------
+  // Adding an off-platform rental
+  // -------------------------------------------------------------------------
+
+  function saveRental() {
+    if (state.busy) return;
+    var result = el("a-result");
+    var car = el("a-car").value;
+    var from = el("a-from").value;
+    var to = el("a-to").value;
+    result.hidden = false;
+    if (!car || !from || !to) { result.textContent = "A car and both times are needed."; return; }
+    // Times go up as the input wrote them, with no zone; the API reads a bare
+    // time as fleet-local, so this page does not decide what "2pm" means.
+    var body = { vehicle: car, guest_name: el("a-guest").value.trim() || null,
+                 starts_at: from, ends_at: to };
+    var earned = el("a-earned").value.trim();
+    if (earned) body.earnings_cents = Math.round(parseFloat(earned) * 100);
+    state.busy = true;
+    result.textContent = "Adding…";
+    authed("/api/trips", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    })
+      .then(json)
+      .then(function (payload) {
+        result.textContent = payload.tolls_matched
+          ? "Added · " + payload.tolls_matched + " crossing" +
+            (payload.tolls_matched === 1 ? "" : "s") + " now on it"
+          : "Added · no crossings fell inside it";
+        el("a-guest").value = ""; el("a-earned").value = "";
+        return load();
+      })
+      .catch(function (e) { result.textContent = ""; fail("Could not add it: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  // -------------------------------------------------------------------------
+  // Loading
+  // -------------------------------------------------------------------------
+
+  function load() {
+    return Promise.all([
+      fetch(API + "/api/trips?manual_only=false").then(json),
+      fetch(API + "/api/invoices/ledger").then(json).catch(function () { return { rows: [] }; })
+    ])
+      .then(function (both) {
+        state.trips = both[0].trips || [];
+        state.ledger = {};
+        (both[1].rows || []).forEach(function (r) { state.ledger[r.trip_id] = r; });
+        var offCount = state.trips.filter(off).length;
+        el("stamp").textContent = state.trips.length + " trips · " + offCount + " off-platform";
+        el("err").hidden = true;
+        render();
+      })
+      .catch(function (e) { el("stamp").textContent = ""; fail("Could not load trips: " + e.message); });
+  }
+
+  el("q").addEventListener("input", function () { state.q = this.value.trim().toLowerCase(); render(); });
+  Array.prototype.forEach.call(el("seg").querySelectorAll("button"), function (b) {
+    b.addEventListener("click", function () {
+      state.filter = b.getAttribute("data-f");
+      Array.prototype.forEach.call(el("seg").querySelectorAll("button"), function (o) {
+        o.className = o === b ? "on" : "";
+      });
+      render();
+    });
+  });
+  el("a-save").addEventListener("click", saveRental);
+
+  fetch(API + "/api/fleet")
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (data) {
+      var select = el("a-car");
+      ((data && data.vehicles) || []).forEach(function (v) {
+        var o = add(select, "option", null, v.nickname || v.plate);
+        o.value = v.nickname || v.plate;
+      });
+    })
+    .catch(function () { /* typed rentals need a car; the list does not */ });
+
+  // A link to one trip — from the invoices ledger, or pasted — opens it,
+  // including when this page is already showing and only the hash changes.
+  function openFromHash() {
+    var wanted = location.hash.replace(/^#/, "");
+    if (wanted && wanted !== state.open &&
+        state.trips.some(function (t) { return t.id === wanted; })) toggle(wanted);
+  }
+  window.addEventListener("hashchange", openFromHash);
+  load().then(openFromHash);
+})();
+</script>
+</body>
+</html>

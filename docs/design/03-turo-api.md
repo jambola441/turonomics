@@ -334,6 +334,22 @@ returns the same command. A filing claimed and never answered is marked
 abandoned after ten minutes and never re-run: it may have filed and lost its
 answer, and running it again would ask the guest twice.
 
+## The trip view
+
+`GET /api/trips/<id>/view` is one rental, both sides: Turo's reservation detail
+— kept whole on the trip as `turo_detail` at each pull, with the fields a
+person reads first picked out — its invoices with Turo's own status (each
+invoice page kept as `turo_body`), our crossings and what became of each, the
+ledger's row, and the commands the site sent about it. It is behind the token,
+unlike the lists, because Turo's detail names the guest and the pickup
+address. The site's trips page lists Turo and off-platform rentals together
+and is where off-platform ones are added.
+
+After filing, the extension reads that rental's invoice hub at once. The
+filing is recorded under Turo's reimbursement id and Turo's email arrives keyed
+by the invoice id; reading the hub ties the two together before the email
+lands, so it is not counted as a second invoice.
+
 ## What this does not answer
 
 - Whether a check-out *time* (as opposed to an odometer reading) is in the

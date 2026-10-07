@@ -506,6 +506,39 @@ async function pullInvoices(
 const PULL_GAP_MS = 250;
 
 /**
+ * Read the rental's invoice hub straight after filing.
+ *
+ * The filing is recorded under Turo's reimbursement id, and Turo's email
+ * about it arrives minutes later keyed by the invoice id. Until something
+ * ties the two together the ledger counts the toll line twice — James's
+ * $37.40 read as $74.80. Reading the hub now finds the invoice by its
+ * reimbursement id and records its invoice id on the same row, so the email
+ * lands there instead of beside it.
+ *
+ * Never fails the filing: Turo has already said yes, and the next pull does
+ * the same merge if this one could not.
+ */
+async function readFiledInvoice(
+  tabId: number,
+  reservation: string,
+  apiBase: string,
+  tollsToken: string | undefined
+): Promise<void> {
+  try {
+    // A moment for Turo to list the invoice it has just accepted.
+    await new Promise((resolve) => setTimeout(resolve, FILED_SETTLE_MS));
+    const wanted = (await fetch(`${apiBase}/api/turo/wanted`).then((r) =>
+      r.json()
+    )) as TuroWanted;
+    await pullInvoices(tabId, { ...wanted, invoices: [] }, [reservation], apiBase, tollsToken);
+  } catch (error) {
+    LOG("reading the filed invoice:", error instanceof Error ? error.message : String(error));
+  }
+}
+
+const FILED_SETTLE_MS = 3_000;
+
+/**
  * File the invoice the API says is most worth filing.
  *
  * Which rental, how much, and what the guest reads are all decided by the API.
@@ -575,6 +608,7 @@ async function fileInvoice(tabId: number, tripId?: string): Promise<FileInvoiceR
       amount_cents: draft.total_cents,
     }),
   });
+  await readFiledInvoice(tabId, draft.turo_trip_id, apiBase, tollsToken);
   return {
     filed: true,
     guest: draft.guest_name ?? undefined,

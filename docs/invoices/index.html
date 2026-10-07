@@ -55,6 +55,7 @@
   .ledger-state.expired{color:var(--dim)}
   .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
   .ledger-table .btn{font-size:11px;padding:3px 9px;margin-top:5px}
+  .ledger-table .trip-link{font-size:10.5px;color:var(--blue);text-decoration:none}
   .ledger-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
   .ledger-table th,.ledger-table td{white-space:nowrap}
   .ledger-table td:first-child{white-space:normal;min-width:150px}
@@ -124,7 +125,7 @@
   <header>
     <div class="row">
       <h1>Invoices<span class="u-dot">.</span></h1>
-      <div class="nav"><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
+      <div class="nav"><a href="../trips/">Trips</a><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
     </div>
     <div class="stamp" id="stamp">loading…</div>
   </header>
@@ -442,6 +443,14 @@
       var who = document.createElement("td");
       var name = document.createElement("div");
       name.textContent = (row.vehicle_nickname || "—") + " · " + (row.guest_name || "—");
+      // Everything about the rental — Turo's side, invoices, crossings — is
+      // one click away on the trips page.
+      var link = document.createElement("a");
+      link.href = "../trips/#" + row.trip_id;
+      link.className = "trip-link";
+      link.textContent = "trip ›";
+      name.appendChild(document.createTextNode(" "));
+      name.appendChild(link);
       var when = document.createElement("div");
       when.className = "who";
       when.textContent = String(row.ends_at).slice(0, 10) +

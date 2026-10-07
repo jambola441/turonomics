@@ -139,7 +139,9 @@ def post_details(
             # Turo error page should store the thirty-nine.
             unparsed += 1
             continue
-        apply_detail(session, detail, now=now, result=result)
+        trip = apply_detail(session, detail, now=now, result=result)
+        if trip is not None:
+            trip.turo_detail = body
         if detail.has_invoices:
             hubs.append(detail.reservation_id)
     session.flush()
@@ -226,7 +228,8 @@ def post_invoices(
         if invoice is None:
             unparsed += 1
             continue
-        apply_turo_invoice(session, invoice, now=now, result=result)
+        row = apply_turo_invoice(session, invoice, now=now, result=result)
+        row.turo_body = item.body
     session.commit()
     log.info(
         "turo invoices: %d read, %d unparsed, %d matched, %d new, %d merged, "

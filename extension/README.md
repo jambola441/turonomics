@@ -135,6 +135,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.10.1 | build + reload | after filing, reads that rental's invoice from Turo so Turo's email does not count it twice |
 | 1.10.0 | build + reload | runs what the site queues — Pull from Turo, and File on a ledger row — within a few seconds while Chrome is open |
 | 1.9.0 | build + reload | Pull finds every trip's invoices through Turo's invoice hub — no need to open them |
 | 1.8.0 | build + reload | Pull also reads Turo invoices the email did not break down, and the invoice page you have open |

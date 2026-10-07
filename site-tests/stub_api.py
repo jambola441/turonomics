@@ -227,6 +227,60 @@ TRIPS = [
 ]
 
 
+# A Turo rental for the trips page, beside the typed-in ones above. Its id is
+# the ledger fixture's first row, so the page can join the two as the real one
+# does.
+TURO_TRIP = {"id": "11111111-1111-1111-1111-111111111111", "vehicle_nickname": "Jolene",
+             "guest_name": "Alice", "starts_at": "2026-07-09T11:00:00Z",
+             "ends_at": "2026-07-12T18:00:00Z", "source": "email",
+             "turo_trip_id": "58626257", "state": "completed",
+             "earnings_cents": None, "toll_count": 2}
+
+
+def _trip_view(trip_id: str) -> dict | None:
+    """`/api/trips/<id>/view`, for the Turo rental and the typed-in ones."""
+    if trip_id == TURO_TRIP["id"]:
+        ledger = next(r for r in _ledger_payload()["rows"]  # type: ignore[union-attr]
+                      if r["trip_id"] == trip_id)
+        return {
+            "trip": TURO_TRIP, "turo_trip_id": "58626257", "plate": "LWH4685",
+            "state": "completed",
+            "reservation_url": "https://turo.com/us/en/reservation/58626257",
+            "invoice_hub_url": "https://turo.com/us/en/reservation/58626257/invoice-hub",
+            "ledger": ledger, "fileable": True, "held_because": None,
+            "turo_synced_at": NOW.isoformat(),
+            "turo_facts": [{"label": "Status", "value": "COMPLETED"},
+                           {"label": "Trip price", "value": "$212.50"},
+                           {"label": "Over the limit", "value": "156 mi"}],
+            "turo_detail": {"statusCode": "COMPLETED", "protectionLevel": "PREMIUM"},
+            "tolls": [
+                {"id": "t1", "occurred_at": "2026-07-10T15:15:00Z", "plaza": "BWB",
+                 "amount_cents": 679, "filed_at": NOW.isoformat(), "recovered_at": None},
+                {"id": "t2", "occurred_at": "2026-07-12T13:10:00Z", "plaza": "VNB",
+                 "amount_cents": 1100, "filed_at": None, "recovered_at": None},
+            ],
+            "invoices": [
+                {"turo_invoice_id": "113672232", "state": "charged", "turo_status": "ACCEPTED",
+                 "total_cents": 5000, "toll_cents": None,
+                 "lines": [{"label": "Tickets", "value": "$50.00"}],
+                 "first_seen_at": NOW.isoformat(), "charged_at": NOW.isoformat(),
+                 "url": "https://turo.com/us/en/reservation/58626257/reimbursement/invoice"
+                        "?invoiceId=113672232"},
+            ],
+            "commands": [],
+        }
+    for trip in TRIPS:
+        if trip["id"] == trip_id:
+            return {
+                "trip": trip, "turo_trip_id": None, "plate": None, "state": "completed",
+                "reservation_url": None, "invoice_hub_url": None, "ledger": None,
+                "fileable": False, "held_because": "off-platform — invoice the guest directly",
+                "turo_synced_at": None, "turo_facts": [], "turo_detail": None,
+                "tolls": [], "invoices": [], "commands": [],
+            }
+    return None
+
+
 def _tolls_payload() -> dict:
     """Recomputed per request, so a tick changes what the next load reports.
 
@@ -420,9 +474,9 @@ def _invoices_payload() -> dict:
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, payload: dict) -> None:
+    def _send(self, payload: dict, status: int = 200) -> None:
         body = json.dumps(payload).encode()
-        self.send_response(200)
+        self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
@@ -450,8 +504,19 @@ class Handler(BaseHTTPRequestHandler):
             self._send(_ledger_payload())
         elif self.path.startswith("/api/invoices"):
             self._send(_invoices_payload())
+        elif self.path.startswith("/api/trips/") and self.path.endswith("/view"):
+            # Behind the token, as the real one is: Turo's detail names the
+            # guest and the pickup address.
+            if not self._authorized():
+                return
+            view = _trip_view(self.path.split("/")[3])
+            if view is None:
+                self._send({"detail": "no such rental"}, status=404)
+            else:
+                self._send(view)
         elif self.path.startswith("/api/trips"):
-            self._send({"trips": TRIPS})
+            everything = "manual_only=false" in self.path
+            self._send({"trips": ([TURO_TRIP] if everything else []) + TRIPS})
         elif self.path.startswith("/seen-auth"):
             self._send({"seen": SEEN_AUTH})
         elif self.path.startswith("/api/tolls"):

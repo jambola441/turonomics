@@ -23,7 +23,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import Toll, Trip, TripSource, TripState, Vehicle
+from turonomics_api.db.models import (
+    ExtensionCommand,
+    ReimbursementInvoice,
+    Toll,
+    Trip,
+    TripSource,
+    TripState,
+    Vehicle,
+)
 from turonomics_api.ingest.tolls import rematch_unattributed
 from turonomics_api.routers.tolls import require_token
 from turonomics_api.settings import fleet_timezone
@@ -64,6 +72,8 @@ class TripRow(BaseModel):
     starts_at: datetime
     ends_at: datetime
     source: str
+    turo_trip_id: str | None = None
+    state: str | None = None
     earnings_cents: int | None = None
     # How many crossings this rental is currently carrying, so a window typed
     # slightly wrong is visible as a rental that caught nothing.
@@ -120,6 +130,8 @@ def _row(session: Session, trip: Trip) -> TripRow:
         starts_at=trip.starts_at,
         ends_at=trip.ends_at,
         source=str(trip.source),
+        turo_trip_id=trip.turo_trip_id,
+        state=str(trip.state),
         earnings_cents=trip.earnings_cents,
         toll_count=int(count),
     )
@@ -216,3 +228,256 @@ def delete_trip(
     session.delete(trip)
     session.commit()
     return {"deleted": 1, "tolls_released": int(released)}
+
+
+# ---------------------------------------------------------------------------
+# One rental, with everything linked to it
+# ---------------------------------------------------------------------------
+
+
+class Fact(BaseModel):
+    label: str
+    value: str
+
+
+class ViewToll(BaseModel):
+    id: uuid.UUID
+    occurred_at: datetime
+    plaza: str
+    amount_cents: int
+    filed_at: datetime | None
+    recovered_at: datetime | None
+
+
+class ViewInvoice(BaseModel):
+    turo_invoice_id: str | None
+    # Ours: filed / unanswered / charged, from the mail and the extension.
+    state: str
+    # Turo's own, from its invoice page where it has been read.
+    turo_status: str | None
+    total_cents: int
+    toll_cents: int | None
+    lines: list[Fact]
+    first_seen_at: datetime | None
+    charged_at: datetime | None
+    url: str | None
+
+
+class ViewCommand(BaseModel):
+    kind: str
+    state: str
+    requested_at: datetime
+    result: str | None
+
+
+class TripView(BaseModel):
+    trip: TripRow
+    turo_trip_id: str | None
+    plate: str | None
+    state: str
+    reservation_url: str | None
+    invoice_hub_url: str | None
+    # The ledger's row for it: the same figures and word the invoices page uses.
+    ledger: dict[str, object] | None
+    # Whether the site may offer to file it, and why not if not.
+    fileable: bool
+    held_because: str | None
+    # Turo's reservation detail, as a short list of what a person reads, and
+    # whole — everything else it said, for the questions nobody has asked yet.
+    turo_synced_at: datetime | None
+    turo_facts: list[Fact]
+    turo_detail: dict[str, object] | None
+    tolls: list[ViewToll]
+    invoices: list[ViewInvoice]
+    commands: list[ViewCommand]
+
+
+_TURO = "https://turo.com/us/en"
+
+
+def _get(data: object, *path: str) -> object:
+    for key in path:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data
+
+
+def _say(value: object) -> str | None:
+    """A Turo value as a person reads it, or None if there is nothing to say.
+
+    Turo's shapes repeat: money is {amount, currencyCode}, a distance is
+    {scalar, unit, unlimited}, a moment is {epochMillis, localDate, localTime}.
+    """
+    if value is None or value == "" or value == []:
+        return None
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (int, float, str)):
+        return str(value)
+    if isinstance(value, list):
+        said = [s for s in (_say(v) for v in value) if s]
+        return ", ".join(said) or None
+    if isinstance(value, dict):
+        if value.get("unlimited") is True:
+            return "unlimited"
+        if "amount" in value and isinstance(value["amount"], (int, float)):
+            return f"${value['amount']:,.2f}"
+        if "scalar" in value and value.get("scalar") is not None:
+            return f"{value['scalar']:,} {str(value.get('unit') or '').lower()}".strip()
+        if "localDate" in value:
+            return f"{value.get('localDate')} {value.get('localTime') or ''}".strip()
+        if "money" in value:
+            money = _say(value.get("money"))
+            distance = _say(value.get("distance"))
+            return f"{money} per {distance}" if money and distance else money
+    return None
+
+
+# What a person reads first, in this order. Paths into Turo's
+# /api/reservation/detail as observed; anything missing is skipped.
+_FACTS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("Status", ("statusCode",)),
+    ("Guest", ("renter", "name")),
+    ("Starts", ("booking", "start")),
+    ("Ends", ("booking", "end")),
+    ("Booked", ("created",)),
+    ("Trip price", ("booking", "costWithCurrency")),
+    ("Distance included", ("booking", "distanceLimit")),
+    ("Odometer at check-in", ("odometerDetail", "checkInOdometerReading")),
+    ("Odometer at check-out", ("odometerDetail", "checkOutOdometerReading")),
+    ("Latest odometer", ("odometerDetail", "latestOdometerReading")),
+    ("Distance driven", ("odometerDetail", "distanceDriven")),
+    ("Over the limit", ("odometerDetail", "excessDistance")),
+    ("Overage rate", ("distanceOverageFee",)),
+    ("Protection", ("protectionLevel",)),
+    ("Check-in", ("reservationCheckInStatus",)),
+    ("Pickup", ("booking", "location", "address")),
+    ("Plate on Turo", ("booking", "vehicleRegistration", "licensePlate")),
+    ("Instant book", ("instantBookable",)),
+    ("Receipt available", ("receiptAvailable",)),
+    ("Turo offers", ("reservationActions",)),
+)
+
+
+def turo_facts(detail: dict[str, object] | None) -> list[Fact]:
+    if not detail:
+        return []
+    facts: list[Fact] = []
+    for label, path in _FACTS:
+        said = _say(_get(detail, *path))
+        if said:
+            facts.append(Fact(label=label, value=said))
+    return facts
+
+
+@router.get("/{trip_id}/view", response_model=TripView)
+def view_trip(
+    trip_id: uuid.UUID,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> TripView:
+    """Everything about one rental, Turo's side and ours.
+
+    Behind the token, unlike the lists: Turo's detail carries the guest's
+    name, the pickup address and the people on the account, and the API has
+    no login of its own.
+    """
+    # Imported here: the invoices router is the larger of the two, and this is
+    # the one place the trips router needs it.
+    from turonomics_api.routers.invoices import _by_kind, fileable_invoice, ledger
+
+    require_token(authorization)
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="no such rental")
+
+    row = next((r for r in ledger(session).rows if r.trip_id == trip.id), None)
+    held: str | None
+    if trip.source is TripSource.manual:
+        held = "off-platform — invoice the guest directly"
+    else:
+        _, held = fileable_invoice(session, trip.id)
+
+    invoices = session.scalars(
+        select(ReimbursementInvoice)
+        .where(ReimbursementInvoice.trip_id == trip.id)
+        .order_by(ReimbursementInvoice.first_seen_at)
+    ).all()
+    tolls = session.scalars(
+        select(Toll).where(Toll.trip_id == trip.id).order_by(Toll.occurred_at)
+    ).all()
+    commands = session.scalars(
+        select(ExtensionCommand)
+        .where(ExtensionCommand.trip_id == trip.id)
+        .order_by(ExtensionCommand.requested_at.desc())
+        .limit(10)
+    ).all()
+    res = trip.turo_trip_id
+
+    def _lines(invoice: ReimbursementInvoice) -> list[Fact]:
+        out: list[Fact] = []
+        for entry in invoice.lines or []:
+            if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], int):
+                out.append(Fact(label=str(entry[0]), value=f"${entry[1] / 100:,.2f}"))
+        return out
+
+    ledger_row = row.model_dump(mode="json") if row is not None else None
+    if ledger_row is None and invoices:
+        # A rental the ledger does not list (upcoming, say) still has Turo's
+        # side worth adding up.
+        ledger_row = dict(_by_kind(list(invoices)))
+
+    return TripView(
+        trip=_row(session, trip),
+        turo_trip_id=res,
+        plate=trip.vehicle.plate if trip.vehicle else None,
+        state=str(trip.state),
+        reservation_url=f"{_TURO}/reservation/{res}" if res else None,
+        invoice_hub_url=f"{_TURO}/reservation/{res}/invoice-hub" if res else None,
+        ledger=ledger_row,
+        fileable=held is None,
+        held_because=held,
+        turo_synced_at=trip.detail_synced_at,
+        turo_facts=turo_facts(trip.turo_detail),
+        turo_detail=trip.turo_detail,
+        tolls=[
+            ViewToll(
+                id=t.id,
+                occurred_at=t.occurred_at,
+                plaza=t.plaza,
+                amount_cents=t.amount_cents,
+                filed_at=t.filed_at,
+                recovered_at=t.recovered_at,
+            )
+            for t in tolls
+        ],
+        invoices=[
+            ViewInvoice(
+                turo_invoice_id=i.turo_invoice_id,
+                state=i.state,
+                turo_status=(
+                    str(i.turo_body.get("reimbursementStatus"))
+                    if isinstance(i.turo_body, dict) and i.turo_body.get("reimbursementStatus")
+                    else None
+                ),
+                total_cents=i.total_cents,
+                toll_cents=i.toll_cents,
+                lines=_lines(i),
+                first_seen_at=i.first_seen_at,
+                charged_at=i.charged_at,
+                url=(
+                    f"{_TURO}/reservation/{res}/reimbursement/invoice?invoiceId={i.turo_invoice_id}"
+                    if res and i.turo_invoice_id and i.turo_body is not None
+                    else None
+                ),
+            )
+            for i in invoices
+        ],
+        commands=[
+            ViewCommand(
+                kind=c.kind, state=c.state, requested_at=c.requested_at, result=c.result
+            )
+            for c in commands
+        ],
+    )

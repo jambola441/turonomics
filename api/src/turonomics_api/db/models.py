@@ -510,6 +510,11 @@ class Trip(Base):
     # filed. `TOLL_FILING_WINDOW_DAYS` is a number read off a help page.
     can_file_reimbursement: Mapped[bool | None] = mapped_column(Boolean)
     detail_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Turo's whole reservation detail, as the extension last fetched it. The
+    # fields above are the ones something here acts on; the trip view shows
+    # the rest, and keeping it means a new question about a rental does not
+    # need a new pull to answer.
+    turo_detail: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 
@@ -781,6 +786,10 @@ class ReimbursementInvoice(Base):
     # when the invoice arrived before the trip mail, or for a reservation this
     # fleet has no record of.
     trip_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"))
+
+    # Turo's invoice page for it, as last read — its status, line items and
+    # evidence — for the trip view. Null for one only the mail has described.
+    turo_body: Mapped[dict[str, object] | None] = mapped_column(JSONB)
 
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

@@ -390,7 +390,16 @@ export function describeEmbedded(blobs: Embedded[]): string {
 
 /** What the pull did, in one line, with the interesting parts named. */
 export function describePull(result: TuroPullResult): string {
-  const parts = [`${result.stored} of ${result.asked} rental(s) read`];
+  const parts: string[] = [];
+  const found = result.discovered;
+  if (found) {
+    // First, because it is the answer to "does the app have every trip".
+    parts.push(`${found.found} reservation(s) on Turo`);
+    if (found.created) parts.push(`${found.created} new trip(s) added`);
+    if (found.unmatched.length) parts.push(`${found.unmatched.length} on a car not in the fleet`);
+    if (found.failed.length) parts.push(`${found.failed.length} list(s) Turo would not return`);
+  }
+  parts.push(`${result.stored} of ${result.asked} rental(s) read`);
   if (result.retimed.length) parts.push(`${result.retimed.length} booking(s) moved`);
   if (result.tolls_rematched) parts.push(`${result.tolls_rematched} crossing(s) re-attributed`);
   if (result.wrong_plate.length) parts.push(`${result.wrong_plate.length} on the wrong car`);
@@ -525,4 +534,39 @@ export function describeFiling(result: FileInvoiceResult): string {
       ? ` (${result.daysLeft} day(s) left on it)`
       : "";
   return `Filed${money}${who} on reservation ${result.reservation}${urgency}`;
+}
+
+
+/**
+ * Whether to read another page of a Turo reservation list, and which.
+ *
+ * Turo's lists are paged and nothing observed says whether pages count from 0
+ * or from 1, so the stop is decided by what comes back rather than by the
+ * page number: two pages running with nothing new on them is the end. One is
+ * not enough — if pages count from 1, page 0 may simply repeat page 1, and
+ * stopping there would read one page of a long history. The page count, where
+ * Turo states it, is a ceiling; so is a hard cap, against a list that never
+ * ends.
+ */
+export function nextPage(
+  page: number,
+  freshIds: number,
+  quietBefore: number,
+  numPages: number | null
+): { next: number | null; quiet: number } {
+  const quiet = freshIds > 0 ? 0 : quietBefore + 1;
+  if (quiet >= 2) return { next: null, quiet };
+  if (numPages !== null && page >= numPages) return { next: null, quiet };
+  if (page >= MAX_LIST_PAGES - 1) return { next: null, quiet };
+  return { next: page + 1, quiet };
+}
+
+export const MAX_LIST_PAGES = 60;
+
+/** A list path with its page and size filled in. Digits only, or this refuses. */
+export function listPath(template: string, page: number, size: number): string {
+  if (!Number.isInteger(page) || page < 0 || !Number.isInteger(size) || size <= 0) {
+    throw new Error(`not a page: ${page}/${size}`);
+  }
+  return template.replace("{page}", String(page)).replace("{size}", String(size));
 }

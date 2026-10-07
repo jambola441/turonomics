@@ -334,6 +334,37 @@ returns the same command. A filing claimed and never answered is marked
 abandoned after ten minutes and never re-run: it may have filed and lost its
 answer, and running it again would ask the guest twice.
 
+## Every reservation, from Turo's own lists
+
+Trips used to enter the database only through Turo's email, and the pull only
+refreshed trips already on file — so the account's history before the mail
+backfill (July 2026) was missing. Turo's Trips page lists them itself:
+
+```
+GET /api/v2/feeds/trip-history?driverRoles&itemsPerPage&page
+  tripHistoryFeeds: {list: [{month: {month, year}, trips: [
+    {id, booking: {start, end}, interval, request, cancelledRequest,
+     statusCode: COMPLETED | CANCELLED, statusSummary, renter, owner,
+     vehicle: {id, registration: {licensePlate}, vin}, location}]}],
+  numPages}
+GET /api/v2/feeds/upcoming-trips?appMode
+  upcomingTripItems: [{reservationId, interval, actor, vehicle,
+                       upcomingTripFeedItemType: OWNER_TRIP_START | OWNER_TRIP_END}]
+```
+
+The probe masked the query values; `RESERVATION_LISTS` in `routers/turo.py`
+holds the reading of them, served to the extension so a correction needs no
+rebuild. The pull reads each list first, posting every page to
+`POST /api/turo/reservations`, which adds any reservation not on file — on the
+car matched by Turo's listing id, then plate, then VIN, and reported rather
+than guessed when none matches. Pages are read until two in a row add nothing
+new, since nothing says whether Turo counts pages from 0 or 1. The detail and
+invoice reads then cover the new trips like any other.
+
+The inbox's `/api/v2/feeds/conversation` carries the same reservation shape,
+but it is a list of message threads, so a rental nobody wrote about is not in
+it. It is not used.
+
 ## The trip view
 
 `GET /api/trips/<id>/view` is one rental, both sides: Turo's reservation detail

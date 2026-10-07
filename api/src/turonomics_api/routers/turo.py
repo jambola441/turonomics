@@ -41,6 +41,7 @@ from turonomics_api.ingest.turo_invoice import (
     parse_turo_invoice,
     wanted_invoices,
 )
+from turonomics_api.ingest.turo_reservations import ReservationsResult, apply_reservations
 from turonomics_api.routers.tolls import require_token, token_configured
 
 log = logging.getLogger("turonomics.routers.turo")
@@ -48,6 +49,15 @@ log = logging.getLogger("turonomics.routers.turo")
 router = APIRouter(prefix="/api/turo", tags=["turo"])
 
 DbSession = Annotated[Session, Depends(get_session)]
+
+
+# What Turo's own Trips page fetches (docs/design/03-turo-api.md). The query
+# values were masked in the probe that found these routes, so they are the
+# best reading of it and are reported on by every pull.
+RESERVATION_LISTS: tuple[str, ...] = (
+    "/api/v2/feeds/upcoming-trips?appMode=HOST",
+    "/api/v2/feeds/trip-history?driverRoles=HOST&itemsPerPage={size}&page={page}",
+)
 
 
 class WantedResponse(BaseModel):
@@ -63,6 +73,10 @@ class WantedResponse(BaseModel):
     invoices: list[list[str]] = []
     invoice_path: str = "/api/v2/reservations/{id}/reimbursement/invoice/{invoice}"
     hub_path: str = "/api/reservations/{id}/invoice-hub"
+    # Where Turo lists the account's reservations, so trips are found rather
+    # than waited for in the mail. `{page}` and `{size}` are filled in by the
+    # extension; a list without `{page}` is read once.
+    reservation_lists: list[str] = list(RESERVATION_LISTS)
 
 
 class DetailsIn(BaseModel):
@@ -310,3 +324,71 @@ def post_hubs(
         len(to_read),
     )
     return HubsResponse(seen=seen, unparsed=unparsed, listed=listed, to_read=to_read)
+
+
+class ReservationsIn(BaseModel):
+    """One page of a Turo reservation list, exactly as Turo returned it."""
+
+    body: dict[str, Any]
+
+
+class ReservationsResponse(BaseModel):
+    found: int
+    known: int
+    created: list[str]
+    unmatched: list[str]
+    unreadable: int
+    # The reservation ids on this page, in order, so the extension can tell a
+    # page it has already seen — the end of the list, whichever way Turo
+    # counts its pages — from a new one.
+    ids: list[str]
+    # Turo's page count, where the body states one.
+    num_pages: int | None
+
+
+def _num_pages(body: object, depth: int = 0) -> int | None:
+    if depth > 3 or not isinstance(body, dict):
+        return None
+    found = body.get("numPages")
+    if isinstance(found, int) and not isinstance(found, bool):
+        return found
+    for value in body.values():
+        nested = _num_pages(value, depth + 1)
+        if nested is not None:
+            return nested
+    return None
+
+
+@router.post("/reservations", response_model=ReservationsResponse)
+def post_reservations(
+    payload: ReservationsIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ReservationsResponse:
+    """Add any reservation on this page that the database does not have.
+
+    The ones it does have are left to `POST /details`, which the extension
+    calls next and which holds more than any list does.
+    """
+    require_token(authorization)
+    result = ReservationsResult()
+    ids = apply_reservations(session, payload.body, now=datetime.now(UTC), result=result)
+    session.commit()
+    if result.created or result.unmatched:
+        log.info(
+            "turo list: %d reservation(s), %d new, %d on a car not in the fleet",
+            result.found,
+            len(result.created),
+            len(result.unmatched),
+        )
+    for line in result.unmatched:
+        log.warning("turo list: no fleet car for reservation %s", line)
+    return ReservationsResponse(
+        found=result.found,
+        known=result.known,
+        created=result.created,
+        unmatched=result.unmatched,
+        unreadable=result.unreadable,
+        ids=ids,
+        num_pages=_num_pages(payload.body),
+    )

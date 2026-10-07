@@ -27,6 +27,8 @@ import {
 } from "./tolls.js";
 import {
   describeEmbedded,
+  listPath,
+  nextPage,
   describeFiling,
   describePull,
   hubsToRead,
@@ -41,6 +43,7 @@ import type {
   Draft,
   FileInvoiceResult,
   SiteCommand,
+  TuroDiscovery,
   TuroInvoicesResult,
   TuroPullResult,
   TuroWanted,
@@ -376,9 +379,13 @@ async function fetchExportInPage(url: string): Promise<string | null> {
  */
 async function pullTuro(tabId: number): Promise<TuroPullResult> {
   const { apiBase, tollsToken } = await settings();
-  const wanted = await fetch(`${apiBase}/api/turo/wanted`).then(
-    (response) => response.json() as Promise<TuroWanted>
-  );
+  const getWanted = () =>
+    fetch(`${apiBase}/api/turo/wanted`).then((response) => response.json() as Promise<TuroWanted>);
+  let wanted = await getWanted();
+  // Every reservation on the account first, so the rentals the mail never
+  // mentioned are on file before their detail is fetched below.
+  const discovered = await discoverReservations(tabId, wanted, apiBase, tollsToken);
+  if (discovered.created) wanted = await getWanted();
   const details: unknown[] = [];
   let failed = 0;
   for (const id of wanted.reservations) {
@@ -418,8 +425,68 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
     ...(result as TuroPullResult),
     asked: wanted.reservations.length,
     failed,
+    discovered,
     ...(invoices ? { invoices } : {}),
   };
+}
+
+const LIST_PAGE_SIZE = 50;
+
+/**
+ * Read Turo's own lists of the account's reservations, page by page, and let
+ * the API add any it lacks.
+ *
+ * Trips used to arrive only by email, and the pull could only refresh trips
+ * already on file — so a rental the mail never mentioned was never here.
+ */
+async function discoverReservations(
+  tabId: number,
+  wanted: TuroWanted,
+  apiBase: string,
+  tollsToken: string | undefined
+): Promise<TuroDiscovery> {
+  const summary: TuroDiscovery = { found: 0, created: 0, unmatched: [], pages: 0, failed: [] };
+  const seen = new Set<string>();
+  for (const template of wanted.reservation_lists ?? []) {
+    const paged = template.includes("{page}");
+    let page: number | null = 0;
+    let quiet = 0;
+    while (page !== null) {
+      const path = listPath(template, page, LIST_PAGE_SIZE);
+      const body = await inPage(tabId, fetchJsonInPage, [path], 12, "MAIN");
+      if (body === null) {
+        if (page === 0) summary.failed.push(template.split("?")[0]);
+        break;
+      }
+      const response = await fetch(`${apiBase}/api/turo/reservations`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+        },
+        body: JSON.stringify({ body }),
+      });
+      if (!response.ok) throw new Error(`the API said ${response.status} to a reservation list`);
+      const answer = (await response.json()) as {
+        ids: string[];
+        created: string[];
+        unmatched: string[];
+        num_pages: number | null;
+      };
+      summary.pages += 1;
+      summary.created += answer.created.length;
+      summary.unmatched.push(...answer.unmatched.filter((u) => !summary.unmatched.includes(u)));
+      const fresh = answer.ids.filter((id) => !seen.has(id));
+      fresh.forEach((id) => seen.add(id));
+      if (!paged) break;
+      const step = nextPage(page, fresh.length, quiet, answer.num_pages);
+      page = step.next;
+      quiet = step.quiet;
+      await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+    }
+  }
+  summary.found = seen.size;
+  return summary;
 }
 
 /**

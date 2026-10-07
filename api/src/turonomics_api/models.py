@@ -31,6 +31,11 @@ class EZPassToll(BaseModel):
     amount: float
     transponder_id: str | None = None  # None when tag/plate field contains a license plate
     license_plate: str | None = None   # None when tag/plate field contains a transponder
+    # Which road the plaza code belongs to, and where a closed-system road was
+    # entered. A numbered plaza ("15") is an NJ Turnpike interchange or a NY
+    # Thruway exit depending on this, so locating it needs it.
+    agency: str | None = None
+    entry_plaza: str | None = None
 
     @field_validator("license_plate")
     @classmethod

@@ -718,6 +718,11 @@ class Toll(Base):
     # Exactly as the statement billed it: a tag number or a plate, never both.
     transponder_id: Mapped[str | None] = mapped_column(String(40), index=True)
     license_plate: Mapped[str | None] = mapped_column(String(16), index=True)
+    # The statement's Agency and Entry Plaza. Kept because a plaza code alone
+    # is ambiguous — "15" is on the NJ Turnpike and the NY Thruway — and
+    # placing a crossing on a map needs to know which.
+    agency: Mapped[str | None] = mapped_column(String(40))
+    entry_plaza: Mapped[str | None] = mapped_column(String(60))
 
     vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("vehicle.id", ondelete="SET NULL")

@@ -154,20 +154,51 @@ class Route:
     note: str | None = None
 
 
+def shape(value: Any, depth: int = 0) -> str:
+    """A value's layout without its contents: keys, types and list lengths.
+
+    For the log, so Bouncie's real response can be read without anyone handing
+    over credentials, and without a guest's route ending up in it.
+    """
+    # Deep enough for a GeoJSON coordinate pair (drive → gps → coordinates →
+    # point → number), which is the part this exists to see.
+    if depth > 5:
+        return "…"
+    if isinstance(value, Mapping):
+        inner = ", ".join(f"{k}: {shape(v, depth + 1)}" for k, v in list(value.items())[:40])
+        return "{" + inner + "}"
+    if isinstance(value, list):
+        return f"[{len(value)} × {shape(value[0], depth + 1)}]" if value else "[]"
+    if isinstance(value, str):
+        return f"str({len(value)})"
+    if value is None:
+        return "null"
+    return type(value).__name__
+
+
+_SHAPE_LOGGED = False
+
+
 def bouncie_route(
     client: DrivesSource, imei: str, *, starts: datetime, ends: datetime
 ) -> Route:
     """The car's drives over a span, asked for a week at a time."""
+    global _SHAPE_LOGGED
     route = Route(source="bouncie")
     unreadable = 0
     cursor = starts
     while cursor < ends:
         upto = min(cursor + BOUNCIE_WINDOW - timedelta(seconds=1), ends)
-        for raw in client.trips(
+        drives = client.trips(
             imei,
             starts_after=cursor.strftime("%Y-%m-%dT%H:%M:%SZ"),
             ends_before=upto.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        ):
+        )
+        if drives and not _SHAPE_LOGGED:
+            # Once per process: the first real look at what Bouncie sends.
+            log.info("bouncie trips: %d drive(s), first is %s", len(drives), shape(drives[0]))
+            _SHAPE_LOGGED = True
+        for raw in drives:
             drive = parse_drive(raw) if isinstance(raw, Mapping) else None
             if drive is None:
                 unreadable += 1

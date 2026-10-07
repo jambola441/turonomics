@@ -69,6 +69,7 @@ class TollRow(BaseModel):
     id: uuid.UUID
     occurred_at: datetime
     plaza: str
+    agency: str | None = None
     amount_cents: int
     transponder_id: str | None = None
     license_plate: str | None = None
@@ -118,6 +119,8 @@ class ImportResponse(BaseModel):
     matched: int
     unmatched: int
     unknown_tags: list[str]
+    # Crossings already on file that this statement told the agency of.
+    described: int = 0
 
 
 def _identifier(toll: Toll) -> str:
@@ -179,6 +182,7 @@ def _row(
         id=toll.id,
         occurred_at=toll.occurred_at,
         plaza=toll.plaza,
+        agency=toll.agency,
         amount_cents=toll.amount_cents,
         transponder_id=toll.transponder_id,
         license_plate=toll.license_plate,
@@ -283,6 +287,7 @@ async def import_statement(
         matched=result.matched,
         unmatched=result.unmatched,
         unknown_tags=sorted(result.unknown_tags),
+        described=result.described,
     )
 
 

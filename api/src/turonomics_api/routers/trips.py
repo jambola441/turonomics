@@ -14,14 +14,16 @@ a parallel notion of a rental that each of them would have to learn about.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Annotated
 
+import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import (
     ExtensionCommand,
@@ -33,9 +35,10 @@ from turonomics_api.db.models import (
     Vehicle,
 )
 from turonomics_api.ingest.tolls import rematch_unattributed
+from turonomics_api.ingest.trip_map import Route, bouncie_route, place, telemetry_route
 from turonomics_api.ingest.turo_extras import photo_groups, thread
 from turonomics_api.routers.tolls import require_token
-from turonomics_api.settings import fleet_timezone
+from turonomics_api.settings import fleet_timezone, toll_overrun_minutes
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
 
@@ -511,4 +514,107 @@ def view_trip(
             for m in thread(trip.turo_messages)
         ],
         extras_synced_at=trip.extras_synced_at,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Where it went
+# ---------------------------------------------------------------------------
+
+
+class MapToll(BaseModel):
+    occurred_at: datetime
+    plaza: str
+    amount_cents: int
+    lat: float | None
+    lon: float | None
+    # "route": on the car's track at that moment. "plaza": at the plaza's
+    # approximate position. None: not placed — listed, not guessed.
+    how: str | None
+
+
+class MapDrive(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+    points: list[list[float]]
+
+
+class TripMap(BaseModel):
+    starts_at: datetime
+    ends_at: datetime
+    drives: list[MapDrive]
+    tolls: list[MapToll]
+    # "bouncie", "telemetry", or None when there is no route at all.
+    route_source: str | None
+    note: str | None
+
+
+# The route is read from a little before the booking to the end of the grace
+# the toll matcher allows, so a crossing on the way back is on the map too.
+_MAP_BEFORE = timedelta(minutes=30)
+
+
+@router.get("/{trip_id}/map", response_model=TripMap)
+def trip_map(
+    trip_id: uuid.UUID,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> TripMap:
+    """The rental's route and its crossings on it, behind the token: a car's
+    movements are as private as anything Turo says about the guest."""
+    require_token(authorization)
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(status_code=404, detail="no such rental")
+    starts = trip.starts_at - _MAP_BEFORE
+    ends = trip.ends_at + timedelta(minutes=toll_overrun_minutes())
+
+    route = Route()
+    imei = trip.vehicle.bouncie_imei if trip.vehicle else None
+    if imei:
+        try:
+            route = bouncie_route(BouncieClient(session), imei, starts=starts, ends=ends)
+        except (BouncieError, httpx.HTTPError, RuntimeError) as error:
+            # A map is not worth an error page. Fall back, and say why.
+            route = Route(note=f"Bouncie did not answer ({error})")
+    if not route.drives:
+        fallback = telemetry_route(session, trip.vehicle_id, starts=starts, ends=ends)
+        if fallback.drives:
+            fallback.note = "; ".join(n for n in (route.note, fallback.note) if n)
+            route = fallback
+        elif route.source is None and not route.note:
+            route.note = (
+                "no tracker on this car" if not imei else "the tracker recorded no driving"
+            )
+
+    tolls = session.scalars(
+        select(Toll).where(Toll.trip_id == trip.id).order_by(Toll.occurred_at)
+    ).all()
+    placed_tolls = []
+    for toll in tolls:
+        spot = place(toll.occurred_at, toll.plaza, route)
+        placed_tolls.append(
+            MapToll(
+                occurred_at=toll.occurred_at,
+                plaza=toll.plaza,
+                amount_cents=toll.amount_cents,
+                lat=spot.lat if spot else None,
+                lon=spot.lon if spot else None,
+                how=spot.how if spot else None,
+            )
+        )
+    return TripMap(
+        starts_at=trip.starts_at,
+        ends_at=trip.ends_at,
+        drives=[
+            MapDrive(
+                starts_at=d.starts_at,
+                ends_at=d.ends_at,
+                points=[[round(lat, 6), round(lon, 6)] for lat, lon in d.points],
+            )
+            for d in route.drives
+        ],
+        tolls=placed_tolls,
+        route_source=route.source if route.drives else None,
+        note=route.note,
     )

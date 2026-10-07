@@ -385,6 +385,14 @@ role, time, text and attached images). Kept whole on the trip; read once a
 trip has started and again until five days after it ends, never-read first.
 Photos are counted by step in the view until their URL pattern is known.
 
+`GET /api/trips/<id>/map` draws where the car went and where each toll was
+charged (`ingest/trip_map.py`). The route is the car's Bouncie drives over the
+rental (`/v1/trips`, a week at a time, Bouncie's limit), falling back to the
+positions the poller stored. A crossing goes on the drive under way when it was
+charged, at the fraction of that drive that had passed — an estimate along the
+right road, said as such. Without a route, a crossing at a major plaza goes at
+the plaza's approximate position; anything else is listed, not guessed.
+
 After filing, the extension reads that rental's invoice hub at once. The
 filing is recorded under Turo's reimbursement id and Turo's email arrives keyed
 by the invoice id; reading the hub ties the two together before the email

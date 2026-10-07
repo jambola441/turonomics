@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="../fleet/icons/icon-180.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="../uniform.css">
+<link rel="stylesheet" href="../fleet/vendor/leaflet.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -101,6 +102,9 @@
   .msg.host{align-self:flex-end;background:var(--surface2)}
   .msg-who{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:2px}
   .msg-text{white-space:pre-wrap;word-break:break-word}
+  .route{height:300px;border-radius:var(--u-radius-md);border:1px solid var(--border);
+         margin-top:4px;background:var(--u-map, var(--surface2))}
+  body.invert-tiles .route .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   details.raw summary{cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:14px}
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px}
 </style>
@@ -144,6 +148,7 @@
   <div id="list"></div>
 </main>
 
+<script src="../fleet/vendor/leaflet.js"></script>
 <script>
 (function () {
   "use strict";
@@ -157,7 +162,8 @@
 
   // Shared with the invoices and tolls pages, so the token is asked for once.
   var TOKEN_KEY = "turonomics.tolls.token";
-  var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false };
+  var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false,
+                maps: {}, tiles: null };
 
   function el(id) { return document.getElementById(id); }
   function add(parent, tag, cls, text) {
@@ -286,7 +292,16 @@
     render();
     authed("/api/trips/" + id + "/view")
       .then(json)
-      .then(function (view) { state.views[id] = view; })
+      .then(function (view) {
+        state.views[id] = view;
+        // The route asks Bouncie, which can take a moment; the rest of the
+        // view does not wait for it.
+        state.maps[id] = { loading: true };
+        authed("/api/trips/" + id + "/map").then(json)
+          .then(function (m) { state.maps[id] = m; })
+          .catch(function (e) { state.maps[id] = { error: e.message }; })
+          .then(function () { if (state.open === id) render(); });
+      })
       .catch(function (e) { state.views[id] = { error: e.message }; })
       .then(function () {
         render();
@@ -353,6 +368,9 @@
         ? "Arranged outside Turo, so Turo has nothing on it."
         : "Not pulled from Turo yet — press Pull from Turo on the invoices page.");
     }
+
+    add(box, "h2", null, "Route");
+    renderRoute(trip, box);
 
     add(box, "h2", null, "Invoices");
     if (view.invoices && view.invoices.length) {
@@ -455,6 +473,58 @@
     }
   }
 
+  // Where the car went over the rental, and where on that route each toll
+  // was charged — on the track at that moment where the tracker has one, at
+  // the plaza's rough position where it does not.
+  function renderRoute(trip, box) {
+    var m = state.maps[trip.id];
+    if (!m || m.loading) { add(box, "div", "quiet", "Loading the route…"); return; }
+    if (m.error) { add(box, "div", "note", "Could not load the route: " + m.error); return; }
+    var placed = (m.tolls || []).filter(function (t) { return t.lat != null; });
+    if (!(m.drives || []).length && !placed.length) {
+      add(box, "div", "quiet", "Nothing to map" + (m.note ? " — " + m.note : "") + ".");
+      return;
+    }
+    var div = add(box, "div", "route");
+    if (typeof L === "undefined") { div.textContent = "The map library did not load."; return; }
+    var map = L.map(div, { zoomControl: true, attributionControl: true, scrollWheelZoom: false });
+    var t = state.tiles || {};
+    document.body.classList.toggle("invert-tiles", !!t.invert);
+    L.tileLayer(t.url || "https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: t.attribution || "&copy; OpenStreetMap contributors",
+      maxZoom: t.max_zoom || 19
+    }).addTo(map);
+    var bounds = [];
+    (m.drives || []).forEach(function (d) {
+      if (!d.points.length) return;
+      L.polyline(d.points, { color: "#3b82f6", weight: 3, opacity: 0.8 })
+        .bindTooltip(when(d.starts_at, true) + " – " + when(d.ends_at, true))
+        .addTo(map);
+      bounds = bounds.concat(d.points);
+    });
+    placed.forEach(function (toll) {
+      var exact = toll.how === "route";
+      L.circleMarker([toll.lat, toll.lon], {
+        radius: 7, color: "#b45309", weight: 2, fillColor: "#f59e0b",
+        fillOpacity: exact ? 0.9 : 0.35, dashArray: exact ? null : "3 3"
+      }).bindPopup(toll.plaza + " · " + money(toll.amount_cents) + "<br>" +
+                   when(toll.occurred_at, true) + "<br>" +
+                   (exact ? "where the car was at that moment" : "plaza's approximate position"))
+        .addTo(map);
+      bounds.push([toll.lat, toll.lon]);
+    });
+    if (bounds.length === 1) map.setView(bounds[0], 13);
+    else map.fitBounds(bounds, { padding: [18, 18] });
+    var unplaced = (m.tolls || []).length - placed.length;
+    var said = [];
+    if (m.route_source === "bouncie") said.push("Route from Bouncie");
+    else if (m.route_source === "telemetry") said.push("Route from the tracker's stored positions");
+    if (placed.length) said.push("tolls placed where the car was when charged — an estimate along the road");
+    if (unplaced) said.push(unplaced + " toll" + (unplaced === 1 ? "" : "s") + " not placed");
+    if (m.note) said.push(m.note);
+    add(box, "div", "quiet", said.join(" · ") + ".");
+  }
+
   function queueFiling(trip, row) {
     if (!window.confirm("File " + money(row.unfiled_cents) + " of tolls to " +
         (trip.guest_name || "this guest") + " on Turo?\n\nYour browser's extension files it, " +
@@ -555,6 +625,7 @@
   fetch(API + "/api/fleet")
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) {
+      state.tiles = (data && data.map_tiles) || null;
       var select = el("a-car");
       ((data && data.vehicles) || []).forEach(function (v) {
         var o = add(select, "option", null, v.nickname || v.plate);

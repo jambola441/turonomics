@@ -16,7 +16,13 @@ import {
   chooseStatement,
   dateCoverage,
   describeForm,
+  BLOCK_PAUSE_MS,
   describePager,
+  HISTORY_MONTHS,
+  looksBlocked,
+  PACE_MS,
+  runGate,
+  WINDOW_PACE_MS,
   parsePagerRange,
   type PagerRange,
   describeShape,
@@ -204,13 +210,17 @@ const DEFAULT_API = "https://turonomics.onrender.com";
 interface Settings {
   apiBase: string;
   tollsToken: string;
+  /** How many months of E-ZPass activity a run reads. */
+  tollsMonths: number;
 }
 
 async function settings(): Promise<Settings> {
-  const stored = await chrome.storage.local.get(["apiBase", "tollsToken"]);
+  const stored = await chrome.storage.local.get(["apiBase", "tollsToken", "tollsMonths"]);
+  const months = Number(stored.tollsMonths);
   return {
     apiBase: String(stored.apiBase || DEFAULT_API).replace(/\/$/, ""),
     tollsToken: String(stored.tollsToken || ""),
+    tollsMonths: Number.isFinite(months) && months >= 1 ? Math.min(Math.round(months), 36) : HISTORY_MONTHS,
   };
 }
 
@@ -1404,6 +1414,7 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
     const before = signatures[signatures.length - 1];
     let advanced = false;
     for (const index of ranked) {
+      await sleep(PACE_MS);
       if (!(await inPage(tabId, clickControlInPage, [index]))) continue;
       const clicked = descriptor.nextControls[index];
       note(`  clicked next candidate ${index}: text "${clicked?.text.slice(0, 30)}" aria "${clicked?.ariaLabel ?? ""}" class "${(clicked?.className ?? "").slice(0, 40)}"`);
@@ -1422,6 +1433,7 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
       stopped = lastRange
         ? `incomplete: clicking next changed nothing at ${lastRange.to} of ${lastRange.total}`
         : "no next page";
+      await stopIfBlocked(tabId);
       break;
     }
   }
@@ -1456,6 +1468,17 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
  */
 async function sendStatement(tabId: number): Promise<SendTollsResult> {
   startTrace();
+  const stored = await chrome.storage.local.get(["tollsLastRun", "tollsBlockedUntil"]);
+  const refusal = runGate(
+    Date.now(),
+    typeof stored.tollsLastRun === "number" ? stored.tollsLastRun : null,
+    typeof stored.tollsBlockedUntil === "number" ? stored.tollsBlockedUntil : null
+  );
+  if (refusal) {
+    note(`not starting: ${refusal}. No request was made to E-ZPass.`);
+    return { result: null, source: "none", rowCount: 0, problem: refusal, log: trace };
+  }
+  await chrome.storage.local.set({ tollsLastRun: Date.now() });
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   note(
     `extension ${chrome.runtime.getManifest().version}, page ${(tab?.url ?? "?").replace(/\?.*$/, "")}`
@@ -1464,6 +1487,17 @@ async function sendStatement(tabId: number): Promise<SendTollsResult> {
   try {
     result = await sendStatementTraced(tabId);
   } catch (error) {
+    if (error instanceof SiteRefused) {
+      await chrome.storage.local.set({ tollsBlockedUntil: Date.now() + BLOCK_PAUSE_MS });
+      note(`STOPPED: the site looks like it is refusing or down. No more requests for ${BLOCK_PAUSE_MS / 60_000} minutes.`);
+      return {
+        result: null,
+        source: "none",
+        rowCount: 0,
+        problem: `E-ZPass answered with what reads as a block or outage ("${error.message}"). Stopped, and paused for an hour.`,
+        log: trace,
+      };
+    }
     // Keep the trace: the steps before the throw are the whole diagnosis.
     const message = error instanceof Error ? error.message : String(error);
     note(`THREW: ${message}`);
@@ -1502,8 +1536,11 @@ async function sendStatementTraced(tabId: number): Promise<SendTollsResult> {
   let source: SendTollsResult["source"] = "none";
   let problem: string | undefined;
 
-  note(`today is ${today}; reading ${quarterRanges(today).length} windows, newest first`);
-  for (const range of quarterRanges(today)) {
+  const { tollsMonths } = await settings();
+  const ranges = quarterRanges(today, tollsMonths);
+  note(`today is ${today}; reading ${tollsMonths} month(s) as ${ranges.length} window(s), newest first`);
+  for (const [position, range] of ranges.entries()) {
+    if (position > 0) await sleep(WINDOW_PACE_MS);
     note(`window ${range.from} to ${range.to}`);
     const sent = await sendWindow(tabId, range);
     note(
@@ -1585,6 +1622,7 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   await new Promise((resolve) => setTimeout(resolve, 300));
   const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
   note(`  fields now read "${fromNow}" and "${toNow}"${sameDate(fromNow, fromText) && sameDate(toNow, toText) ? "" : "  <-- NOT WHAT WAS TYPED"}`);
+  await sleep(PACE_MS);
   const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
   note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
   if (!clicked) {
@@ -1626,6 +1664,25 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
+/** The site answered with what reads as a block or an outage. Stop, do not retry. */
+class SiteRefused extends Error {}
+
+/**
+ * Called wherever the table has gone missing and not come back.
+ *
+ * A missing table is ambiguous: a slow page, or the site telling us to go away.
+ * Reading the page's own words settles which, and when it is the second the
+ * right move is to make no further request — not to retry, wait and click again.
+ */
+async function stopIfBlocked(tabId: number): Promise<void> {
+  const text = await inPage(tabId, () => document.body?.innerText ?? "", []);
+  const snippet = looksBlocked(text);
+  if (snippet) {
+    note(`  THE PAGE SAYS: "${snippet}"`);
+    throw new SiteRefused(snippet);
+  }
+}
+
 /**
  * Re-read until the table changes to something with rows, or long enough to be
  * sure it will not.
@@ -1658,6 +1715,7 @@ async function waitForChange(
     `  waited ${Math.round((Date.now() - started) / 1000)}s and the table never changed` +
       (sawLoading ? " (it was empty for part of that)" : "")
   );
+  if (tableSignature(activityOf(fallback)) === "empty") await stopIfBlocked(tabId);
   return fallback;
 }
 
@@ -1673,7 +1731,9 @@ async function waitForRows(tabId: number, current: PageDescriptor, maxMs = 12000
       return descriptor;
     }
   }
-  note(`  no table with rows after ${Math.round(maxMs / 1000)}s; starting anyway`);
+  note(`  no table with rows after ${Math.round(maxMs / 1000)}s`);
+  await stopIfBlocked(tabId);
+  note("  nothing on the page reads like a refusal; starting anyway");
   return current;
 }
 

@@ -22,7 +22,11 @@ import {
   cleanCell,
   dateCoverage,
   describeForm,
+  COOLDOWN_MS,
   describePager,
+  HISTORY_MONTHS,
+  looksBlocked,
+  runGate,
   parsePagerRange,
   parseSiteDate,
   sameDate,
@@ -713,4 +717,47 @@ test("the pager report lists its own controls and not the rest of the page", () 
 
 test("the pager report says so when nothing looked like a pager", () => {
   assert.match(describePager([{ text: "Home" }]).join("\n"), /no control looked like part of a pager/);
+});
+
+// ---------------------------------------------------------------------------
+// Being gentle
+// ---------------------------------------------------------------------------
+test("a read covers one window unless asked for more", () => {
+  // Everything older is already on file; a year per run is the burst that got
+  // the account refused.
+  assert.equal(HISTORY_MONTHS, 3);
+  assert.equal(quarterRanges("2026-10-07").length, 1);
+});
+
+test("recognises the wording of a block or an outage, and says which words", () => {
+  const blocked = looksBlocked("Header Welcome Jane Doe ... We detected unusual activity from your connection. Ref 12345");
+  assert.ok(blocked);
+  assert.match(blocked, /unusual activity/);
+  assert.ok(!blocked.includes("12345"), "digits masked");
+  assert.match(looksBlocked("The service is temporarily unavailable. Please try again later.") ?? "", /unavailable/);
+  assert.match(looksBlocked("Please verify you are not a robot") ?? "", /robot/);
+});
+
+test("the snippet is the neighbourhood, not the page", () => {
+  const long = "Welcome Jane Doe, account 99900000111. " + "x ".repeat(200) + "access denied " + "y ".repeat(200);
+  const snippet = looksBlocked(long) ?? "";
+  assert.ok(!snippet.includes("Jane Doe"));
+  assert.ok(snippet.length < 250);
+});
+
+test("an ordinary activity page is not mistaken for a block", () => {
+  assert.equal(looksBlocked("Account Activity Start Date End Date Filter 1-10 of 96 Rows per page"), null);
+});
+
+test("a run is refused straight after another, and says for how long", () => {
+  const now = 1_000_000_000;
+  assert.match(runGate(now, now - 60_000, null) ?? "", /wait 4 more minute/);
+  assert.equal(runGate(now, now - COOLDOWN_MS - 1, null), null);
+  assert.equal(runGate(now, null, null), null);
+});
+
+test("a block pauses everything, whatever the cooldown says", () => {
+  const now = 1_000_000_000;
+  assert.match(runGate(now, null, now + 30 * 60_000) ?? "", /30 minute.*block or outage/);
+  assert.equal(runGate(now, null, now - 1), null, "expired");
 });

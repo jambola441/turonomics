@@ -58,6 +58,25 @@ the ones it has.
 The paging is driven from the service worker rather than a content script, since
 a "next" link that navigates would tear a content script down mid-loop.
 
+### Being gentle with E-ZPass
+
+E-ZPass has started answering this with what reads as a bot block or an outage,
+so the send asks for less and stops sooner. It does not try to look less like a
+script; a refusal is a reason to stop.
+
+- **One window by default.** A run reads the last 3 months. Older months are
+  already on file after the first read. To backfill, raise **E-ZPass months to
+  read** under Settings once, then put it back.
+- **Paced.** 2 seconds before each click that makes the site fetch something and
+  4 seconds between windows.
+- **Cooldown.** A run is refused if the last one was under 5 minutes ago, before
+  any request is made.
+- **Stops on a refusal.** If the table goes missing and the page's own words read
+  like a block or an outage ("unusual activity", "temporarily unavailable",
+  "access denied", …) it stops at once, makes no further requests, and pauses
+  for an hour. The log quotes the words around the match, digits masked, because
+  "you look automated" and "we are down" call for different responses.
+
 ### The run log
 
 After every send the popup has a **Run log** under the result (closed when it
@@ -180,6 +199,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.15.0 | build + reload | gentler on E-ZPass: one date window by default, paced clicks, a cooldown between runs, and a stop-and-pause-an-hour if the page reads like a block or outage |
 | 1.14.2 | build + reload | sets MUI rows-per-page to the largest option, reads the pager's "1–10 of N" to know the real last page, and calls a stop short of it incomplete (with the pager's controls in the log) |
 | 1.14.1 | build + reload | paging no longer stops at page one: an empty table while the next page loads is waited out, not read as the end; the form is not touched mid-load |
 | 1.14.0 | build + reload | the Turo probe buttons also work on the E-ZPass activity page, and show how its date search is requested |

@@ -468,8 +468,92 @@ export interface DateRange {
 }
 
 export const WINDOW_MONTHS = 3;
-/** How far back an automatic read goes. */
-export const HISTORY_MONTHS = 12;
+/**
+ * How far back a read goes unless told otherwise: one window. Everything older
+ * is already on file after the first read, and re-reading a year of it on every
+ * run is a burst of requests to a site that has begun refusing them.
+ */
+export const HISTORY_MONTHS = 3;
+
+// ---------------------------------------------------------------------------
+// Being gentle with the site
+// ---------------------------------------------------------------------------
+// The operator's own account in their own browser, but still a script clicking
+// faster than a person, on a site that answered with "you look like a bot, or we
+// are down". The response is to ask for less, slower, and to stop at the first
+// refusal — not to look less like a script.
+
+/** Pause before each click that makes the site fetch something. */
+export const PACE_MS = 2000;
+/** Pause between date windows. */
+export const WINDOW_PACE_MS = 4000;
+/** Refuse to start another run within this long of the last one. */
+export const COOLDOWN_MS = 5 * 60_000;
+/** After a refusal, do not touch the site at all for this long. */
+export const BLOCK_PAUSE_MS = 60 * 60_000;
+
+const BLOCK_PHRASES = new RegExp(
+  [
+    "unusual (?:activity|traffic)",
+    "automated (?:access|requests?|traffic|activity)",
+    "suspicious",
+    "\\bbots?\\b",
+    "robot",
+    "captcha",
+    "access denied",
+    "request (?:blocked|rejected|denied)",
+    "(?:has been|was|been) blocked",
+    "too many (?:requests|attempts)",
+    "rate limit",
+    "temporarily unavailable",
+    "(?:service|site|system) (?:is )?(?:currently )?(?:un)?available",
+    "unavailable",
+    "try again later",
+    "scheduled maintenance",
+    "outage",
+    "something went wrong",
+    "error\\s*(?:code)?:?\\s*5\\d\\d",
+  ].join("|"),
+  "i"
+);
+
+/**
+ * Whether a page's text reads like a refusal or an outage, and if so the few
+ * words around it, with digits masked.
+ *
+ * Returns the *snippet*, not just a yes: a block page's wording is the only way
+ * to tell "you look automated" from "we are down", and which of those it is
+ * decides what to do next. Only the neighbourhood of the match is returned, so
+ * a page header with an account holder's name is not carried out with it.
+ */
+export function looksBlocked(text: string): string | null {
+  const flat = text.replace(/\s+/g, " ");
+  const match = BLOCK_PHRASES.exec(flat);
+  if (!match) return null;
+  const start = Math.max(0, match.index - 70);
+  return flat.slice(start, match.index + match[0].length + 90).replace(/\d/g, "#");
+}
+
+/**
+ * A reason not to start a run now, or null.
+ *
+ * Checked before the page is touched: a run refused here makes no requests.
+ */
+export function runGate(
+  now: number,
+  lastRun: number | null,
+  blockedUntil: number | null
+): string | null {
+  if (blockedUntil !== null && now < blockedUntil) {
+    const minutes = Math.ceil((blockedUntil - now) / 60_000);
+    return `paused for another ${minutes} minute(s) because the last run met what looked like a block or outage`;
+  }
+  if (lastRun !== null && now - lastRun < COOLDOWN_MS) {
+    const minutes = Math.ceil((COOLDOWN_MS - (now - lastRun)) / 60_000);
+    return `the last run was under ${Math.round(COOLDOWN_MS / 60_000)} minutes ago; wait ${minutes} more minute(s)`;
+  }
+  return null;
+}
 
 function parseIso(iso: string): { y: number; m: number; d: number } {
   const [y, m, d] = iso.split("-").map(Number);

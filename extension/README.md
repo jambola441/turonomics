@@ -180,6 +180,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.14.1 | build + reload | paging no longer stops at page one: an empty table while the next page loads is waited out, not read as the end; the form is not touched mid-load |
 | 1.14.0 | build + reload | the Turo probe buttons also work on the E-ZPass activity page, and show how its date search is requested |
 | 1.13.1 | build + reload | date fields get the year width they ask for (MM/DD/YY); the run log checks the rows really fall in each window |
 | 1.13.0 | build + reload | Send tolls reads the last 12 months in three-month date windows, paging each and posting it as it goes |

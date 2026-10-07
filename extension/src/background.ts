@@ -20,9 +20,11 @@ import {
   formatForField,
   maskValue,
   mergeActivityPages,
+  pageChanged,
   pickDateFields,
   pickPageSize,
   quarterRanges,
+  sameDate,
   rankNextControls,
   rankSubmitControls,
   shouldStopPaging,
@@ -1286,14 +1288,15 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
       const clicked = descriptor.nextControls[index];
       note(`  clicked next candidate ${index}: text "${clicked?.text.slice(0, 30)}" aria "${clicked?.ariaLabel ?? ""}" class "${(clicked?.className ?? "").slice(0, 40)}"`);
       const after = await waitForChange(tabId, before, descriptor);
-      if (tableSignature(activityOf(after)) !== before) {
+      const landed = tableSignature(activityOf(after));
+      if (pageChanged(landed, before)) {
         descriptor = after;
         advanced = true;
         break;
       }
-      // That control did nothing. Try the next candidate rather than
-      // concluding the statement ends here.
-      note(`  clicked candidate ${index}: the table did not change`);
+      // That control did nothing, or the page never finished loading. Try the
+      // next candidate rather than concluding the statement ends here.
+      note(`  clicked candidate ${index}: ${landed === "empty" ? "the next page never loaded" : "the table did not change"}`);
     }
     if (!advanced) {
       stopped = "no next page";
@@ -1440,7 +1443,9 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
     };
   }
 
-  const before = await inPage(tabId, readPageInPage, []);
+  // Not while the last page is still loading: a search typed into a page that
+  // is mid-render lands on nothing, and the late page is then read as ours.
+  const before = await waitForRows(tabId, await inPage(tabId, readPageInPage, []));
   const fromText = formatForField(range.from, fields.from);
   const toText = formatForField(range.to, fields.to);
   const filled = await inPage(tabId, fillDatesInPage, [
@@ -1454,7 +1459,7 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   // date picker can rewrite or reject what was typed.
   await new Promise((resolve) => setTimeout(resolve, 300));
   const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
-  note(`  fields now read "${fromNow}" and "${toNow}"${fromNow === fromText && toNow === toText ? "" : "  <-- NOT WHAT WAS TYPED"}`);
+  note(`  fields now read "${fromNow}" and "${toNow}"${sameDate(fromNow, fromText) && sameDate(toNow, toText) ? "" : "  <-- NOT WHAT WAS TYPED"}`);
   const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
   note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
   if (!clicked) {
@@ -1494,20 +1499,57 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   return { ...(await sendTolls(page)), ...seen };
 }
 
-/** Re-read until the table changes, or long enough to be sure it will not. */
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Re-read until the table changes to something with rows, or long enough to be
+ * sure it will not.
+ *
+ * An empty table is not a change. E-ZPass swaps the table for nothing while the
+ * next page loads, and treating that as "the next page" made paging stop at
+ * page one with "the next page was empty" — and the real page two then arrived
+ * during the following date window and was counted as its rows.
+ */
 async function waitForChange(
   tabId: number,
   before: string,
-  fallback: PageDescriptor
+  fallback: PageDescriptor,
+  maxMs = 15000
 ): Promise<PageDescriptor> {
-  for (let attempt = 0; attempt < 20; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 400));
+  const started = Date.now();
+  let sawLoading = false;
+  while (Date.now() - started < maxMs) {
+    await sleep(400);
     const descriptor = await inPage(tabId, readPageInPage, []);
-    if (tableSignature(activityOf(descriptor)) !== before) return descriptor;
+    const signature = tableSignature(activityOf(descriptor));
     fallback = descriptor;
+    if (signature === "empty") sawLoading = true;
+    if (pageChanged(signature, before)) {
+      if (sawLoading) note(`  table was empty while loading; rows back after ${Date.now() - started}ms`);
+      return descriptor;
+    }
   }
-  note("  waited 8s and the table never changed");
+  note(
+    `  waited ${Math.round((Date.now() - started) / 1000)}s and the table never changed` +
+      (sawLoading ? " (it was empty for part of that)" : "")
+  );
   return fallback;
+}
+
+/** Wait for a table with rows to be on the page; used before touching the form. */
+async function waitForRows(tabId: number, current: PageDescriptor, maxMs = 12000): Promise<PageDescriptor> {
+  if (activityOf(current)?.rows.length) return current;
+  const started = Date.now();
+  while (Date.now() - started < maxMs) {
+    await sleep(400);
+    const descriptor = await inPage(tabId, readPageInPage, []);
+    if (activityOf(descriptor)?.rows.length) {
+      note(`  waited ${Date.now() - started}ms for the table to be there before starting`);
+      return descriptor;
+    }
+  }
+  note(`  no table with rows after ${Math.round(maxMs / 1000)}s; starting anyway`);
+  return current;
 }
 
 // ---------------------------------------------------------------------------

@@ -349,6 +349,17 @@ export function tableSignature(table: ScrapedTable | null): string {
   return `${table.rows.length}#${first}#${last}`;
 }
 
+/**
+ * Whether a re-read table is a new page rather than the old one or a gap.
+ *
+ * "empty" is the table gone while the next page loads, and it differs from
+ * every real signature — so a plain inequality called it a page. That is how
+ * paging stopped at page one on E-ZPass with "the next page was empty".
+ */
+export function pageChanged(signature: string, before: string): boolean {
+  return signature !== "empty" && signature !== before;
+}
+
 /** Beyond this many pages something is wrong, and it is not worth finding out
  * by clicking three hundred times on somebody's tolling account. */
 export const MAX_PAGES = 40;
@@ -531,6 +542,20 @@ export function parseSiteDate(text: string): string | null {
   const year = match[3].length === 2 ? 2000 + Number(match[3]) : Number(match[3]);
   const pad = (n: number): string => String(n).padStart(2, "0");
   return `${year}-${pad(Number(match[1]))}-${pad(Number(match[2]))}`;
+}
+
+/**
+ * Whether a field holds the date that was typed into it.
+ *
+ * Compared as dates, not as text: E-ZPass's field is a masked date component
+ * that rewrites "07/08/26" as "7‎/8‎/26" with invisible left-to-right marks
+ * between the parts. That is the same date, and reporting it as a mismatch
+ * sent a whole debugging round after the wrong thing.
+ */
+export function sameDate(read: string, typed: string): boolean {
+  const clean = (value: string): string => value.replace(/[\u200e\u200f\u202a-\u202e]/g, "");
+  const a = parseSiteDate(clean(read));
+  return a !== null && a === parseSiteDate(clean(typed));
 }
 
 export interface DateCoverage {

@@ -1,8 +1,9 @@
 """Tests for a rental's route and where its tolls go on it.
 
-The placement is an estimate — even speed within one drive — so what is
-tested hard is that it is on the right drive, at the right end of it, and that
-nothing is placed where nothing honest can say.
+A toll goes at its plaza or nowhere. The route never moves a marker; it only
+flags a plaza the car never came near, so what is tested hard is that the
+check measures to the track's legs (not its sampled fixes) and that nothing is
+placed where the app does not know the plaza.
 """
 
 from __future__ import annotations

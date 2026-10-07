@@ -515,6 +515,13 @@ class Trip(Base):
     # the rest, and keeping it means a new question about a rental does not
     # need a new pull to answer.
     turo_detail: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    # The trip's photos (check-in, check-out, trip) and its message thread, as
+    # Turo's reservation page fetches them. Lists, kept whole for the trip
+    # view; `extras_synced_at` says when, so a finished trip is not re-read on
+    # every pull.
+    turo_photos: Mapped[list[object] | None] = mapped_column(JSONB)
+    turo_messages: Mapped[list[object] | None] = mapped_column(JSONB)
+    extras_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 

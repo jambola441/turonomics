@@ -414,6 +414,7 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
         : `the API said ${response.status}`;
     throw new Error(detail);
   }
+  const extrasRead = await readExtras(tabId, wanted, apiBase, tollsToken);
   const invoices = await pullInvoices(
     tabId,
     wanted,
@@ -426,11 +427,57 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
     asked: wanted.reservations.length,
     failed,
     discovered,
+    extras_read: extrasRead,
     ...(invoices ? { invoices } : {}),
   };
 }
 
 const LIST_PAGE_SIZE = 50;
+const EXTRAS_BATCH = 10;
+
+/**
+ * Each wanted trip's photos and message thread, posted in batches for the
+ * trip view. A fetch Turo refuses goes up as null, which the API does not
+ * store over what it had: "Turo did not answer" is not "no photos".
+ */
+async function readExtras(
+  tabId: number,
+  wanted: TuroWanted,
+  apiBase: string,
+  tollsToken: string | undefined
+): Promise<number> {
+  if (!wanted.extras?.length || !wanted.photos_path || !wanted.messages_path) return 0;
+  let stored = 0;
+  let batch: { reservation_id: string; photos: unknown; messages: unknown }[] = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const response = await fetch(`${apiBase}/api/turo/extras`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+      },
+      body: JSON.stringify({ items: batch }),
+    });
+    if (!response.ok) throw new Error(`the API said ${response.status} to the photos`);
+    stored += ((await response.json()) as { stored: number }).stored;
+    batch = [];
+  };
+  for (const id of wanted.extras) {
+    if (!/^\d+$/.test(id)) continue;
+    const photos = await inPage(
+      tabId, fetchJsonInPage, [wanted.photos_path.replace("{id}", id)], 12, "MAIN"
+    );
+    const messages = await inPage(
+      tabId, fetchJsonInPage, [wanted.messages_path.replace("{id}", id)], 12, "MAIN"
+    );
+    batch.push({ reservation_id: id, photos, messages });
+    if (batch.length >= EXTRAS_BATCH) await flush();
+    await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+  }
+  await flush();
+  return stored;
+}
 
 /**
  * Read Turo's own lists of the account's reservations, page by page, and let

@@ -564,6 +564,10 @@ def main() -> int:
                   page.locator(".view a", has_text="Reservation on Turo").count() == 1)
             check("and everything Turo said, folded away",
                   page.locator(".view details.raw").count() == 1)
+            check("its photos are counted by step",
+                  "Guest check-in" in view and "12 photos by the guest" in view)
+            check("and its messages read as a thread",
+                  "Welcome! Keys are in the box." in view and "Returned, thanks [2 photos]" in view)
             check("a rental to bill can be filed from its view",
                   page.locator(".view .btn.go").count() == 1
                   and "$11.00" in page.locator(".view .btn.go").inner_text())

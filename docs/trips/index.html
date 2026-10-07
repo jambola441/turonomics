@@ -95,6 +95,12 @@
   pre{font-family:var(--mono);font-size:10.5px;line-height:1.45;white-space:pre-wrap;
       word-break:break-word;max-height:420px;overflow:auto;background:var(--surface2);
       border-radius:var(--u-radius-md);padding:10px;margin-top:8px}
+  .thread{display:flex;flex-direction:column;gap:6px;max-height:420px;overflow:auto}
+  .msg{border:1px solid var(--line);border-radius:var(--u-radius-md);padding:7px 9px;
+       max-width:88%;font-size:12.5px;line-height:1.45}
+  .msg.host{align-self:flex-end;background:var(--surface2)}
+  .msg-who{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:2px}
+  .msg-text{white-space:pre-wrap;word-break:break-word}
   details.raw summary{cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:14px}
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px}
 </style>
@@ -386,6 +392,45 @@
       });
     } else {
       add(box, "div", "quiet", "None on the imported statements.");
+    }
+
+    // Photos are counted rather than shown: Turo's list gives each one's id,
+    // not an image address.
+    add(box, "h2", null, "Photos");
+    if (view.photos == null) {
+      add(box, "div", "quiet", off(trip) ? "Arranged outside Turo." :
+          "Not read from Turo yet — the next pull reads them.");
+    } else if (!view.photos.length) {
+      add(box, "div", "quiet", "None on Turo.");
+    } else {
+      var STEP = { OWNER_CHECK_IN: "Host check-in", RENTER_CHECK_IN: "Guest check-in",
+                   TRIP_PHOTO: "During the trip", RENTER_CHECK_OUT: "Guest check-out",
+                   OWNER_CHECK_OUT: "Host check-out" };
+      var pd = add(box, "dl", "facts");
+      view.photos.forEach(function (g) {
+        add(pd, "dt", null, STEP[g.step] || g.step);
+        add(pd, "dd", null, g.count + (g.count === 1 ? " photo" : " photos") +
+            (g.by ? " by the " + g.by.toLowerCase() : "") +
+            (g.first ? " · " + when(g.first, true) +
+              (g.last && g.last !== g.first ? " – " + when(g.last, true) : "") : ""));
+      });
+    }
+
+    add(box, "h2", null, "Messages");
+    if (view.messages == null) {
+      add(box, "div", "quiet", off(trip) ? "Arranged outside Turo." :
+          "Not read from Turo yet — the next pull reads them.");
+    } else if (!view.messages.length) {
+      add(box, "div", "quiet", "No messages.");
+    } else {
+      var log = add(box, "div", "thread");
+      view.messages.forEach(function (m) {
+        var item = add(log, "div", "msg" + (m.role === "HOST" ? " host" : ""));
+        add(item, "div", "msg-who", (m.name || (m.role === "HOST" ? "Host" : "Guest")) +
+            (m.sent_at ? " · " + when(m.sent_at, true) : ""));
+        add(item, "div", "msg-text", (m.text || "") +
+            (m.images ? (m.text ? " " : "") + "[" + m.images + (m.images === 1 ? " photo]" : " photos]") : ""));
+      });
     }
 
     if (view.commands && view.commands.length) {

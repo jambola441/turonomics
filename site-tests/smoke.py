@@ -576,6 +576,8 @@ def main() -> int:
             route_note = trip_card.locator(".view").inner_text()
             check("and the map says where the route came from and what it could not place",
                   "Route from Bouncie" in route_note and "1 toll not placed" in route_note)
+            check("it says which tolls sit at their plaza, and flags a plaza that disagrees",
+                  "1 at the plaza" in route_note and "disagrees with the track" in route_note)
             check("a rental to bill can be filed from its view",
                   page.locator(".view .btn.go").count() == 1
                   and "$11.00" in page.locator(".view .btn.go").inner_text())

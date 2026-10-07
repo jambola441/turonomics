@@ -187,6 +187,11 @@
     if (year) opts.year = "numeric";
     return d.toLocaleString("en-US", opts);
   }
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"']/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
+    });
+  }
   function fail(message) { var box = el("err"); box.textContent = message; box.hidden = false; }
 
   function token() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
@@ -502,14 +507,25 @@
         .addTo(map);
       bounds = bounds.concat(d.points);
     });
+    var HOW = {
+      plaza: "at the plaza",
+      route: "where the car was at that moment (an estimate along the road)",
+      zone: "the middle of the charging zone"
+    };
     placed.forEach(function (toll) {
-      var exact = toll.how === "route";
+      var solid = toll.how === "plaza";
+      var flagged = toll.off_route_km != null;
       L.circleMarker([toll.lat, toll.lon], {
-        radius: 7, color: "#b45309", weight: 2, fillColor: "#f59e0b",
-        fillOpacity: exact ? 0.9 : 0.35, dashArray: exact ? null : "3 3"
-      }).bindPopup(toll.plaza + " · " + money(toll.amount_cents) + "<br>" +
-                   when(toll.occurred_at, true) + "<br>" +
-                   (exact ? "where the car was at that moment" : "plaza's approximate position"))
+        radius: 7, color: flagged ? "#b91c1c" : "#b45309", weight: 2,
+        fillColor: flagged ? "#ef4444" : "#f59e0b",
+        fillOpacity: solid ? 0.9 : 0.4, dashArray: toll.how === "zone" ? "3 3" : null
+      }).bindPopup(
+        "<b>" + escapeHtml(toll.name || toll.plaza) + "</b> · " + money(toll.amount_cents) +
+        "<br>" + when(toll.occurred_at, true) + "<br>" + HOW[toll.how] +
+        (flagged ? "<br><b>The plaza on file is " + toll.off_route_km +
+          " km from where the car was — check the code.</b>" : "") +
+        (toll.source ? '<br><a href="' + escapeHtml(toll.source) +
+          '" target="_blank" rel="noopener">where this position comes from</a>' : ""))
         .addTo(map);
       bounds.push([toll.lat, toll.lon]);
     });
@@ -519,7 +535,12 @@
     var said = [];
     if (m.route_source === "bouncie") said.push("Route from Bouncie");
     else if (m.route_source === "telemetry") said.push("Route from the tracker's stored positions");
-    if (placed.length) said.push("tolls placed where the car was when charged — an estimate along the road");
+    var atPlaza = placed.filter(function (t) { return t.how === "plaza"; }).length;
+    var onTrack = placed.filter(function (t) { return t.how === "route"; }).length;
+    var odd = placed.filter(function (t) { return t.off_route_km != null; }).length;
+    if (atPlaza) said.push(atPlaza + " at the plaza");
+    if (onTrack) said.push(onTrack + " on the car's track at that moment");
+    if (odd) said.push(odd + " where the plaza on file disagrees with the track — shown in red");
     if (unplaced) said.push(unplaced + " toll" + (unplaced === 1 ? "" : "s") + " not placed");
     if (m.note) said.push(m.note);
     add(box, "div", "quiet", said.join(" · ") + ".");

@@ -212,6 +212,11 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
   }
   // "stopped at 40 pages" means rows may be missing, which has to reach the
   // operator rather than looking like a clean read.
+  // A window whose rows are not in its dates means the filter did nothing, and
+  // every row then reads as already known — the read looks complete and is not.
+  for (const w of result.windows ?? []) {
+    if (w.outside) parts.push(`⚠ ${w.from} to ${w.to}: ${w.outside} rows outside it (saw ${w.span})`);
+  }
   const ranges = result.windows ?? [{ from: "", to: "", pagingStopped: result.pagingStopped }];
   for (const w of ranges) {
     if (!/stopped at/.test(w.pagingStopped ?? "")) continue;

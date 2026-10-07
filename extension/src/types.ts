@@ -18,6 +18,9 @@ export interface ImportResult {
 }
 
 export interface SendTollsResult {
+  /** Per window only: rows dated outside it, and the span actually seen. */
+  outside?: number;
+  span?: string;
   /**
    * What the run did, step by step, with account data masked. Always present on
    * a read made a window at a time; the popup shows it so it can be pasted into

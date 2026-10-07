@@ -14,6 +14,7 @@
 
 import {
   chooseStatement,
+  dateCoverage,
   describeForm,
   describeShape,
   formatForField,
@@ -445,6 +446,11 @@ function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, 
     return true;
   };
   return set(fromIndex, fromValue) && set(toIndex, toValue);
+}
+
+function readValuesInPage(indices: number[]): string[] {
+  const inputs = Array.from(document.querySelectorAll("input"));
+  return indices.map((i) => inputs[i]?.value ?? "<missing>");
 }
 
 function clickSubmitInPage(index: number): boolean {
@@ -1249,6 +1255,8 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
     let advanced = false;
     for (const index of ranked) {
       if (!(await inPage(tabId, clickControlInPage, [index]))) continue;
+      const clicked = descriptor.nextControls[index];
+      note(`  clicked next candidate ${index}: text "${clicked?.text.slice(0, 30)}" aria "${clicked?.ariaLabel ?? ""}" class "${(clicked?.className ?? "").slice(0, 40)}"`);
       const after = await waitForChange(tabId, before, descriptor);
       if (tableSignature(activityOf(after)) !== before) {
         descriptor = after;
@@ -1355,6 +1363,8 @@ async function sendStatementTraced(tabId: number): Promise<SendTollsResult> {
       pagesRead: sent.pagesRead,
       pagingStopped: sent.pagingStopped,
       problem: sent.problem,
+      outside: sent.outside,
+      span: sent.span,
     };
     windows.push(report);
     firstReport ??= sent.report;
@@ -1412,6 +1422,11 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
     toText,
   ]);
   note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${filled ? "ok" : "FAILED"}`);
+  // What the fields hold once the page has had a moment to react: a mask or a
+  // date picker can rewrite or reject what was typed.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
+  note(`  fields now read "${fromNow}" and "${toNow}"${fromNow === fromText && toNow === toText ? "" : "  <-- NOT WHAT WAS TYPED"}`);
   const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
   note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
   if (!clicked) {
@@ -1426,6 +1441,16 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   );
   const page = await pageThrough(tabId, after);
   const table = page.merged;
+  const coverage = dateCoverage(table ?? null, range);
+  note(
+    `  rows dated ${coverage.first ?? "?"} to ${coverage.last ?? "?"}` +
+      `, ${coverage.outside} outside ${range.from}..${range.to}, ${coverage.undated} undated of ${coverage.total}` +
+      (coverage.outside ? "  <-- THE DATE FILTER DID NOT TAKE" : "")
+  );
+  const seen = {
+    outside: coverage.outside,
+    span: `${coverage.first ?? "?"} to ${coverage.last ?? "?"}`,
+  };
   if (!table || !usableRows(table).length) {
     // Three months with no crossings is ordinary, not an error.
     return {
@@ -1435,9 +1460,10 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
       pagesRead: page.pagesRead,
       pagingStopped: page.pagingStopped,
       report: describeShape(page),
+      ...seen,
     };
   }
-  return sendTolls(page);
+  return { ...(await sendTolls(page)), ...seen };
 }
 
 /** Re-read until the table changes, or long enough to be sure it will not. */

@@ -164,6 +164,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.13.1 | build + reload | date fields get the year width they ask for (MM/DD/YY); the run log checks the rows really fall in each window |
 | 1.13.0 | build + reload | Send tolls reads the last 12 months in three-month date windows, paging each and posting it as it goes |
 | 1.12.0 | build + reload | Pull reads each trip's photos and message thread for the trip view |
 | 1.11.0 | build + reload | Pull finds every reservation on the account from Turo's own trip lists, not only the ones the mail mentioned |

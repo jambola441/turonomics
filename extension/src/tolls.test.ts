@@ -23,11 +23,13 @@ import {
   dateCoverage,
   describeForm,
   parseSiteDate,
+  sameDate,
   describeShape,
   formatForField,
   MAX_PAGES,
   maskValue,
   mergeActivityPages,
+  pageChanged,
   pickActivityTable,
   pickDateFields,
   pickPageSize,
@@ -654,4 +656,31 @@ test("a search that ignored its dates shows up as rows outside the window", () =
     rows: [["a", "10/1/25", "$-1.00"], ["b", "11/1/25", "$-1.00"]],
   };
   assert.equal(dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" }).outside, 2);
+});
+
+test("a masked field's rewrite of a date is still that date", () => {
+  // Straight from a real log: typed "07/08/26", read back "7<LRM>/8<LRM>/26".
+  assert.equal(sameDate("7\u200e/8\u200e/26", "07/08/26"), true);
+  assert.equal(sameDate("10/7\u200e/26", "10/07/26"), true);
+});
+
+test("a different date, or an empty field, is not the same", () => {
+  assert.equal(sameDate("7\u200e/9\u200e/26", "07/08/26"), false);
+  assert.equal(sameDate("", "07/08/26"), false);
+  assert.equal(sameDate("<missing>", "07/08/26"), false);
+});
+
+test("a table that vanished while the next page loads is not a new page", () => {
+  // The real bug: E-ZPass empties the table during the load, "empty" differs
+  // from every signature, and paging stopped at page one.
+  assert.equal(pageChanged("empty", "96#a#b"), false);
+});
+
+test("the same table is not a new page, a different one is", () => {
+  assert.equal(pageChanged("96#a#b", "96#a#b"), false);
+  assert.equal(pageChanged("90#c#d", "96#a#b"), true);
+});
+
+test("a table appearing after an empty one is a page", () => {
+  assert.equal(pageChanged("90#c#d", "empty"), true);
 });

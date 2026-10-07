@@ -48,6 +48,8 @@ import {
   invoicesToRead,
   reimbursementRequestPath,
   summariseCalls,
+  EZPASS_SUMMARY,
+  type SummaryOptions,
   type Embedded,
   type SeenCall,
 } from "./turo.js";
@@ -1052,11 +1054,12 @@ async function watchTuro(tabId: number): Promise<void> {
   // seconds and uninstalls, which is right for "what does this page load" and
   // useless for "what happens when I submit this form" — the submit is minutes
   // away, long after it has stopped listening.
-  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  const target = await hookTarget(tabId);
+  await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   await chrome.scripting.registerContentScripts([
     {
-      id: HOOK_ID,
-      matches: ["https://turo.com/*"],
+      id: target.id,
+      matches: target.matches,
       js: ["dist/turo-hook.js"],
       runAt: "document_start",
       world: "MAIN",
@@ -1071,6 +1074,7 @@ async function watchTuro(tabId: number): Promise<void> {
 
 /** Collect what the watch recorded, without reloading away the page. */
 async function reportWatch(tabId: number): Promise<string> {
+  const target = await hookTarget(tabId);
   try {
     const calls = await inPage(tabId, () => {
       const w = window as Window & { __turonomicsCalls?: unknown[] };
@@ -1078,19 +1082,20 @@ async function reportWatch(tabId: number): Promise<string> {
     }, [], 12, "MAIN");
     return [
       "=== what it fetched ===",
-      summariseCalls(calls),
+      summariseCalls(calls, target.summary),
     ].join("\n");
   } finally {
-    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+    await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   }
 }
 
 async function probeTuro(tabId: number): Promise<string> {
-  await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+  const target = await hookTarget(tabId);
+  await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   await chrome.scripting.registerContentScripts([
     {
-      id: HOOK_ID,
-      matches: ["https://turo.com/*"],
+      id: target.id,
+      matches: target.matches,
       js: ["dist/turo-hook.js"],
       runAt: "document_start",
       world: "MAIN",
@@ -1124,14 +1129,37 @@ async function probeTuro(tabId: number): Promise<string> {
     const embedded = await inPage(tabId, readEmbeddedInPage, [], 12, "MAIN");
     return [
       "=== what it fetched ===",
-      summariseCalls(calls),
+      summariseCalls(calls, target.summary),
       "",
       "=== what the document carries ===",
       describeEmbedded(embedded),
     ].join("\n");
   } finally {
-    await chrome.scripting.unregisterContentScripts({ ids: [HOOK_ID] }).catch(() => undefined);
+    await chrome.scripting.unregisterContentScripts({ ids: [target.id] }).catch(() => undefined);
   }
+}
+
+/**
+ * Which site a tab is on, and so which hook to install and how to report it.
+ * One recorder serves both: it wraps fetch and XHR and knows nothing of the
+ * host, and the report is where the host's own backend is told from analytics.
+ */
+interface HookTarget {
+  id: string;
+  matches: string[];
+  summary: SummaryOptions;
+}
+
+async function hookTarget(tabId: number): Promise<HookTarget> {
+  const tab = await chrome.tabs.get(tabId);
+  if ((tab.url ?? "").includes("e-zpassny.com")) {
+    return {
+      id: "turonomics-ezpass-hook",
+      matches: ["https://*.e-zpassny.com/*"],
+      summary: EZPASS_SUMMARY,
+    };
+  }
+  return { id: HOOK_ID, matches: ["https://turo.com/*"], summary: {} };
 }
 
 const HOOK_ID = "turonomics-turo-hook";

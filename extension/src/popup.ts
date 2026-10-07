@@ -341,8 +341,8 @@ probeBtn.addEventListener("click", async () => {
   probeNoteEl.classList.remove("hidden");
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
-      showStatus("Open a Turo page first — a trip, or an invoice.", true);
+    if (!tab?.id || !isProbeable(tab.url)) {
+      showStatus("Open a Turo page (a trip, an invoice) or the E-ZPass activity page first.", true);
       return;
     }
     showStatus("Reloading and watching what it fetches...");
@@ -388,14 +388,18 @@ fileBtn.addEventListener("click", async () => {
 const watchBtn = document.getElementById("watchBtn") as HTMLButtonElement;
 const reportBtn = document.getElementById("reportBtn") as HTMLButtonElement;
 
-/** The Turo tab, or a message saying to open one. */
+/** The Turo or E-ZPass tab, or a message saying to open one. */
 async function turoTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
-    showStatus("Open a Turo page first.", true);
+  if (!tab?.id || !isProbeable(tab.url)) {
+    showStatus("Open a Turo or E-ZPass page first.", true);
     return null;
   }
   return tab;
+}
+
+function isProbeable(url: string | undefined): boolean {
+  return !!url && (url.startsWith("https://turo.com/") || url.includes("e-zpassny.com"));
 }
 
 watchBtn.addEventListener("click", async () => {

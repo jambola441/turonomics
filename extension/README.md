@@ -68,6 +68,22 @@ rows each page had, why paging stopped, and what the API said per window. Tag
 numbers, plates and amounts never go in it — rows appear only as masked shapes
 like `###|aa aaa####|$-#.##` — so it can be pasted as is.
 
+### Finding the page's own API
+
+If the date search does not behave, the probe buttons work on the E-ZPass
+activity page too, and can show what the page itself calls when you press
+Filter — which may be a JSON endpoint worth using instead of driving the form:
+
+1. On the activity page: **Watch while I do something** (it reloads the tab).
+2. Type a date range and press **Filter** on the page.
+3. **Stop and report what it saw**, then **Copy**.
+
+The report lists each request the page made to e-zpassny.com with its route,
+which query parameters it used and how each value is *written* (`us-date(##/##/##)`
+— the format, never the date), and the shape of any request body and response. No
+cookies or headers are recorded, and every value is masked, so it is safe to
+paste.
+
 ### If it cannot find the activity
 
 The popup shows a **What was on the page** report naming each table's columns
@@ -164,6 +180,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.14.0 | build + reload | the Turo probe buttons also work on the E-ZPass activity page, and show how its date search is requested |
 | 1.13.1 | build + reload | date fields get the year width they ask for (MM/DD/YY); the run log checks the rows really fall in each window |
 | 1.13.0 | build + reload | Send tolls reads the last 12 months in three-month date windows, paging each and posting it as it goes |
 | 1.12.0 | build + reload | Pull reads each trip's photos and message thread for the trip view |

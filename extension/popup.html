@@ -39,7 +39,7 @@
       <hr />
 
       <section>
-        <p class="subtitle">On any Turo page — trips, or an invoice</p>
+        <p class="subtitle">On any Turo page — trips, or an invoice — or the E-ZPass activity page</p>
         <!-- The trip scraper matches on emotion class names and reads dates
              with no year in them. Turo's pages get their data as JSON; this
              finds out from where. The report names the shape of each payload
@@ -56,6 +56,10 @@
         <!-- For capturing something that happens later, like filing an
              invoice: start the watch, do the thing, then report. The one-shot
              button above reloads and stops listening after a few seconds. -->
+        <!-- On E-ZPass: press this, set the dates and press Filter on the page,
+             then press the report button. The report shows the request the
+             page made for that search — its route, which parameters carry the
+             dates and how they are written — with every value masked. -->
         <button id="watchBtn" class="btn btn-quiet">Watch while I do something</button>
         <button id="reportBtn" class="btn btn-quiet">Stop and report what it saw</button>
         <div id="probeNote" class="result hidden">

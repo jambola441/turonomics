@@ -49,11 +49,16 @@ const MAX_ENUM_LENGTH = 64;
 // "<file image/png 92579 bytes>", the one field written to describe it.
 const OWN_DESCRIPTOR = /^<[a-z]+[^<>]*>$/;
 
+const US_DATE = /^\d{1,2}\/\d{1,2}\/(?:\d{2}|\d{4})$/;
+
 export function stringShape(value: string): string {
   if (value === "") return "str(0)";
   if (OWN_DESCRIPTOR.test(value)) return value;
   if (ISO_DATETIME.test(value)) return "iso-datetime";
   if (ISO_DATE.test(value)) return "iso-date";
+  // A slash date, with its width: whether a field wants a two- or four-digit
+  // year is the whole question for E-ZPass, and "str(8)" cannot answer it.
+  if (US_DATE.test(value)) return `us-date(${value.replace(/\d/g, "#")})`;
   if (MONEY.test(value)) return "money";
   if (UUID.test(value)) return "uuid";
   if (DIGITS.test(value)) return `digits(${value.length})`;
@@ -89,7 +94,12 @@ function placed(segment: string, page: string | undefined): string | null {
   return inPage ? `<digits(${segment.length})=the one in the page url>` : null;
 }
 
-export function urlShape(raw: string, base = "https://turo.com/", page?: string): string {
+export function urlShape(
+  raw: string,
+  base = "https://turo.com/",
+  page?: string,
+  queryValues = false
+): string {
   let url: URL;
   try {
     url = new URL(raw, base);
@@ -111,7 +121,12 @@ export function urlShape(raw: string, base = "https://turo.com/", page?: string)
     )
     .join("/");
   const keys = [...new Set([...url.searchParams.keys()])].sort();
-  const query = keys.length ? `?${keys.join("&")}` : "";
+  // Names only by default. With `queryValues`, each value's shape too — never
+  // the value: a date reads `us-date(##/##/##)`, which is what shows how a
+  // range is asked for, and a token reads `str(32)`.
+  const query = keys.length
+    ? `?${keys.map((key) => (queryValues ? `${key}=${stringShape(url.searchParams.get(key) ?? "")}` : key)).join("&")}`
+    : "";
   return `${url.origin}/${path}${query}`;
 }
 
@@ -199,7 +214,8 @@ const ANALYTICS =
 export function interestingCall(
   url: string,
   base = "https://turo.com/",
-  method = "GET"
+  method = "GET",
+  firstParty: RegExp = FIRST_PARTY
 ): boolean {
   let parsed: URL;
   try {
@@ -218,7 +234,7 @@ export function interestingCall(
   // guessed in advance and the analytics vendors can: they are the ones
   // already seen beaconing from these pages.
   if (method.toUpperCase() !== "GET") return !ANALYTICS.test(parsed.hostname);
-  if (!FIRST_PARTY.test(parsed.hostname)) return false;
+  if (!firstParty.test(parsed.hostname)) return false;
   if (FIRST_PARTY_NOISE.test(parsed.pathname)) return false;
   return !ASSET.test(parsed.pathname);
 }
@@ -229,16 +245,32 @@ export function interestingCall(
  * Deduplicated by method and route, because a list page fetches the same
  * endpoint once per card and the question is which *endpoints* exist.
  */
-export function summariseCalls(calls: SeenCall[]): string {
+export interface SummaryOptions {
+  base?: string;
+  /** The host whose own backend is the interesting one. */
+  firstParty?: RegExp;
+  /** Show the shape of each query value, not only its name. */
+  queryValues?: boolean;
+}
+
+/** The same report for E-ZPass: its host, and query values shaped. */
+export const EZPASS_SUMMARY: SummaryOptions = {
+  base: "https://www.e-zpassny.com/",
+  firstParty: /^(?:[a-z0-9-]+\.)*e-zpassny\.com$/i,
+  queryValues: true,
+};
+
+export function summariseCalls(calls: SeenCall[], options: SummaryOptions = {}): string {
+  const base = options.base ?? "https://turo.com/";
   const interesting = calls.filter((call) =>
-    interestingCall(call.url, "https://turo.com/", call.method)
+    interestingCall(call.url, base, call.method, options.firstParty)
   );
   if (interesting.length === 0) {
     return `no data calls seen (${calls.length} request(s) in total)`;
   }
   const byRoute = new Map<string, SeenCall>();
   for (const call of interesting) {
-    const key = `${call.method} ${urlShape(call.url, "https://turo.com/", call.page)}`;
+    const key = `${call.method} ${urlShape(call.url, base, call.page, options.queryValues)}`;
     // Keep the first that actually carried a body: a 204 or a failed retry on
     // the same route says nothing about the payload.
     const existing = byRoute.get(key);

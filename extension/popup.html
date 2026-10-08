@@ -78,6 +78,10 @@
         <summary>Settings</summary>
         <label for="apiBase">API</label>
         <input id="apiBase" type="url" placeholder="https://turonomics.onrender.com" />
+        <label for="tollsMonths">E-ZPass months to read</label>
+        <!-- 3 is one date window. Raise it once to backfill, then put it back:
+             every extra window is more requests to a site that rate-limits. -->
+        <input id="tollsMonths" type="number" min="1" max="36" placeholder="3" />
         <label for="tollsToken">Tolls token</label>
         <!-- TOLLS_TOKEN on the API service. Stored in extension storage rather
              than typed per upload; blank is fine when the API has none set. -->

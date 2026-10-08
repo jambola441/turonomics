@@ -124,6 +124,7 @@ const tollsReportEl = document.getElementById("tollsReport") as HTMLPreElement;
 
 const apiBaseEl = document.getElementById("apiBase") as HTMLInputElement;
 const tollsTokenEl = document.getElementById("tollsToken") as HTMLInputElement;
+const tollsMonthsEl = document.getElementById("tollsMonths") as HTMLInputElement;
 const saveSettingsBtn = document.getElementById("saveSettings") as HTMLButtonElement;
 const settingsSavedEl = document.getElementById("settingsSaved") as HTMLDivElement;
 
@@ -276,7 +277,8 @@ tollsBtn.addEventListener("click", async () => {
 // Settings
 // ---------------------------------------------------------------------------
 void (async () => {
-  const stored = await chrome.storage.local.get(["apiBase", "tollsToken"]);
+  const stored = await chrome.storage.local.get(["apiBase", "tollsToken", "tollsMonths"]);
+  if (stored.tollsMonths) tollsMonthsEl.value = String(stored.tollsMonths);
   if (stored.apiBase) apiBaseEl.value = String(stored.apiBase);
   if (stored.tollsToken) tollsTokenEl.value = String(stored.tollsToken);
 })();
@@ -450,6 +452,11 @@ saveSettingsBtn.addEventListener("click", async () => {
     apiBase: apiBaseEl.value.trim(),
     tollsToken: tollsTokenEl.value.trim(),
   });
+  // Blank means "the default", which is the absence of the key — undefined
+  // would be dropped and leave the old number in place.
+  const months = Number(tollsMonthsEl.value);
+  if (months >= 1) await chrome.storage.local.set({ tollsMonths: Math.round(months) });
+  else await chrome.storage.local.remove("tollsMonths");
   settingsSavedEl.classList.remove("hidden");
   setTimeout(() => settingsSavedEl.classList.add("hidden"), 1500);
 });

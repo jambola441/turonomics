@@ -586,6 +586,21 @@ def main() -> int:
                   and "$11.00" in page.locator(".view .btn.go").inner_text())
             check("the trip view does not push the page sideways",
                   page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
+            check("the trips page says the extension is listening, by the File button too",
+                  "Extension listening" in page.locator("#ext").inner_text()
+                  and "files within seconds" in page.locator(".view .ext-file").inner_text())
+
+            # Chrome closed: the API last heard from the extension an hour ago.
+            asleep = {"commands": [], "extension_version": "1.14.1", "listening": False,
+                      "extension_seen_at": "2026-07-14T11:00:00+00:00", "token_required": True}
+            page.route("**/api/commands", lambda route: route.fulfill(
+                status=200, content_type="application/json", body=json.dumps(asleep)))
+            page.evaluate("window.dispatchEvent(new Event('focus'))")
+            page.wait_for_timeout(600)
+            check("and says so when it is asleep, before anything is queued",
+                  "Extension asleep" in page.locator("#ext").inner_text()
+                  and "not listening" in page.locator(".view .ext-file").inner_text())
+            page.unroute("**/api/commands")
 
             # Linked from the invoices ledger by its id, so it opens itself.
             page.goto(f"{SITE}/trips/?api={API}#eeee0000-0000-0000-0000-00000000000f",

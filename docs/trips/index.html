@@ -106,6 +106,11 @@
          margin-top:4px;background:var(--u-map, var(--surface2))}
   body.invert-tiles .route .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.9) saturate(.75)}
   details.raw summary{cursor:pointer;font-size:12.5px;color:var(--muted);margin-top:14px}
+  .ext{font-size:12px;color:var(--muted);margin-top:4px}
+  .ext::before{content:"";display:inline-block;width:7px;height:7px;border-radius:50%;
+               margin-right:6px;vertical-align:1px;background:var(--dim)}
+  .ext.on{color:var(--green)}
+  .ext.on::before{background:var(--green)}
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px}
 </style>
 </head>
@@ -117,6 +122,7 @@
       <div class="nav"><a href="../invoices/">Invoices</a><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
     </div>
     <div class="stamp" id="stamp">loading…</div>
+    <div class="ext" id="ext">looking for the extension…</div>
   </header>
 
   <div class="err" id="err" hidden></div>
@@ -359,6 +365,8 @@
       file.type = "button";
       file.style.marginTop = "10px";
       file.addEventListener("click", function () { queueFiling(trip, L); });
+      add(box, "div", "ext ext-file", "");
+      showExtension();
     } else if (view.held_because && L && L.unfiled_cents) {
       add(box, "div", "note", "Not offered for filing: " + view.held_because);
     }
@@ -544,10 +552,54 @@
     add(box, "div", "quiet", said.join(" · ") + ".");
   }
 
+  // -------------------------------------------------------------------------
+  // Whether the extension is there to act on a button here
+  // -------------------------------------------------------------------------
+
+  function ago(iso) {
+    var m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (m < 1) return "just now";
+    if (m < 90) return m + " min ago";
+    if (m < 48 * 60) return Math.round(m / 60) + " h ago";
+    return Math.round(m / 1440) + " days ago";
+  }
+
+  function showExtension() {
+    var x = state.ext;
+    var on = !!(x && x.listening);
+    var header = x === undefined ? "looking for the extension…"
+      : !x ? "Could not reach the API to ask about the extension." : on
+      ? "Extension listening" + (x.extension_version ? " (v" + x.extension_version + ")" : "") +
+        " — filing from here runs within seconds."
+      : x.extension_seen_at
+        ? "Extension asleep — last seen " + ago(x.extension_seen_at) +
+          ". Filing from here waits until Chrome wakes it."
+        : "No extension has checked in — filing from here needs it installed.";
+    var nearButton = x === undefined ? "" : on ? "The extension is listening: this files within seconds."
+      : "The extension is not listening right now: this is queued and files when Chrome " +
+        "next wakes it (open a Turo tab or the extension's popup).";
+    var top = el("ext");
+    top.className = "ext" + (on ? " on" : "");
+    top.textContent = header;
+    Array.prototype.forEach.call(document.querySelectorAll(".ext-file"), function (n) {
+      n.className = "ext ext-file" + (on ? " on" : "");
+      n.textContent = nearButton;
+    });
+  }
+
+  function watchExtension() {
+    fetch(API + "/api/commands", { headers: authHeaders() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .catch(function () { return null; })
+      .then(function (data) { state.ext = data; showExtension(); });
+  }
+
   function queueFiling(trip, row) {
+    var on = !!(state.ext && state.ext.listening);
     if (!window.confirm("File " + money(row.unfiled_cents) + " of tolls to " +
         (trip.guest_name || "this guest") + " on Turo?\n\nYour browser's extension files it, " +
-        "with the evidence sheet attached.")) return;
+        "with the evidence sheet attached." + (on ? "" :
+        "\n\nThe extension is not listening right now, so this waits until Chrome wakes it."))) return;
     authed("/api/commands", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -555,8 +607,10 @@
     })
       .then(json)
       .then(function () {
-        window.alert("Queued. The extension files it within a few seconds while Chrome is open; " +
-                     "the invoices page shows the result.");
+        window.alert(on
+          ? "Queued. The extension files it within a few seconds; the invoices page shows the result."
+          : "Queued. It files when the extension next wakes; the invoices page shows the result.");
+        watchExtension();
       })
       .catch(function (e) { fail("Could not queue that: " + e.message); });
   }
@@ -662,6 +716,11 @@
   }
   window.addEventListener("hashchange", openFromHash);
   load().then(openFromHash);
+  watchExtension();
+  // Often enough to notice Chrome waking or sleeping while the page is open.
+  setInterval(watchExtension, 15000);
+  // And at once on coming back to the tab, which is when the answer matters.
+  window.addEventListener("focus", watchExtension);
 })();
 </script>
 </body>

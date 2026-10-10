@@ -774,6 +774,44 @@ export function describeForm(
   return lines;
 }
 
+/**
+ * Every control that reads like a search button, disabled or not, for the log.
+ *
+ * `rankSubmitControls` drops a disabled button, which is right for choosing
+ * one and wrong for explaining why a search never ran: "Filter is disabled
+ * after typing the dates" and "there is no Filter button" are different
+ * problems, and the ranking alone cannot tell them apart.
+ */
+export function describeSubmitCandidates(controls: ControlDescriptor[]): string[] {
+  const lines: string[] = [];
+  controls.forEach((control, index) => {
+    const text = control.text.trim();
+    const label = (control.ariaLabel ?? "").trim();
+    if (!SUBMIT_TEXT.test(text) && !SUBMIT_TEXT.test(label) && !/filter|search/i.test(`${text} ${label}`)) {
+      return;
+    }
+    lines.push(
+      `    [${index}] text="${text.slice(0, 20)}" aria="${label.slice(0, 30)}" ` +
+        `disabled=${disabledLooking(control)} excluded=${NOT_SUBMIT.test(text) || NOT_SUBMIT.test(label)}`
+    );
+  });
+  return lines.length ? lines : ["    (nothing on the page reads like a search button)"];
+}
+
+/**
+ * Whether a search took, judged by what it returned.
+ *
+ * Rows dated outside the window mean the page is still showing some earlier
+ * range — a search that never ran leaves the previous window's last page up,
+ * and reading that as this window's data is what this exists to prevent. An
+ * empty result is a legitimate window, so it passes; the dates cannot speak.
+ */
+export function windowApplied(coverage: DateCoverage): boolean {
+  // Most rows, not any: a crossing posted a day outside the range is ordinary,
+  // while a search that never ran leaves the *whole* previous window up.
+  return coverage.outside * 2 < coverage.total || coverage.total === 0;
+}
+
 /** One window's outcome, for the popup to say what was and was not read. */
 export interface WindowReport {
   from: string;

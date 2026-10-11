@@ -29,13 +29,16 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Protocol
 
+import httpx
 from geoalchemy2.functions import ST_X, ST_Y
 from geoalchemy2.types import Geometry
 from sqlalchemy import cast, select
 from sqlalchemy.orm import Session
 
-from turonomics_api.db.models import TelemetryEvent
+from turonomics_api.bouncie.client import BouncieClient, BouncieError
+from turonomics_api.db.models import TelemetryEvent, Trip
 from turonomics_api.ingest.plazas import locate
+from turonomics_api.settings import toll_overrun_minutes
 
 log = logging.getLogger("turonomics.ingest.trip_map")
 
@@ -284,6 +287,9 @@ class Placed:
     # Set when the car's route never came within DISAGREE_KM of the plaza:
     # how close it got, in kilometres. The plaza is worth a second look.
     off_route_km: float | None = None
+    # The research's confidence in the point: high, medium or low. Carried so
+    # that something shown to a guest can refuse a plaza that was a guess.
+    confidence: str | None = None
 
 
 def place(plaza: str, route: Route, agency: str | None = None) -> Placed | None:
@@ -308,4 +314,39 @@ def place(plaza: str, route: Route, agency: str | None = None) -> Placed | None:
         name=found.name,
         source=found.source,
         off_route_km=off,
+        confidence=found.confidence,
     )
+
+
+# The route is read from a little before the booking to the end of the grace
+# the toll matcher allows, so a crossing on the way back is on the map too.
+MAP_BEFORE = timedelta(minutes=30)
+
+
+def trip_route(session: Session, trip: Trip) -> Route:
+    """A rental's route: Bouncie's drives, or the stored positions failing that.
+
+    Never raises for want of a tracker or a Bouncie that did not answer; the
+    reason goes in ``note``. A map is not worth an error page, and neither is
+    the evidence image for an invoice.
+    """
+    starts = trip.starts_at - MAP_BEFORE
+    ends = trip.ends_at + timedelta(minutes=toll_overrun_minutes())
+
+    route = Route()
+    imei = trip.vehicle.bouncie_imei if trip.vehicle else None
+    if imei:
+        try:
+            route = bouncie_route(BouncieClient(session), imei, starts=starts, ends=ends)
+        except (BouncieError, httpx.HTTPError, RuntimeError) as error:
+            route = Route(note=f"Bouncie did not answer ({error})")
+    if not route.drives:
+        fallback = telemetry_route(session, trip.vehicle_id, starts=starts, ends=ends)
+        if fallback.drives:
+            fallback.note = "; ".join(n for n in (route.note, fallback.note) if n)
+            route = fallback
+        elif route.source is None and not route.note:
+            route.note = (
+                "no tracker on this car" if not imei else "the tracker recorded no driving"
+            )
+    return route

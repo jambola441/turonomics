@@ -119,3 +119,14 @@ def api_client(session):
         yield TestClient(app)
     finally:
         app.dependency_overrides.pop(get_session, None)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_map_service(monkeypatch):
+    """No test asks OpenStreetMap for anything.
+
+    The evidence maps fetch roads when a toll invoice is drafted, and several
+    tests draft invoices. Left alone they would call a free public service from
+    every CI run. A test that wants roads patches this itself.
+    """
+    monkeypatch.setattr("turonomics_api.ingest.osm_roads.fetch_overpass", lambda *a: None)

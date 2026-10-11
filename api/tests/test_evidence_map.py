@@ -382,3 +382,49 @@ def test_a_draft_never_fails_for_want_of_a_picture(
     assert out.status_code == 200
     assert "tracker" not in out.json()["evidence_svg"]
     assert out.json()["total_cents"] == 1779
+
+
+def _roads_body() -> dict:
+    """A motorway running east-west through the plaza, as Overpass sends it."""
+    half = 0.02
+    return {"elements": [{
+        "type": "way", "id": 1,
+        "tags": {"highway": "motorway", "name": "Gowanus Expressway"},
+        "geometry": [{"lat": VNB.lat + 0.003, "lon": VNB.lon - half},
+                     {"lat": VNB.lat + 0.003, "lon": VNB.lon + half}],
+    }]}
+
+
+@requires_db
+def test_roads_reach_the_draft_the_extension_uploads(
+    api_client, session, car, rental, monkeypatch
+) -> None:
+    _crossing(session, car, rental)
+    _telemetry(session, car, rental, VNB.lat, VNB.lon)
+    session.commit()
+    monkeypatch.setattr("turonomics_api.ingest.osm_roads.fetch_overpass", lambda *a: _roads_body())
+
+    svg = api_client.get("/api/invoices/next-draft").json()["evidence_svg"]
+
+    minidom.parseString(svg)
+    assert "Roads: © OpenStreetMap contributors" in svg
+    assert "Gowanus Expwy" in svg
+
+
+@requires_db
+def test_a_road_service_that_is_down_leaves_the_tracker_maps_alone(
+    api_client, session, car, rental, monkeypatch
+) -> None:
+    """The roads are context. Without them the invoice carries exactly the
+    tracker insets it would have, and says nothing about OpenStreetMap."""
+    _crossing(session, car, rental)
+    _telemetry(session, car, rental, VNB.lat, VNB.lon)
+    session.commit()
+    monkeypatch.setattr("turonomics_api.ingest.osm_roads.fetch_overpass", lambda *a: None)
+
+    out = api_client.get("/api/invoices/next-draft")
+
+    assert out.status_code == 200
+    svg = out.json()["evidence_svg"]
+    assert "Where the car's tracker was near each plaza" in svg
+    assert "OpenStreetMap" not in svg

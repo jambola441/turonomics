@@ -234,7 +234,8 @@ TURO_TRIP = {"id": "11111111-1111-1111-1111-111111111111", "vehicle_nickname": "
              "guest_name": "Alice", "starts_at": "2026-07-09T11:00:00Z",
              "ends_at": "2026-07-12T18:00:00Z", "source": "email",
              "turo_trip_id": "58626257", "state": "completed",
-             "earnings_cents": None, "toll_count": 2}
+             "earnings_cents": None, "toll_count": 2,
+             "distance_over_mi": 156, "distance_unbilled_cents": 5460}
 
 
 def _trip_view(trip_id: str) -> dict | None:
@@ -253,6 +254,9 @@ def _trip_view(trip_id: str) -> dict | None:
                            {"label": "Trip price", "value": "$212.50"},
                            {"label": "Over the limit", "value": "156 mi"}],
             "turo_detail": {"statusCode": "COMPLETED", "protectionLevel": "PREMIUM"},
+            "distance": {"included_mi": 600, "driven_mi": 756, "over_mi": 156,
+                         "rate_cents": 35, "owed_cents": 5460, "invoiced_cents": 0,
+                         "unbilled_cents": 5460},
             "tolls": [
                 {"id": "t1", "occurred_at": "2026-07-10T15:15:00Z", "plaza": "BWB",
                  "amount_cents": 679, "filed_at": NOW.isoformat(), "recovered_at": None},

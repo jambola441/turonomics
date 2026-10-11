@@ -199,13 +199,19 @@ def list_tolls(
     session: DbSession,
     unrecovered_only: bool = False,
     limit: int = DEFAULT_LIMIT,
+    authorization: Annotated[str | None, Header()] = None,
 ) -> TollsResponse:
     """The ledger, newest first.
+
+    Behind the token, unlike most reads: every row carries the transponder or
+    plate it was billed to, and a transponder number identifies the tolling
+    account.
 
     Unattributed tolls are included rather than filtered out. One is either a
     crossing by a car outside this fleet or a transponder nobody has bound, and
     hiding it would turn a fixable gap into a silently smaller total.
     """
+    require_token(authorization)
     query = select(Toll).order_by(Toll.occurred_at.desc()).limit(min(limit, DEFAULT_LIMIT))
     if unrecovered_only:
         query = query.where(Toll.recovered_at.is_(None))

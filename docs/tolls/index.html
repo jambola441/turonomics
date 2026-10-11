@@ -499,12 +499,28 @@
     renderLedger(state.data);
   }
 
+  // The list is behind the token: each row names the transponder it was
+  // billed to. Tried with whatever token is saved, and once more after asking
+  // if the API refuses it.
+  function readTolls() {
+    var go = function () { return fetch(API + "/api/tolls", { headers: authHeaders() }); };
+    return go().then(function (r) {
+      if (r.status !== 401) return r;
+      rememberToken("");
+      var entered = window.prompt("The tolls list needs the tolls token (TOLLS_TOKEN).");
+      if (!entered) throw new Error("the token is needed to see the tolls");
+      rememberToken(entered.trim());
+      return go();
+    }).then(function (r) {
+      if (r.status === 401) { rememberToken(""); throw new Error("the token was rejected"); }
+      if (!r.ok) throw new Error("the API said " + r.status);
+      return r.json();
+    });
+  }
+
   function load() {
     return Promise.all([
-      fetch(API + "/api/tolls").then(function (r) {
-        if (!r.ok) throw new Error("the API said " + r.status);
-        return r.json();
-      }),
+      readTolls(),
       fetch(API + "/api/invoices/ledger")
         .then(function (r) { return r.ok ? r.json() : null; })
         .catch(function () { return null; })

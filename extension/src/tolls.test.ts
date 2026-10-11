@@ -22,7 +22,7 @@ import {
   cleanCell,
   dateCoverage,
   describeForm,
-  COOLDOWN_MS,
+  currentPageNumber,
   describePager,
   describeSubmitCandidates,
   windowApplied,
@@ -786,17 +786,33 @@ test("an ordinary activity page is not mistaken for a block", () => {
   assert.equal(looksBlocked("Account Activity Start Date End Date Filter 1-10 of 96 Rows per page"), null);
 });
 
-test("a run is refused straight after another, and says for how long", () => {
+test("there is no minimum gap between runs any more", () => {
   const now = 1_000_000_000;
-  assert.match(runGate(now, now - 60_000, null) ?? "", /wait 4 more minute/);
-  assert.equal(runGate(now, now - COOLDOWN_MS - 1, null), null);
-  assert.equal(runGate(now, null, null), null);
+  assert.equal(runGate(now, null), null);
 });
 
-test("a block pauses everything, whatever the cooldown says", () => {
+test("a block pauses everything", () => {
   const now = 1_000_000_000;
-  assert.match(runGate(now, null, now + 30 * 60_000) ?? "", /30 minute.*block or outage/);
-  assert.equal(runGate(now, null, now - 1), null, "expired");
+  assert.match(runGate(now, now + 30 * 60_000) ?? "", /30 minute.*block or outage/);
+  assert.equal(runGate(now, now - 1), null, "expired");
+});
+
+test("the pager's current page is the one labelled without 'Go to'", () => {
+  // From a real run: pages 1-3 are "Go to page N" and the one being shown is "page 4".
+  assert.equal(
+    currentPageNumber([
+      { text: "1", ariaLabel: "Go to page 1" },
+      { text: "2", ariaLabel: "Go to page 2" },
+      { text: "4", ariaLabel: "page 4" },
+    ]),
+    4
+  );
+  assert.equal(currentPageNumber([{ text: "1", ariaLabel: "page 1" }]), 1);
+});
+
+test("no current page marked is null, not page one", () => {
+  assert.equal(currentPageNumber([{ text: "2", ariaLabel: "Go to page 2" }]), null);
+  assert.equal(currentPageNumber([]), null);
 });
 
 // ---------------------------------------------------------------------------

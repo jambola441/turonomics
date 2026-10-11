@@ -68,8 +68,6 @@ script; a refusal is a reason to stop.
   read** under Settings once, then put it back.
 - **Paced.** 2 seconds before each click that makes the site fetch something and
   4 seconds between windows.
-- **Cooldown.** A run is refused if the last one was under 5 minutes ago, before
-  any request is made.
 - **Stops on a refusal.** If the table goes missing and the page's own words read
   like a block or an outage ("unusual activity", "temporarily unavailable",
   "access denied", …) it stops at once, makes no further requests, and pauses
@@ -198,6 +196,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.15.3 | build + reload | fixes 1.15.2 wiping the end date (it focused the field); refuses to search with a date the page rejects; checks the table is back on page 1; the 5-minute cooldown is gone |
 | 1.15.2 | build + reload | windows are 90 days, not calendar quarters (E-ZPass refused a 92-day one); the date search submits the form first, which is the method that worked; no wasted 8s waits |
 | 1.15.1 | build + reload | the date search is clicked after the dates are typed (it was chosen beforehand and could be a disabled or wrong control), verified by the rows returned, retried with Enter / form submit, and the run stops if it never applies |
 | 1.15.0 | build + reload | gentler on E-ZPass: one date window by default, paced clicks, a cooldown between runs, and a stop-and-pause-an-hour if the page reads like a block or outage |

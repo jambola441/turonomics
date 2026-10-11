@@ -19,6 +19,7 @@ import {
   BLOCK_PAUSE_MS,
   describePager,
   describeSubmitCandidates,
+  currentPageNumber,
   HISTORY_MONTHS,
   nextIsDisabled,
   looksBlocked,
@@ -470,16 +471,16 @@ function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, 
   const set = (index: number, value: string): boolean => {
     const input = inputs[index];
     if (!input) return false;
-    // Focus, set, blur: a date field that commits on blur needs a real one,
-    // and a dispatched "blur" event is not the same thing.
-    input.focus();
+    // No focus() and no real blur(): the masked date field treats a value set
+    // while focused as keystrokes and wipes it (the end date read back empty
+    // and invalid). Setting it unfocused and dispatching events is what worked.
     // The native setter, so a framework that wraps `value` still sees a change.
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     if (setter) setter.call(input, value);
     else input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.blur();
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
     return true;
   };
   return set(fromIndex, fromValue) && set(toIndex, toValue);
@@ -532,7 +533,12 @@ function chooseListboxOptionInPage(index: number): boolean {
   return true;
 }
 
-function readValuesInPage(indices: number[]): { value: string; invalid: boolean }[] {
+interface FieldState {
+  value: string;
+  invalid: boolean;
+}
+
+function readValuesInPage(indices: number[]): FieldState[] {
   const inputs = Array.from(document.querySelectorAll("input"));
   return indices.map((i) => ({
     value: inputs[i]?.value ?? "<missing>",
@@ -1528,17 +1534,15 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
  */
 async function sendStatement(tabId: number): Promise<SendTollsResult> {
   startTrace();
-  const stored = await chrome.storage.local.get(["tollsLastRun", "tollsBlockedUntil"]);
+  const stored = await chrome.storage.local.get(["tollsBlockedUntil"]);
   const refusal = runGate(
     Date.now(),
-    typeof stored.tollsLastRun === "number" ? stored.tollsLastRun : null,
     typeof stored.tollsBlockedUntil === "number" ? stored.tollsBlockedUntil : null
   );
   if (refusal) {
     note(`not starting: ${refusal}. No request was made to E-ZPass.`);
     return { result: null, source: "none", rowCount: 0, problem: refusal, log: trace };
   }
-  await chrome.storage.local.set({ tollsLastRun: Date.now() });
   const tab = await chrome.tabs.get(tabId).catch(() => null);
   note(
     `extension ${chrome.runtime.getManifest().version}, page ${(tab?.url ?? "?").replace(/\?.*$/, "")}`
@@ -1670,25 +1674,50 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   const before = await waitForRows(tabId, await inPage(tabId, readPageInPage, []));
   const fromText = formatForField(range.from, fields.from);
   const toText = formatForField(range.to, fields.to);
-  const filled = await inPage(tabId, fillDatesInPage, [
-    fields.from.index,
-    fields.to.index,
-    fromText,
-    toText,
-  ]);
-  note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${filled ? "ok" : "FAILED"}`);
-  // What the fields hold once the page has had a moment to react: a mask or a
-  // date picker can rewrite or reject what was typed.
-  await sleep(400);
-  const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
-  note(
-    `  fields now read "${fromNow.value}" and "${toNow.value}"` +
-      (sameDate(fromNow.value, fromText) && sameDate(toNow.value, toText) ? "" : "  <-- NOT WHAT WAS TYPED") +
-      (fromNow.invalid ? "  <-- THE PAGE MARKS THE START DATE INVALID" : "") +
-      (toNow.invalid ? "  <-- THE PAGE MARKS THE END DATE INVALID" : "")
-  );
-  if (!filled) {
-    return { result: null, source: "none", rowCount: 0, problem: "could not type the dates" };
+  const typeDates = async (): Promise<{ ok: boolean; from: FieldState; to: FieldState }> => {
+    const ok = await inPage(tabId, fillDatesInPage, [
+      fields.from.index,
+      fields.to.index,
+      fromText,
+      toText,
+    ]);
+    note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${ok ? "ok" : "FAILED"}`);
+    // What the fields hold once the page has had a moment to react: a mask or a
+    // date picker can rewrite or reject what was typed.
+    await sleep(400);
+    const [from, to] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
+    note(
+      `  fields now read "${from.value}" and "${to.value}"` +
+        (sameDate(from.value, fromText) && sameDate(to.value, toText) ? "" : "  <-- NOT WHAT WAS TYPED") +
+        (from.invalid ? "  <-- THE PAGE MARKS THE START DATE INVALID" : "") +
+        (to.invalid ? "  <-- THE PAGE MARKS THE END DATE INVALID" : "")
+    );
+    return { ok, from, to };
+  };
+  const accepted = (r: { ok: boolean; from: FieldState; to: FieldState }): boolean =>
+    r.ok &&
+    !r.from.invalid &&
+    !r.to.invalid &&
+    sameDate(r.from.value, fromText) &&
+    sameDate(r.to.value, toText);
+
+  let typed = await typeDates();
+  if (!accepted(typed)) {
+    // Once more, then give up. A search submitted with a wiped or invalid date
+    // reads whatever page happens to be up, and it has passed for a result.
+    note("  a date was not accepted; typing them once more");
+    await sleep(PACE_MS);
+    typed = await typeDates();
+  }
+  if (!accepted(typed)) {
+    const which = typed.from.invalid || !typed.from.value ? "start" : "end";
+    note(`  THE PAGE WILL NOT ACCEPT THE ${which.toUpperCase()} DATE. Not searching.`);
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      problem: `the page would not accept the ${which} date for ${range.from} to ${range.to}`,
+    };
   }
 
   // Look for the button NOW, after the dates are in. It was previously chosen
@@ -1736,7 +1765,12 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
       `  after it: ${activityOf(after)?.rows.length ?? 0} rows dated ${first.first ?? "?"} to ${first.last ?? "?"}` +
         `, ${first.outside} outside the window, pager "${after.pagerText}"`
     );
-    if (windowApplied(first) && (!parsed || parsed.from === 1)) {
+    // Back on page 1, as well as dated inside the window: a search that never
+    // ran leaves the previous window's last page up, and its dates can overlap
+    // this window's enough to pass on their own.
+    const onPage = currentPageNumber(after.nextControls);
+    if (onPage !== null && onPage !== 1) note(`  still on page ${onPage}, so the search did not run`);
+    if (windowApplied(first) && (!parsed || parsed.from === 1) && (onPage === null || onPage === 1)) {
       applied = true;
       break;
     }

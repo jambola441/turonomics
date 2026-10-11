@@ -280,6 +280,22 @@ function disabledLooking(control: ControlDescriptor): boolean {
 }
 
 /**
+ * The page number the pager marks as current, or null when it shows none.
+ *
+ * MUI labels the current page "page 3" and every other "Go to page 3". After a
+ * search the table must be back on page 1; a search that never ran leaves the
+ * previous window's last page up, and its dates can overlap the new window
+ * enough to look right on their own — which is exactly how one slipped through.
+ */
+export function currentPageNumber(controls: ControlDescriptor[]): number | null {
+  for (const control of controls) {
+    const match = /^page\s+(\d+)$/i.exec((control.ariaLabel ?? "").trim());
+    if (match) return Number(match[1]);
+  }
+  return null;
+}
+
+/**
  * Whether the pager's next control is present and disabled: the last page.
  *
  * Distinct from there being no next control at all. A disabled one is the
@@ -513,8 +529,6 @@ export const HISTORY_MONTHS = 3;
 export const PACE_MS = 2000;
 /** Pause between date windows. */
 export const WINDOW_PACE_MS = 4000;
-/** Refuse to start another run within this long of the last one. */
-export const COOLDOWN_MS = 5 * 60_000;
 /** After a refusal, do not touch the site at all for this long. */
 export const BLOCK_PAUSE_MS = 60 * 60_000;
 
@@ -563,20 +577,15 @@ export function looksBlocked(text: string): string | null {
 /**
  * A reason not to start a run now, or null.
  *
- * Checked before the page is touched: a run refused here makes no requests.
+ * Only one: a recent refusal by the site. There used to be a minimum gap
+ * between runs as well; it was removed at the operator's request, and the pause
+ * after a refusal is what remains. Checked before the page is touched, so a
+ * run refused here makes no requests.
  */
-export function runGate(
-  now: number,
-  lastRun: number | null,
-  blockedUntil: number | null
-): string | null {
+export function runGate(now: number, blockedUntil: number | null): string | null {
   if (blockedUntil !== null && now < blockedUntil) {
     const minutes = Math.ceil((blockedUntil - now) / 60_000);
     return `paused for another ${minutes} minute(s) because the last run met what looked like a block or outage`;
-  }
-  if (lastRun !== null && now - lastRun < COOLDOWN_MS) {
-    const minutes = Math.ceil((COOLDOWN_MS - (now - lastRun)) / 60_000);
-    return `the last run was under ${Math.round(COOLDOWN_MS / 60_000)} minutes ago; wait ${minutes} more minute(s)`;
   }
   return null;
 }

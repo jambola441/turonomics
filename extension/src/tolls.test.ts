@@ -24,6 +24,8 @@ import {
   describeForm,
   COOLDOWN_MS,
   describePager,
+  describeSubmitCandidates,
+  windowApplied,
   HISTORY_MONTHS,
   looksBlocked,
   runGate,
@@ -760,4 +762,54 @@ test("a block pauses everything, whatever the cooldown says", () => {
   const now = 1_000_000_000;
   assert.match(runGate(now, null, now + 30 * 60_000) ?? "", /30 minute.*block or outage/);
   assert.equal(runGate(now, null, now - 1), null, "expired");
+});
+
+// ---------------------------------------------------------------------------
+// A search that never ran
+// ---------------------------------------------------------------------------
+test("a disabled Filter is listed, so its absence from the ranking can be explained", () => {
+  const controls = [
+    { text: "Home" },
+    { text: "Filter", disabled: true },
+    { text: "Search", className: "btn" },
+  ];
+  assert.deepEqual(rankSubmitControls(controls), [2], "only the enabled one is chosen");
+  const lines = describeSubmitCandidates(controls).join("\n");
+  assert.match(lines, /\[1\].*"Filter".*disabled=true/);
+  assert.match(lines, /\[2\].*"Search".*disabled=false/);
+  assert.ok(!lines.includes("Home"));
+});
+
+test("a control with filter or search in the middle of its text is listed too", () => {
+  const lines = describeSubmitCandidates([{ text: "Date filter", disabled: true }]).join("\n");
+  assert.match(lines, /"Date filter".*disabled=true/);
+});
+
+test("says so when nothing on the page looks like a search button", () => {
+  assert.match(describeSubmitCandidates([{ text: "Home" }]).join("\n"), /nothing on the page reads like a search button/);
+});
+
+test("rows from other dates mean the search did not apply", () => {
+  const table: ScrapedTable = {
+    headers: ["Tag/Plate #", "Date", "Amount"],
+    rows: [["a", "9/1/26", "$-1.00"], ["b", "8/20/26", "$-1.00"]],
+  };
+  // Still showing the previous window while asked for an older one.
+  assert.equal(windowApplied(dateCoverage(table, { from: "2026-04-08", to: "2026-07-07" })), false);
+  assert.equal(windowApplied(dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" })), true);
+});
+
+test("an empty window is not mistaken for a search that never ran", () => {
+  assert.equal(windowApplied(dateCoverage({ headers: ["Date"], rows: [] }, { from: "2026-01-01", to: "2026-03-31" })), true);
+});
+
+test("a row or two on the edge of the window does not fail it", () => {
+  const rows = [
+    ["a", "7/7/26", "$-1.00"], // a day before the window starts
+    ["b", "7/9/26", "$-1.00"],
+    ["c", "8/1/26", "$-1.00"],
+    ["d", "9/1/26", "$-1.00"],
+  ];
+  const table: ScrapedTable = { headers: ["Tag/Plate #", "Date", "Amount"], rows };
+  assert.equal(windowApplied(dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" })), true);
 });

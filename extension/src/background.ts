@@ -18,11 +18,13 @@ import {
   describeForm,
   BLOCK_PAUSE_MS,
   describePager,
+  describeSubmitCandidates,
   HISTORY_MONTHS,
   looksBlocked,
   PACE_MS,
   runGate,
   WINDOW_PACE_MS,
+  windowApplied,
   parsePagerRange,
   type PagerRange,
   describeShape,
@@ -529,6 +531,42 @@ function chooseListboxOptionInPage(index: number): boolean {
 function readValuesInPage(indices: number[]): string[] {
   const inputs = Array.from(document.querySelectorAll("input"));
   return indices.map((i) => inputs[i]?.value ?? "<missing>");
+}
+
+/** Enter in a field is how most forms are submitted without their button. */
+function pressEnterInPage(index: number): boolean {
+  const input = document.querySelectorAll("input")[index] as HTMLInputElement | undefined;
+  if (!input) return false;
+  input.focus();
+  for (const type of ["keydown", "keypress", "keyup"]) {
+    input.dispatchEvent(
+      new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
+    );
+  }
+  return true;
+}
+
+function submitFormInPage(index: number): boolean {
+  const input = document.querySelectorAll("input")[index] as HTMLInputElement | undefined;
+  const form = input?.closest("form");
+  if (!form) return false;
+  form.requestSubmit();
+  return true;
+}
+
+/** Validation messages near the form: the page's own account of a refused search. */
+function readFormMessagesInPage(): string[] {
+  const nodes = Array.from(
+    document.querySelectorAll<HTMLElement>(
+      "[role='alert'], .Mui-error, [class*='helperText'], [class*='HelperText'], [class*='error' i]"
+    )
+  );
+  const seen = new Set<string>();
+  for (const node of nodes) {
+    const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
+    if (text && text.length < 160) seen.add(text);
+  }
+  return [...seen].slice(0, 5);
 }
 
 function clickSubmitInPage(index: number): boolean {
@@ -1619,21 +1657,77 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${filled ? "ok" : "FAILED"}`);
   // What the fields hold once the page has had a moment to react: a mask or a
   // date picker can rewrite or reject what was typed.
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await sleep(400);
   const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
   note(`  fields now read "${fromNow}" and "${toNow}"${sameDate(fromNow, fromText) && sameDate(toNow, toText) ? "" : "  <-- NOT WHAT WAS TYPED"}`);
-  await sleep(PACE_MS);
-  const clicked = filled && (await inPage(tabId, clickSubmitInPage, [submit]));
-  note(`  clicked control [${submit}] "${form.controls[submit].text.slice(0, 40)}": ${clicked ? "ok" : "FAILED"}`);
-  if (!clicked) {
-    return { result: null, source: "none", rowCount: 0, problem: "could not run the date search" };
+  if (!filled) {
+    return { result: null, source: "none", rowCount: 0, problem: "could not type the dates" };
   }
 
-  const after = await waitForChange(tabId, tableSignature(activityOf(before)), before);
+  // Look for the button NOW, after the dates are in. It was previously chosen
+  // from a read taken before typing and clicked by position seconds later: a
+  // Filter that is disabled until the dates are valid was then skipped for some
+  // other control, and the search never ran.
+  await sleep(PACE_MS);
+  const messages = await inPage(tabId, readFormMessagesInPage, []);
+  if (messages.length) note(`  the page shows: ${messages.map((m) => `"${m}"`).join(" | ")}`);
+
+  const baseline = tableSignature(activityOf(before));
+  const attempts: { name: string; run: () => Promise<boolean> }[] = [
+    {
+      name: "the search button",
+      run: async () => {
+        const fresh = await inPage(tabId, readFormInPage, []);
+        for (const line of describeSubmitCandidates(fresh.controls)) note(line);
+        const choice = rankSubmitControls(fresh.controls)[0];
+        if (choice === undefined) {
+          note("  no enabled search button after typing the dates");
+          return false;
+        }
+        note(`  clicking control [${choice}] "${fresh.controls[choice].text.slice(0, 40)}"`);
+        return inPage(tabId, clickSubmitInPage, [choice]);
+      },
+    },
+    { name: "Enter in the end-date field", run: () => inPage(tabId, pressEnterInPage, [fields.to.index]) },
+    { name: "submitting the form", run: () => inPage(tabId, submitFormInPage, [fields.to.index]) },
+  ];
+
+  let after = before;
+  let applied = false;
+  for (const [position, attempt] of attempts.entries()) {
+    if (position > 0) await sleep(PACE_MS);
+    const did = await attempt.run();
+    note(`  attempt ${position + 1}, ${attempt.name}: ${did ? "done" : "nothing to do"}`);
+    if (!did) continue;
+    after = await waitForChange(tabId, baseline, after, 8000);
+    const first = dateCoverage(activityOf(after), range);
+    const parsed = parsePagerRange(after.pagerText);
+    note(
+      `  after it: ${activityOf(after)?.rows.length ?? 0} rows dated ${first.first ?? "?"} to ${first.last ?? "?"}` +
+        `, ${first.outside} outside the window, pager "${after.pagerText}"`
+    );
+    if (windowApplied(first) && (!parsed || parsed.from === 1)) {
+      applied = true;
+      break;
+    }
+  }
+  if (!applied) {
+    const shown = await inPage(tabId, readFormMessagesInPage, []);
+    note(`  THE SEARCH NEVER APPLIED. Page messages: ${shown.length ? shown.join(" | ") : "none"}`);
+    return {
+      result: null,
+      source: "none",
+      rowCount: 0,
+      problem:
+        `the search for ${range.from} to ${range.to} never applied (the page still showed other dates)` +
+        (shown.length ? `; the page says: ${shown[0]}` : ""),
+    };
+  }
+
   const stillThere = pickDateFields((await inPage(tabId, readFormInPage, [])).inputs);
   note(
     `  rows before search: ${activityOf(before)?.rows.length ?? 0}, after: ${activityOf(after)?.rows.length ?? 0}` +
-      `, url now ${after.url.replace(/\?.*$/, "")}, date fields still on page: ${stillThere ? "yes" : "NO"}`
+      `, date fields still on page: ${stillThere ? "yes" : "NO"}`
   );
   const page = await pageThrough(tabId, after);
   const table = page.merged;

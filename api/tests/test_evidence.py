@@ -270,14 +270,19 @@ def test_the_soonest_deadline_is_drafted_first(api_client, session, car) -> None
     """Which rental to file for is a judgement about money and deadlines, so it
     lives here rather than in a browser plugin that has to be side-loaded to
     change."""
+    # The real clock, not the module's NOW: the endpoint measures the 90-day
+    # window against datetime.now(), so a trip pinned to 86 days before a fixed
+    # date quietly left the window when the calendar passed it — and the test
+    # started failing on a day nothing had changed.
+    now = datetime.now(UTC)
     soon = Trip(
         vehicle_id=car.id, turo_trip_id="111", guest_name="Soon",
-        starts_at=NOW - td(days=87), ends_at=NOW - td(days=86),
+        starts_at=now - td(days=87), ends_at=now - td(days=86),
         state=TripState.completed, source=TripSource.email,
     )
     later = Trip(
         vehicle_id=car.id, turo_trip_id="222", guest_name="Later",
-        starts_at=NOW - td(days=10), ends_at=NOW - td(days=9),
+        starts_at=now - td(days=10), ends_at=now - td(days=9),
         state=TripState.completed, source=TripSource.email,
     )
     session.add_all([soon, later])
@@ -538,14 +543,18 @@ def test_a_fully_filed_rental_does_not_shadow_a_fileable_one(
     and then drafts to a 404 — so the endpoint reports "nothing to file" while
     a live invoice sits behind it. Every other test passes either way, because
     none has a second rental waiting."""
+    # The real clock, as above. Pinned to NOW this one would not fail when the
+    # old rental aged out of the window — it would pass without exercising the
+    # skip it exists to test, which is worse.
+    now = datetime.now(UTC)
     done = Trip(
         vehicle_id=car.id, turo_trip_id="555", guest_name="Done",
-        starts_at=NOW - td(days=80), ends_at=NOW - td(days=79),
+        starts_at=now - td(days=80), ends_at=now - td(days=79),
         state=TripState.completed, source=TripSource.email,
     )
     waiting = Trip(
         vehicle_id=car.id, turo_trip_id="666", guest_name="Waiting",
-        starts_at=NOW - td(days=10), ends_at=NOW - td(days=9),
+        starts_at=now - td(days=10), ends_at=now - td(days=9),
         state=TripState.completed, source=TripSource.email,
     )
     session.add_all([done, waiting])

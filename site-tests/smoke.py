@@ -567,6 +567,8 @@ def main() -> int:
                   "Tickets $50.00" in view and "Turo: ACCEPTED" in view)
             check("and its crossings with what became of each",
                   "BWB" in view and "asked" in view and "to bill" in view)
+            check("an invoice's date says when it was first seen charged, not that it was charged then",
+                  "first seen charged" in view)
             check("and a link to the reservation on Turo",
                   page.locator(".view a", has_text="Reservation on Turo").count() == 1)
             check("and everything Turo said, folded away",
@@ -576,7 +578,13 @@ def main() -> int:
             check("and its messages read as a thread",
                   "Welcome! Keys are in the box." in view and "Returned, thanks [2 photos]" in view)
             check("its receipt shows what reached the host",
-                  "Reimbursed: Tolls" in view and "$17.79" in view and "total earned $191.25" in view)
+                  "Paid back to you" in view and "Tolls" in view
+                  and "You earned" in view and "$191.25" in view)
+            receipt = page.locator("#trip-11111111-1111-1111-1111-111111111111 .inv",
+                                   has_text="Paid back to you").inner_text()
+            check("and reads as a person would, without Turo's repeats",
+                  receipt.count("$17.79") == 1 and "Reimbursement total" not in receipt
+                  and "were incurred" not in receipt and "Reimbursed:" not in receipt)
             page.wait_for_timeout(500)
             trip_card = page.locator("#trip-11111111-1111-1111-1111-111111111111")
             check("its route is drawn on a map",

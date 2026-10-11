@@ -755,7 +755,7 @@ def test_a_turo_toll_line_that_did_not_reconcile_is_flagged(
     api_client, session, car, rental
 ) -> None:
     """Somebody has billed for tolls on this rental and it was not this app.
-    Worth a person's eye before asking the guest again."""
+    What is missing is the difference, said as an amount."""
     _crossing(session, car, rental, at=ENDS - td(hours=2), cents=7051)
     session.add(
         ReimbursementInvoice(
@@ -768,9 +768,10 @@ def test_a_turo_toll_line_that_did_not_reconcile_is_flagged(
     session.commit()
 
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
-    assert row["state"] == "check Turo's toll line"
-    assert "$36.31 of tolls" in row["note"]
-    assert "$70.51 still outstanding" in row["note"]
+    assert row["state"] == "short"
+    assert "$36.31 of these $70.51" in row["note"]
+    assert "$34.20 is missing" in row["note"]
+    assert row["unfiled_cents"] == 3420 and row["recovered_cents"] == 3631
 
 
 @requires_db

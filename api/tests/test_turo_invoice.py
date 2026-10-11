@@ -417,8 +417,87 @@ def test_turo_charging_tolls_none_of_ours_were_stamped_for_is_not_drafted(
     _apply(session, AUSTIN)
     session.commit()
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
-    assert row["state"] == "check Turo's toll line"
+    # Turo has asked for all of it and the guest has not paid yet: nothing is
+    # missing, so there is nothing to say "check" about.
+    assert row["state"] == "awaiting payment"
+    assert row["unfiled_cents"] == 0 and row["filed_cents"] == 4071
     assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+def _charged_toll_line(session, rental, cents, *, invoice_id):
+    """A charged invoice with a toll line, as the Turo API gives one."""
+    row = ReimbursementInvoice(
+        fingerprint=f"inv:{invoice_id}", reservation_id=RES, turo_invoice_id=invoice_id,
+        guest_name="Austin", state="charged", total_cents=cents,
+        lines=[["Tolls", cents]], toll_cents=cents, trip_id=rental.id,
+        first_seen_at=NOW - td(days=5), last_seen_at=NOW - td(days=5),
+        charged_at=NOW - td(days=4),
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+@requires_db
+def test_a_toll_line_short_of_the_crossings_says_how_much_is_missing(
+    api_client, session, car, rental
+) -> None:
+    """Jason's trip: $57.14 of crossings, Turo charged $33.14 of tolls. What is
+    left to bill is the difference — not the whole $57.14, and not a "check"
+    that leaves the operator doing the subtraction."""
+    seen = NOW - td(days=5)
+    _crossing(session, car, rental, cents=3314, imported_at=seen + td(days=1))
+    _crossing(session, car, rental, cents=2400, imported_at=seen + td(days=1))
+    _charged_toll_line(session, rental, 3314, invoice_id="900001")
+    relink_invoices(session, now=NOW)
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "short"
+    assert row["unfiled_cents"] == 2400, "to bill is Y - X"
+    assert row["recovered_cents"] == 3314, "what Turo charged is settled"
+    assert row["tolls_cents"] == 5714
+    assert "$24.00 is missing" in row["note"]
+    # Not offered for filing: a draft lists every crossing, including the
+    # ones Turo already charged for.
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+@requires_db
+def test_a_toll_line_asked_but_not_yet_paid_shows_as_asked_not_settled(
+    api_client, session, car, rental
+) -> None:
+    """Part of the deduction is money Turo has charged and part is only asked
+    for; calling all of it settled would overstate what has been collected."""
+    seen = NOW - td(days=5)
+    _crossing(session, car, rental, cents=3314, imported_at=seen + td(days=1))
+    _crossing(session, car, rental, cents=2400, imported_at=seen + td(days=1))
+    _charged_toll_line(session, rental, 3314, invoice_id="900001")
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:900002", reservation_id=RES, turo_invoice_id="900002",
+            guest_name="Austin", state="filed", total_cents=1000,
+            lines=[["Tolls", 1000]], toll_cents=1000, trip_id=rental.id,
+            first_seen_at=seen, last_seen_at=seen,
+        )
+    )
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "short"
+    assert (row["unfiled_cents"], row["filed_cents"], row["recovered_cents"]) == (1400, 1000, 3314)
+
+
+@requires_db
+def test_two_toll_invoices_that_add_up_settle_the_rental(session, car, rental) -> None:
+    """Christine's trip: Turo raised two toll invoices, each short of the
+    crossings on its own and together exactly the total."""
+    first = _crossing(session, car, rental, cents=2500, imported_at=NOW - td(days=10))
+    second = _crossing(session, car, rental, cents=1571, imported_at=NOW - td(days=10))
+    _charged_toll_line(session, rental, 2500, invoice_id="900001")
+    relink_invoices(session, now=NOW)
+    assert first.recovered_at is None and second.recovered_at is None, "one is only part"
+    _charged_toll_line(session, rental, 1571, invoice_id="900002")
+    relink_invoices(session, now=NOW)
+    assert first.recovered_at is not None and second.recovered_at is not None
 
 
 # ---------------------------------------------------------------------------

@@ -327,7 +327,11 @@
       // nobody has broken down, or a toll line that disagrees.
       var why = invoice.charged_tolls_cents != null
         ? "its toll line was " + money(invoice.charged_tolls_cents) +
-          " and these crossings are " + money(invoice.total_cents)
+          " and these crossings are " + money(invoice.total_cents) +
+          (invoice.charged_tolls_cents < invoice.total_cents
+            ? ", so " + money(invoice.total_cents - invoice.charged_tolls_cents) +
+              " of tolls is missing"
+            : "")
         : "some of it has not been broken down yet — pull from Turo to read it";
       add(body, "div", "asked odd",
           "Turo already charged " + money(invoice.charged_cents) + " here — " + why +
@@ -489,7 +493,8 @@
       var state = document.createElement("td");
       state.className = "ledger-state " +
         (row.state === "to bill" || row.state === "partly billed" ||
-         row.state.indexOf("check ") === 0 || row.state === "no statement yet" ? "tobill" :
+         row.state === "short" || row.state.indexOf("check ") === 0 ||
+         row.state === "no statement yet" ? "tobill" :
          row.state === "expired" ? "expired" : "");
       state.textContent = row.state;
       if (row.turo_trip_id && (row.state === "to bill" || row.state === "partly billed") &&

@@ -515,6 +515,7 @@ def _ledger_state(
     toll_line: int | None,
     left: int | None,
     unreadable: int = 0,
+    toll_line_charged: bool = False,
 ) -> tuple[str, str | None]:
     """What this rental's crossings amount to, in a word.
 
@@ -559,19 +560,34 @@ def _ledger_state(
             f"${unfiled / 100:,.2f} of these crossings has not been asked for",
         )
     if unfiled > 0 and toll_line is not None:
-        # Turo charged a toll line of its own and recovery could not reconcile
-        # it, so somebody has billed for tolls on this rental and it was not
-        # this app. Worth a person's eye before asking the guest again.
-        return (
-            "check Turo's toll line",
-            f"Turo charged ${toll_line / 100:,.2f} of tolls against "
-            f"${unfiled / 100:,.2f} still outstanding here",
-        )
+        # Turo has put a toll line of its own against this rental, and the
+        # crossings here were not stamped against it, so recovery could not
+        # tell which they were. Not a reason to hold the whole amount: what
+        # Turo has taken is money collected, and what is left is what is
+        # missing. The exact crossings cannot be matched to the figure, so
+        # this is arithmetic and not a claim about which ones.
+        #
+        # It is never offered for filing: the draft would list every
+        # crossing, including the ones Turo already asked for.
+        missing = unfiled - toll_line
+        if missing > 0:
+            return (
+                "short",
+                f"Turo has asked for ${toll_line / 100:,.2f} of these "
+                f"${unfiled / 100:,.2f} of tolls — ${missing / 100:,.2f} is missing",
+            )
+        return ("settled" if toll_line_charged else "awaiting payment"), None
     if unfiled > 0 and left is not None and left < 0:
         return "expired", "past the 90-day window, so this cannot be filed"
     if unfiled > 0:
         return "to bill", None
     return "settled", None
+
+
+# The words `_ledger_state` gives when Turo's toll line is what decides. Of
+# these, "settled" and "awaiting payment" with crossings outstanding arise
+# nowhere else, since both otherwise need none outstanding.
+_TOLL_LINE_STATES = frozenset({"short", "settled", "awaiting payment"})
 
 
 @dataclass(frozen=True)
@@ -617,7 +633,24 @@ def _tally(
         toll_line=sum(toll_lines) if toll_lines else None,
         left=left,
         unreadable=_unreadable(theirs),
+        toll_line_charged=any(
+            r.toll_cents is not None and r.state == "charged" for r in theirs
+        ),
     )
+    if state in _TOLL_LINE_STATES and unfiled > 0 and toll_lines:
+        # Turo's toll line is money already dealt with, so the columns show
+        # it that way: what it covered moves out of "to bill", into settled
+        # where it was charged and into asked where it is still owed.
+        credit = min(sum(toll_lines), unfiled)
+        charged_line = sum(
+            r.toll_cents
+            for r in theirs
+            if r.toll_cents is not None and r.state == "charged"
+        )
+        paid = min(credit, charged_line)
+        unfiled -= credit
+        recovered += paid
+        filed += credit - paid
     return _Tally(unfiled, filed, recovered, left, state, note)
 
 

@@ -439,12 +439,34 @@ def _charged_toll_line(session, rental, cents, *, invoice_id):
 
 
 @requires_db
-def test_a_toll_line_short_of_the_crossings_says_how_much_is_missing(
+def test_a_short_toll_line_settles_the_crossings_it_adds_up_to(
     api_client, session, car, rental
 ) -> None:
-    """Jason's trip: $57.14 of crossings, Turo charged $33.14 of tolls. What is
-    left to bill is the difference — not the whole $57.14, and not a "check"
-    that leaves the operator doing the subtraction."""
+    """Jason's trip: $57.14 of crossings, Turo charged $33.14 of tolls. One
+    set of crossings that makes $33.14 is taken as paid; the other $24.00 is
+    what is left to bill, and only it."""
+    seen = NOW - td(days=5)
+    paid = _crossing(session, car, rental, cents=3314, imported_at=seen + td(days=1))
+    left = _crossing(session, car, rental, cents=2400, imported_at=seen + td(days=1))
+    _charged_toll_line(session, rental, 3314, invoice_id="900001")
+    relink_invoices(session, now=NOW)
+    session.commit()
+    assert paid.recovered_at is not None and left.recovered_at is None
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "partly billed"
+    assert (row["unfiled_cents"], row["recovered_cents"]) == (2400, 3314)
+    totals = api_client.get("/api/invoices/ledger").json()
+    assert (totals["collectable_cents"], totals["lost_cents"]) == (2400, 0)
+    draft = api_client.get("/api/invoices/next-draft").json()
+    assert draft["total_cents"] == 2400, "only the crossing Turo has not charged"
+
+
+@requires_db
+def test_once_the_window_closes_the_uncovered_part_is_expired_not_fileable(
+    api_client, session, car, rental
+) -> None:
+    rental.ends_at = NOW - td(days=200)
+    rental.starts_at = rental.ends_at - td(days=3)
     seen = NOW - td(days=5)
     _crossing(session, car, rental, cents=3314, imported_at=seen + td(days=1))
     _crossing(session, car, rental, cents=2400, imported_at=seen + td(days=1))
@@ -452,13 +474,29 @@ def test_a_toll_line_short_of_the_crossings_says_how_much_is_missing(
     relink_invoices(session, now=NOW)
     session.commit()
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "expired"
+    assert "$24.00" in row["note"]
+    totals = api_client.get("/api/invoices/ledger").json()
+    assert (totals["collectable_cents"], totals["lost_cents"]) == (0, 2400)
+    assert api_client.get("/api/invoices/next-draft").status_code == 404
+
+
+@requires_db
+def test_a_toll_line_no_crossing_fits_in_says_how_much_is_missing(
+    api_client, session, car, rental
+) -> None:
+    """Every crossing is bigger than Turo's line, so none can be taken as paid
+    by it. The row still says what is missing rather than the whole amount."""
+    seen = NOW - td(days=5)
+    _crossing(session, car, rental, cents=5000, imported_at=seen + td(days=1))
+    _crossing(session, car, rental, cents=2400, imported_at=seen + td(days=1))
+    _charged_toll_line(session, rental, 1000, invoice_id="900001")
+    relink_invoices(session, now=NOW)
+    session.commit()
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert row["state"] == "short"
-    assert row["unfiled_cents"] == 2400, "to bill is Y - X"
-    assert row["recovered_cents"] == 3314, "what Turo charged is settled"
-    assert row["tolls_cents"] == 5714
-    assert "$24.00 is missing" in row["note"]
-    # Not offered for filing: a draft lists every crossing, including the
-    # ones Turo already charged for.
+    assert (row["unfiled_cents"], row["recovered_cents"]) == (6400, 1000)
+    assert "$64.00 is missing" in row["note"]
     assert api_client.get("/api/invoices/next-draft").status_code == 404
 
 
@@ -484,6 +522,7 @@ def test_a_toll_line_asked_but_not_yet_paid_shows_as_asked_not_settled(
     row = api_client.get("/api/invoices/ledger").json()["rows"][0]
     assert row["state"] == "short"
     assert (row["unfiled_cents"], row["filed_cents"], row["recovered_cents"]) == (1400, 1000, 3314)
+    assert api_client.get("/api/invoices/ledger").json()["awaiting_cents"] == 1000
 
 
 @requires_db
@@ -494,7 +533,7 @@ def test_two_toll_invoices_that_add_up_settle_the_rental(session, car, rental) -
     second = _crossing(session, car, rental, cents=1571, imported_at=NOW - td(days=10))
     _charged_toll_line(session, rental, 2500, invoice_id="900001")
     relink_invoices(session, now=NOW)
-    assert first.recovered_at is None and second.recovered_at is None, "one is only part"
+    assert first.recovered_at is not None and second.recovered_at is None
     _charged_toll_line(session, rental, 1571, invoice_id="900002")
     relink_invoices(session, now=NOW)
     assert first.recovered_at is not None and second.recovered_at is not None
@@ -871,3 +910,19 @@ def test_catching_up_leaves_other_filed_invoices_alone(session, car, rental) -> 
     assert row.state == "filed"
     assert toll.recovered_at is None
     assert result.updated == 0
+
+
+@requires_db
+def test_a_pick_is_not_repeated_by_running_the_match_again(session, car, rental) -> None:
+    """Re-match runs over every charged invoice each time. A short line that
+    has already taken its crossings must not take more on the next run."""
+    seen = NOW - td(days=10)
+    tolls = [_crossing(session, car, rental, cents=1000, imported_at=seen) for _ in range(3)]
+    _charged_toll_line(session, rental, 1000, invoice_id="900001")
+    relink_invoices(session, now=NOW)
+    relink_invoices(session, now=NOW)
+    assert sum(t.recovered_at is not None for t in tolls) == 1
+    _charged_toll_line(session, rental, 1000, invoice_id="900002")
+    relink_invoices(session, now=NOW)
+    relink_invoices(session, now=NOW)
+    assert sum(t.recovered_at is not None for t in tolls) == 2

@@ -31,7 +31,10 @@
         border-radius:var(--u-radius-md);padding:7px 10px}
   .back:hover{border-color:var(--border2);color:var(--text)}
 
-  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:16px}
+  .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
+  @media (max-width:560px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
+  .stat.wait .v{color:var(--blue)}
+  .lost{font-size:12px;color:var(--dim);margin:-8px 0 14px;line-height:1.45}
   .stat{display:flex;flex-direction:column;gap:5px;padding:12px;background:var(--surface2);
         border:1px solid var(--border);border-radius:var(--u-radius-lg);min-width:0}
   .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
@@ -153,13 +156,16 @@
   <div class="err" id="err" hidden></div>
 
   <div class="stats">
+    <div class="stat owed"><div class="k">to bill</div><div class="v" id="s-bill">—</div>
+      <div class="n">rentals Turo still takes a filing for</div></div>
+    <div class="stat wait"><div class="k">waiting on Turo</div><div class="v" id="s-wait">—</div>
+      <div class="n">asked for, not yet paid</div></div>
+    <div class="stat loose"><div class="k">no rental</div><div class="v" id="s-loose">—</div>
+      <div class="n">your own driving, or before Turo</div></div>
     <div class="stat"><div class="k">charged</div><div class="v" id="s-total">—</div>
-      <div class="n">everything on file</div></div>
-    <div class="stat owed"><div class="k">to recover</div><div class="v" id="s-owed">—</div>
-      <div class="n">not yet billed back</div></div>
-    <div class="stat loose"><div class="k">unattributed</div><div class="v" id="s-loose">—</div>
-      <div class="n">nobody to bill</div></div>
+      <div class="n">every crossing on file</div></div>
   </div>
+  <div class="lost" id="s-lost" hidden></div>
 
   <div class="outside-note" id="outside-note" hidden></div>
 
@@ -370,10 +376,23 @@
     return gap(toll.near_gap_seconds) + " " + toll.near_relation + " " + who + " trip";
   }
 
+  // What you are owed comes from the invoices ledger, which knows what Turo
+  // has charged and which windows are still open. Counting every crossing not
+  // ticked off read $5,372 on the live account when $970 could be asked for:
+  // it counted other cars, crossings with no rental, and rentals whose
+  // window had closed.
   function renderStats(data) {
     el("s-total").textContent = money(data.total_cents);
-    el("s-owed").textContent = money(data.unrecovered_cents);
     el("s-loose").textContent = money(data.unattributed_cents);
+    var lg = state.ledger;
+    el("s-bill").textContent = lg ? money(lg.collectable_cents) : "—";
+    el("s-wait").textContent = lg ? money(lg.awaiting_cents) : "—";
+    var lost = el("s-lost");
+    lost.hidden = !(lg && lg.lost_cents);
+    if (lg && lg.lost_cents) {
+      lost.textContent = money(lg.lost_cents) + " on rentals was never charged and can no " +
+        "longer be filed — the 90-day window closed, or Turo charged less than the crossings.";
+    }
   }
 
   // Money the account was charged that belongs to somebody else's car. Stated
@@ -481,12 +500,18 @@
   }
 
   function load() {
-    return fetch(API + "/api/tolls")
-      .then(function (r) {
+    return Promise.all([
+      fetch(API + "/api/tolls").then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
         return r.json();
-      })
-      .then(function (data) {
+      }),
+      fetch(API + "/api/invoices/ledger")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; })
+    ])
+      .then(function (both) {
+        var data = both[0];
+        state.ledger = both[1];
         state.data = data;
         el("stamp").textContent = (data.tolls || []).length + " crossings on file";
         clearError();

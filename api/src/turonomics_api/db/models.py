@@ -548,6 +548,9 @@ class Trip(Base):
     # after it ended; a check on Turo's odometer figure, never a substitute.
     tracker_miles: Mapped[float | None] = mapped_column(Float)
     tracker_miles_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Which version of the counting rule produced them (`TRACKER_MILES_RULE`),
+    # so miles counted by an older one are read again.
+    tracker_miles_rule: Mapped[int | None] = mapped_column(SmallInteger)
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 

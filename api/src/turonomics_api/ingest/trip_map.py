@@ -155,31 +155,51 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+# Bumped whenever `rental_miles` changes how it counts, so miles stored under
+# an older rule are read again. 1 counted only drives starting inside the
+# booking; 2 counted drives that overlap it, by the odometer span; 3 adds up
+# the drives' own distances.
+TRACKER_MILES_RULE = 3
+
+
 def rental_miles(route: Route, *, starts: datetime, ends: datetime) -> float | None:
     """Miles the tracker recorded over a rental, or None if it cannot say.
 
-    Only drives that start inside the rental: the route is read with a margin
-    either side for the map, and the host's own driving before and after is
-    not the guest's. The odometer span from the first drive to the last is the
-    tracker's equivalent of Turo's check-in and check-out readings; the drives'
-    own distances are summed where the odometer is missing.
+    Drives that overlap the rental, not only those that start inside it. A
+    guest who collects the car early starts the first drive before the booked
+    time, and counting only drives that start inside the booking dropped it:
+    Jason's 235-mile first drive, Ian Alexander's 205, Erica's 101, each read as
+    a gap of that size against Turo. A drive of the host's that ends before the
+    rental begins, or starts after it ends, is still left out.
+
+    Each drive's own distance, added up: Bouncie's `distance`, or its end
+    odometer less its start where that is missing. Not the odometer span from
+    the first drive to the last, which was the rule before: on Danny's rental,
+    Jolene's first weeks with the tracker, the odometer moved 178 miles between
+    drives with no drive recorded, and the span read 675 against Turo's 493
+    (the drives themselves added up to 497). A jump in the tracker's odometer
+    is not miles the guest drove.
     """
     if route.source != "bouncie":
         return None
-    drives = [d for d in route.drives if starts <= d.starts_at <= ends]
+    drives = [d for d in route.drives if d.ends_at > starts and d.starts_at < ends]
     if not drives:
         return None
-    first, last = drives[0], drives[-1]
-    if (
-        first.start_odometer is not None
-        and last.end_odometer is not None
-        and last.end_odometer >= first.start_odometer
-    ):
-        return round(last.end_odometer - first.start_odometer, 1)
-    distances = [d.distance_mi for d in drives]
-    if any(d is None for d in distances):
-        return None
-    return round(sum(d for d in distances if d is not None), 1)
+    total = 0.0
+    for drive in drives:
+        if drive.distance_mi is not None:
+            total += drive.distance_mi
+        elif (
+            drive.start_odometer is not None
+            and drive.end_odometer is not None
+            and drive.end_odometer >= drive.start_odometer
+        ):
+            total += drive.end_odometer - drive.start_odometer
+        else:
+            # A drive with no distance at all: a figure without it would be
+            # short by an unknown amount, which is worse than no figure.
+            return None
+    return round(total, 1)
 
 
 @dataclass

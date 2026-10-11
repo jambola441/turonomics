@@ -339,3 +339,44 @@ def test_the_wanted_list_carries_the_receipts_to_read(api_client, session, car, 
     out = api_client.get("/api/turo/wanted").json()
     assert RES in out["receipts"]
     assert out["receipt_path"] == "/api/reservation/{id}/receipt"
+
+
+@requires_db
+def test_one_receipt_line_for_two_invoices_settles_both(session, car, rental) -> None:
+    """44623088: invoices for $27.13 (paid) and $40.69 (ACCEPTED), and one
+    receipt line of $67.82 — the two together. Neither matched it alone."""
+    tolls = [_crossing(session, car, rental, c) for c in (2713, 4069)]
+    paid = _invoice(session, rental, toll_cents=2713, state="charged", invoice_id="9001")
+    paid.charged_at = NOW - td(days=200)
+    accepted = _invoice(session, rental, toll_cents=4069, invoice_id="9002")
+
+    result = _apply(session, _receipt(("Tolls", "$67.82")))
+
+    assert accepted.state == "charged"
+    assert result.charged == 1
+    assert all(t.recovered_at is not None for t in tolls)
+
+
+@requires_db
+def test_a_receipt_total_short_of_the_invoices_settles_neither(session, car, rental) -> None:
+    _invoice(session, rental, toll_cents=2713, state="charged", invoice_id="9001")
+    accepted = _invoice(session, rental, toll_cents=4069, invoice_id="9002")
+    _apply(session, _receipt(("Tolls", "$60.00")))
+    assert accepted.state == "filed"
+
+
+@requires_db
+def test_rematch_applies_a_stored_receipt_again(
+    api_client, monkeypatch, session, car, rental
+) -> None:
+    """A rule learned after the receipt was read applies on Re-match, not only
+    on the next read."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    _invoice(session, rental, toll_cents=2713, state="charged", invoice_id="9001")
+    accepted = _invoice(session, rental, toll_cents=4069, invoice_id="9002")
+    rental.turo_receipt = _receipt(("Tolls", "$67.82"))
+    session.commit()
+
+    assert api_client.post("/api/tolls/rematch").status_code == 200
+    session.refresh(accepted)
+    assert accepted.state == "charged"

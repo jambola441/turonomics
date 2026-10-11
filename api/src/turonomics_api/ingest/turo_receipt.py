@@ -201,6 +201,56 @@ def settle_by_receipt(session: Session, trip: Trip, *, now: datetime, result: Re
                 _recover(session, invoice, recovered)
                 result.tolls_recovered += recovered.tolls_recovered
 
+    # One receipt line for several invoices: 44623088's receipt says $67.82 of
+    # tolls, which is its $27.13 invoice and its $40.69 one together, and
+    # neither matched alone. Exact again, and on the whole rental: every toll
+    # line Turo invoiced on it, paid or not, against every toll line on the
+    # receipt.
+    left = [i for i in invoices if i.state != INVOICE_CHARGED]
+    if not left:
+        return
+    every_line = session.scalars(
+        select(ReimbursementInvoice.toll_cents).where(
+            ReimbursementInvoice.reservation_id == trip.turo_trip_id,
+            ReimbursementInvoice.toll_cents.is_not(None),
+        )
+    ).all()
+    if sum(toll_lines(body)) != sum(c or 0 for c in every_line):
+        return
+    for invoice in left:
+        if mark_charged(invoice, now=now):
+            result.charged += 1
+            result.settled.append(
+                f"{trip.turo_trip_id}: ${(invoice.toll_cents or 0) / 100:,.2f} of tolls is "
+                "within the receipt's toll total"
+            )
+            if invoice.trip_id is None:
+                invoice.trip_id = trip.id
+            recovered = ReimbursementResult()
+            _recover(session, invoice, recovered)
+            result.tolls_recovered += recovered.tolls_recovered
+
+
+def resettle_receipts(session: Session, *, now: datetime) -> ReceiptResult:
+    """Run the receipt check again over receipts already stored.
+
+    For Re-match: a receipt is only read now and then, and a rule learned since
+    should not wait for the next read to apply.
+    """
+    result = ReceiptResult()
+    for trip in session.scalars(
+        select(Trip)
+        .join(ReimbursementInvoice, ReimbursementInvoice.reservation_id == Trip.turo_trip_id)
+        .where(
+            Trip.turo_receipt.is_not(None),
+            ReimbursementInvoice.state != INVOICE_CHARGED,
+            ReimbursementInvoice.toll_cents.is_not(None),
+        )
+        .distinct()
+    ):
+        settle_by_receipt(session, trip, now=now, result=result)
+    return result
+
 
 def apply_receipt(
     session: Session, reservation_id: str, body: Any, *, now: datetime, result: ReceiptResult

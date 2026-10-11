@@ -29,6 +29,7 @@ from turonomics_api.ingest.tolls import (
     nearest_trip,
     rematch_unattributed,
 )
+from turonomics_api.ingest.turo_receipt import resettle_receipts
 from turonomics_api.settings import outside_fleet
 
 log = logging.getLogger("turonomics.routers.tolls")
@@ -304,6 +305,9 @@ def rematch(
     """
     require_token(authorization)
     fixed = rematch_unattributed(session)
+    # Before the relink, so an invoice a receipt shows paid is charged
+    # by the time the crossings are matched to lines.
+    resettle_receipts(session, now=datetime.now(UTC))
     relink_invoices(session, now=datetime.now(UTC))
     session.commit()
     still_loose = (

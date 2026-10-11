@@ -400,7 +400,49 @@ def relink_invoices(session: Session, *, now: datetime) -> ReimbursementResult:
         if invoice.charged_at is None:
             invoice.charged_at = now
         _recover(session, invoice, result)
+    _pick_asked(session)
     return result
+
+
+def _pick_asked(session: Session) -> None:
+    """Stamp as asked the crossings a toll line not yet paid most plausibly
+    covers.
+
+    An invoice stamps the crossings on file when it is first seen. Ones
+    imported later were never stamped, so the rental read as never asked for
+    — "expired, never charged" on 44623088, which Turo had invoiced for in
+    full. Picked the way a paid line is (`_pick_covered`), after the paid
+    lines have taken theirs, and only from what is neither paid nor asked.
+    """
+    lines: dict[uuid.UUID, int] = {}
+    for invoice in session.scalars(
+        select(ReimbursementInvoice).where(
+            ReimbursementInvoice.state != INVOICE_CHARGED,
+            ReimbursementInvoice.toll_cents.is_not(None),
+            ReimbursementInvoice.trip_id.is_not(None),
+        )
+    ):
+        if invoice.trip_id is not None and invoice.toll_cents:
+            lines[invoice.trip_id] = lines.get(invoice.trip_id, 0) + invoice.toll_cents
+    for trip_id, asked in lines.items():
+        tolls = session.scalars(
+            select(Toll).where(Toll.trip_id == trip_id).order_by(Toll.occurred_at)
+        ).all()
+        open_asks = sum(
+            t.amount_cents for t in tolls if t.filed_at is not None and t.recovered_at is None
+        )
+        free = [t for t in tolls if t.filed_at is None and t.recovered_at is None]
+        target = asked - open_asks
+        picked = pick_subset([t.amount_cents for t in free], target)
+        # Exactly, or not at all. Stamping a crossing asked that was not is
+        # worse here than for a paid line: it is then never asked for, and
+        # nothing will ever show it was missed. A line bigger than what fits
+        # is a line for crossings not imported yet, and a later statement's
+        # crossing is not to be assumed part of it.
+        if sum(free[i].amount_cents for i in picked) != target:
+            continue
+        for index in picked:
+            free[index].filed_at = free[index].imported_at
 
 
 def pick_subset(amounts: list[int], target: int) -> list[int]:

@@ -380,3 +380,57 @@ def test_rematch_applies_a_stored_receipt_again(
     assert api_client.post("/api/tolls/rematch").status_code == 200
     session.refresh(accepted)
     assert accepted.state == "charged"
+
+
+@requires_db
+def test_a_refuelling_invoice_is_settled_when_every_line_is_on_the_receipt(
+    session, car, rental
+) -> None:
+    """Ian Alexander's: $13.36 refueling and a $10.00 convenience fee, ACCEPTED
+    on Turo; his receipt reads "Gas was not replaced $13.36" and "Convenience
+    fee $10.00". Turo words them differently, so it is the amounts."""
+    refuel = _invoice(session, rental, toll_cents=None, invoice_id="9101")
+    refuel.lines = [["Refueling", 1336], ["Refueling convenience fee", 1000]]
+    refuel.total_cents = 2336
+    _apply(session, _receipt(("Tolls were incurred", "$34.66"), ("Gas was not replaced", "$13.36"),
+                             ("Convenience fee", "$10.00"), ("Reimbursement total", "$58.02")))
+    assert refuel.state == "charged"
+
+
+@requires_db
+def test_one_line_matching_is_not_enough(session, car, rental) -> None:
+    refuel = _invoice(session, rental, toll_cents=None, invoice_id="9101")
+    refuel.lines = [["Refueling", 1336], ["Refueling convenience fee", 1000]]
+    _apply(session, _receipt(("Gas was not replaced", "$13.36")))
+    assert refuel.state == "filed"
+
+
+@requires_db
+def test_a_toll_line_on_the_receipt_does_not_pay_another_kind_of_invoice(
+    session, car, rental
+) -> None:
+    """$30.07 of tolls on the receipt is not $30.07 of cleaning."""
+    cleaning = _invoice(session, rental, toll_cents=None, invoice_id="9102")
+    cleaning.lines = [["Cleaning", 3007]]
+    _apply(session, _receipt(("Tolls", "$30.07")))
+    assert cleaning.state == "filed"
+
+
+@requires_db
+def test_a_receipt_line_pays_one_invoice_line_once(session, car, rental) -> None:
+    first = _invoice(session, rental, toll_cents=None, invoice_id="9103")
+    first.lines = [["Cleaning", 2000]]
+    second = _invoice(session, rental, toll_cents=None, invoice_id="9104")
+    second.lines = [["Cleaning", 2000]]
+    _apply(session, _receipt(("Cleaning fee", "$20.00")))
+    assert sorted([first.state, second.state]) == ["charged", "filed"]
+
+
+@requires_db
+def test_the_receipts_own_total_pays_nothing(session, car, rental) -> None:
+    """"Reimbursement total" repeats the lines above it; on a receipt whose
+    other line is tolls, it would otherwise pay a $30.07 cleaning invoice."""
+    cleaning = _invoice(session, rental, toll_cents=None, invoice_id="9105")
+    cleaning.lines = [["Cleaning", 3007]]
+    _apply(session, _receipt(("Tolls", "$30.07"), ("Reimbursement total", "$30.07")))
+    assert cleaning.state == "filed"

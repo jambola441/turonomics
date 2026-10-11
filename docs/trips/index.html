@@ -773,8 +773,10 @@
       add(box, "div", "line", "Tracker (Bouncie): " + D.tracker_mi + " mi" +
           (D.included_mi != null ? " of " + D.included_mi + " included" +
             (D.tracker_over_mi ? " — " + D.tracker_over_mi + " mi over" : "") : ""));
-      add(box, "div", "note", "Turo has no odometer reading for this trip, so nothing can be " +
-          "filed for distance. Enter the check-in and check-out odometer on Turo to bill it.");
+      add(box, "div", D.tracker_over_mi ? "note" : "line dim",
+          "The odometer was not entered on Turo for this trip, so Turo has no miles to bill on." +
+          (D.tracker_over_mi ? " The tracker puts it over the limit: enter the readings on Turo " +
+            "to bill the extra miles." : ""));
       return;
     }
     add(box, "div", "line", "Turo: " + D.driven_mi + " mi driven of " + D.included_mi + " included" +
@@ -786,11 +788,7 @@
     } else {
       add(box, "div", "line dim", "Tracker: not read yet — opening the route reads it.");
     }
-    if (D.disagrees && D.driven_mi === 0) {
-      add(box, "div", "note", "Turo says 0 mi were driven, against the tracker's " + D.tracker_mi +
-          " mi: the odometer readings entered on Turo for this trip are probably mistyped. " +
-          "Nothing can be filed for distance until they are corrected on Turo.");
-    } else if (D.disagrees) {
+    if (D.disagrees) {
       add(box, "div", "note", "Turo and the tracker differ by " +
           Math.round(Math.abs(D.tracker_mi - D.driven_mi)) + " mi. Filing uses Turo's figure; " +
           "check the odometer photos on Turo if it looks wrong.");

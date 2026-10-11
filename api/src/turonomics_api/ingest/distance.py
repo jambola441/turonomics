@@ -103,6 +103,22 @@ def distance_lines_cents(lines: Iterable[Any]) -> int:
     return total
 
 
+def _entered(odometer: Mapping[str, Any], driven: float | None) -> bool:
+    """Whether the host entered the odometer on Turo for this trip.
+
+    The operator sometimes skips it on a trip plainly under its limit, and
+    Turo then reports 0 miles from readings that mean nothing — 5,313 then
+    5,257 on David's, Jimmy's 29,929 against Jolene's 1,872 on Isabelle's.
+    Taken as a figure, that read as a 500-mile disagreement with the tracker.
+    Taken as what it is, the trip shows the tracker's miles alone.
+    """
+    if driven is None or driven <= 0:
+        return False
+    start = _scalar(odometer.get("checkInOdometerReading"))
+    end = _scalar(odometer.get("checkOutOdometerReading"))
+    return not (start is not None and end is not None and end < start)
+
+
 def summarise(
     detail: Mapping[str, Any] | None,
     invoiced_cents: int = 0,
@@ -118,6 +134,8 @@ def summarise(
     found = detail.get("odometerDetail")
     odometer: Mapping[str, Any] = found if isinstance(found, Mapping) else {}
     driven = _scalar(odometer.get("distanceDriven"))
+    if not _entered(odometer, driven):
+        driven = None
     booking = detail.get("booking")
     included = _scalar(odometer.get("distanceLimit"))
     if included is None and isinstance(booking, Mapping):

@@ -119,6 +119,33 @@ def test_with_only_the_trackers_miles_nothing_is_owed() -> None:
     assert not found.disagrees, "nothing of Turo's to disagree with"
 
 
+def test_an_odometer_not_entered_on_turo_is_not_a_figure() -> None:
+    """David's: the host skipped the odometer, and Turo reported 0 miles from
+    5,313 then 5,257. That is no reading, not a 540-mile disagreement."""
+    detail = _detail(driven=0, over=0)
+    detail["odometerDetail"]["checkInOdometerReading"] = _mi(5313)
+    detail["odometerDetail"]["checkOutOdometerReading"] = _mi(5257)
+    found = summarise(detail, tracker_mi=541)
+    assert found is not None
+    assert found.driven_mi is None and not found.disagrees and found.owed_cents == 0
+
+
+def test_zero_miles_with_the_same_reading_twice_is_not_a_figure() -> None:
+    detail = _detail(driven=0, over=0)
+    detail["odometerDetail"]["checkInOdometerReading"] = _mi(5313)
+    detail["odometerDetail"]["checkOutOdometerReading"] = _mi(5313)
+    found = summarise(detail, tracker_mi=300)
+    assert found is not None and found.driven_mi is None and not found.disagrees
+
+
+def test_a_check_out_below_the_check_in_is_not_a_figure_either() -> None:
+    detail = _detail(driven=120, over=0)
+    detail["odometerDetail"]["checkInOdometerReading"] = _mi(29929)
+    detail["odometerDetail"]["checkOutOdometerReading"] = _mi(1872)
+    found = summarise(detail, tracker_mi=498)
+    assert found is not None and found.driven_mi is None and not found.disagrees
+
+
 def test_distance_lines_are_found_by_label() -> None:
     lines = [["22 mi additional distance", 770], ["Tolls", 3007], ["Additional mileage", 100],
              ["Cleaning", 4000], "junk", ["Tolls", "x"]]

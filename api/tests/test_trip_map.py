@@ -300,6 +300,18 @@ def test_rental_miles_is_the_odometer_span_of_the_rentals_drives() -> None:
     assert rental_miles(route, starts=starts, ends=ends) == 106.5, "1110.5 - 1004.0"
 
 
+def test_a_guest_who_collects_early_has_the_first_drive_counted() -> None:
+    """Jason's first drive started before the booked time and ran 235 miles
+    into the rental. Counting only drives that start inside the booking lost
+    it, and the tracker read 233 miles short of Turo."""
+    starts, ends = T0, T0 + td(days=2)
+    route = Route(source="bouncie", drives=[
+        _drive(starts - td(minutes=10), 240, (5000.0, 5235.0), 235.0),
+        _drive(starts + td(days=1), 60, (5235.0, 5300.0), 65.0),
+    ])
+    assert rental_miles(route, starts=starts, ends=ends) == 300.0
+
+
 def test_without_an_odometer_the_drives_distances_are_summed() -> None:
     route = Route(source="bouncie", drives=[
         _drive(T0 + td(hours=1), 60, None, 36.0), _drive(T0 + td(hours=5), 60, None, 10.5),
@@ -331,3 +343,28 @@ def test_reading_a_finished_rentals_map_keeps_the_trackers_miles(
     row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
                if r["id"] == str(rental.id))
     assert row["tracker_miles"] == 61.5
+    assert row["tracker_miles_stale"] is False
+
+
+@requires_db
+def test_miles_counted_by_an_older_rule_are_read_again(
+    api_client, monkeypatch, session, rental
+) -> None:
+    rental.tracker_miles = 30.0
+    rental.tracker_miles_at = datetime(2026, 10, 11, 15, 0, tzinfo=UTC)
+    rental.tracker_miles_rule = None   # stored before the rule was recorded
+    session.commit()
+    row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
+               if r["id"] == str(rental.id))
+    assert row["tracker_miles_stale"] is True
+    route = Route(source="bouncie", drives=[
+        _drive(rental.starts_at - td(minutes=10), 60, (2000.0, 2030.0), 30.0),
+        _drive(rental.starts_at + td(hours=2), 60, (2030.0, 2061.5), 31.5),
+    ])
+    monkeypatch.setattr("turonomics_api.routers.trips.trip_route", lambda *_a, **_k: route)
+    api_client.get(f"/api/trips/{rental.id}/map")
+    session.refresh(rental)
+    assert rental.tracker_miles == 61.5
+    row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
+               if r["id"] == str(rental.id))
+    assert row["tracker_miles_stale"] is False

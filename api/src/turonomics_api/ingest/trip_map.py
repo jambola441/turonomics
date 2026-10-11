@@ -155,18 +155,28 @@ def _number(value: Any) -> float | None:
     return float(value)
 
 
+# Bumped whenever `rental_miles` changes how it counts, so miles stored under
+# an older rule are read again. 1 counted only drives starting inside the
+# booking; 2 counts drives that overlap it.
+TRACKER_MILES_RULE = 2
+
+
 def rental_miles(route: Route, *, starts: datetime, ends: datetime) -> float | None:
     """Miles the tracker recorded over a rental, or None if it cannot say.
 
-    Only drives that start inside the rental: the route is read with a margin
-    either side for the map, and the host's own driving before and after is
-    not the guest's. The odometer span from the first drive to the last is the
-    tracker's equivalent of Turo's check-in and check-out readings; the drives'
-    own distances are summed where the odometer is missing.
+    Drives that overlap the rental, not only those that start inside it. A
+    guest who collects the car early starts the first drive before the booked
+    time, and counting only drives that start inside the booking dropped it:
+    Jason's 235-mile first drive, Ian Alexander's 205, Erica's 101, each read as
+    a gap of that size against Turo. A drive of the host's that ends before the
+    rental begins, or starts after it ends, is still left out. The odometer
+    span from the first drive to the last is the tracker's equivalent of
+    Turo's check-in and check-out readings; the drives' own distances are
+    summed where the odometer is missing.
     """
     if route.source != "bouncie":
         return None
-    drives = [d for d in route.drives if starts <= d.starts_at <= ends]
+    drives = [d for d in route.drives if d.ends_at > starts and d.starts_at < ends]
     if not drives:
         return None
     first, last = drives[0], drives[-1]

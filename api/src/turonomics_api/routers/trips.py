@@ -34,7 +34,13 @@ from turonomics_api.db.models import (
 )
 from turonomics_api.ingest.distance import Distance, distance_lines_cents, summarise
 from turonomics_api.ingest.tolls import rematch_unattributed
-from turonomics_api.ingest.trip_map import Route, place, rental_miles, trip_route
+from turonomics_api.ingest.trip_map import (
+    TRACKER_MILES_RULE,
+    Route,
+    place,
+    rental_miles,
+    trip_route,
+)
 from turonomics_api.ingest.turo_extras import photo_groups, thread
 from turonomics_api.ingest.turo_receipt import receipt_summary
 from turonomics_api.routers.tolls import require_token
@@ -87,8 +93,11 @@ class TripRow(BaseModel):
     distance_over_mi: float = 0
     distance_unbilled_cents: int = 0
     # The tracker's miles over the rental, once its route has been read, and
-    # whether they disagree with Turo's enough to look at.
+    # whether they disagree with Turo's enough to look at. Stale when worked
+    # out before the way of working it out last changed, so the page reads the
+    # route again.
     tracker_miles: float | None = None
+    tracker_miles_stale: bool = False
     distance_disagrees: bool = False
 
 
@@ -158,6 +167,10 @@ def _row(session: Session, trip: Trip) -> TripRow:
         distance_over_mi=distance.over_mi if distance else 0,
         distance_unbilled_cents=distance.unbilled_cents if distance else 0,
         tracker_miles=trip.tracker_miles,
+        tracker_miles_stale=(
+            trip.tracker_miles is not None
+            and (trip.tracker_miles_rule or 1) < TRACKER_MILES_RULE
+        ),
         distance_disagrees=distance.disagrees if distance else False,
     )
 
@@ -374,10 +387,13 @@ def _keep_tracker_miles(session: Session, trip: Trip, route: Route) -> None:
     if trip.ends_at > now:
         return
     miles = rental_miles(route, starts=trip.starts_at, ends=trip.ends_at)
-    if miles is None or miles == trip.tracker_miles:
+    if miles is None:
+        return
+    if miles == trip.tracker_miles and trip.tracker_miles_rule == TRACKER_MILES_RULE:
         return
     trip.tracker_miles = miles
     trip.tracker_miles_at = now
+    trip.tracker_miles_rule = TRACKER_MILES_RULE
     session.commit()
 
 

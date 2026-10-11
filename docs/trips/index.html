@@ -277,7 +277,7 @@
 
   // Rentals whose map has been read for the tracker's miles, so one with no
   // tracker is not asked about on every load.
-  var MILES_KEY = "turonomics.trips.miles.v1";
+  var MILES_KEY = "turonomics.trips.miles.v2";
   try { state.milesRead = JSON.parse(localStorage.getItem(MILES_KEY) || "{}") || {}; }
   catch (e) { state.milesRead = {}; }
 
@@ -323,7 +323,7 @@
       // Its plazas, or its miles: reading the map is what stores the
       // tracker's miles, once, for a finished Turo rental.
       return (t.toll_count > 0 && oddCount(t) === null) ||
-        (!off(t) && t.tracker_miles == null && !state.milesRead[t.id]);
+        (!off(t) && (t.tracker_miles == null || t.tracker_miles_stale) && !state.milesRead[t.id]);
     });
     var stopped = false;
     function next() {
@@ -572,8 +572,8 @@
              (D.unbilled_cents && !shut) || D.disagrees ? "warn" : null);
       } else {
         tile("Distance", D.driven_mi + " mi",
-             D.disagrees ? "tracker says " + D.tracker_mi + " mi" :
-             D.included_mi != null ? "of " + D.included_mi + " included" : "unlimited",
+             (D.included_mi != null ? "of " + D.included_mi + " included" : "unlimited") +
+             (D.tracker_mi != null ? " · tracker " + D.tracker_mi : ""),
              D.disagrees ? "warn" : null);
       }
     }
@@ -641,9 +641,9 @@
       add(box, "div", "quiet", "No crossings on the imported statements.");
     }
 
-    // Distance, when there is something to say: miles over, Turo and the
-    // tracker apart, or only the tracker's figure to go on.
-    if (D && (D.over_mi > 0 || D.disagrees || D.driven_mi == null)) {
+    // Distance on every trip that has a figure from either side: Turo's,
+    // which is what gets filed, and the tracker's beside it.
+    if (D) {
       section(box, "Distance");
       D.window_closed = windowClosed(trip);
       renderDistance(box, D);
@@ -786,7 +786,11 @@
     } else {
       add(box, "div", "line dim", "Tracker: not read yet — opening the route reads it.");
     }
-    if (D.disagrees) {
+    if (D.disagrees && D.driven_mi === 0) {
+      add(box, "div", "note", "Turo says 0 mi were driven, against the tracker's " + D.tracker_mi +
+          " mi: the odometer readings entered on Turo for this trip are probably mistyped. " +
+          "Nothing can be filed for distance until they are corrected on Turo.");
+    } else if (D.disagrees) {
       add(box, "div", "note", "Turo and the tracker differ by " +
           Math.round(Math.abs(D.tracker_mi - D.driven_mi)) + " mi. Filing uses Turo's figure; " +
           "check the odometer photos on Turo if it looks wrong.");

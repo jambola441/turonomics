@@ -26,6 +26,7 @@ from turonomics_api.db.models import (
     TripState,
     Vehicle,
 )
+from turonomics_api.ingest.reimbursements import relink_invoices
 from turonomics_api.ingest.turo_invoice import (
     TuroInvoiceResult,
     _amounts,
@@ -702,3 +703,92 @@ def test_katherines_two_rows_become_the_emails_one(session, car, rental) -> None
     assert applied.id == emails.id, "the row the filed email keeps producing"
     assert result.merged == 1
     assert session.get(ReimbursementInvoice, ours.id) is None
+
+
+# ---------------------------------------------------------------------------
+# Turo saying the host was paid
+# ---------------------------------------------------------------------------
+
+OWNER_FAVOUR = "RESOLVED_AUTOMATICALLY_OWNER_FAVOR"
+
+
+@requires_db
+def test_a_claim_turo_resolved_for_the_host_is_charged(session, car, rental) -> None:
+    """Kaela's trip: Turo's page said RESOLVED_AUTOMATICALLY_OWNER_FAVOR and the
+    app listed the invoice as merely filed, so the crossings stayed outstanding
+    and the guest could be asked a second time."""
+    toll = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+
+    row, result = _apply(session, {**AUSTIN, "reimbursementStatus": OWNER_FAVOUR})
+
+    assert row.state == "charged"
+    assert row.charged_at == NOW
+    assert toll.recovered_at == NOW, "and the toll line covers the crossing"
+    assert result.charged_by_status == 1
+    assert result.tolls_recovered == 1
+
+
+@requires_db
+def test_a_status_that_is_not_known_to_mean_paid_changes_nothing(
+    session, car, rental
+) -> None:
+    """ACCEPTED has been seen and never reported as money arriving. Charging on
+    it would tick crossings off against an ask that may never be paid."""
+    toll = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+
+    row, result = _apply(session, {**AUSTIN, "reimbursementStatus": "ACCEPTED"})
+
+    assert row.state == "filed"
+    assert row.charged_at is None
+    assert toll.recovered_at is None
+    assert result.charged_by_status == 0
+
+
+@requires_db
+def test_the_status_cannot_write_off_crossings_the_invoice_did_not_cover(
+    session, car, rental
+) -> None:
+    """Charged by status is still held to the coverage test. A $40.71 toll line
+    against $90.00 of crossings pays part of them, and which part is not
+    something to guess."""
+    toll = _crossing(session, car, rental, cents=9000, imported_at=NOW - td(days=10))
+
+    row, _ = _apply(session, {**AUSTIN, "reimbursementStatus": OWNER_FAVOUR})
+
+    assert row.state == "charged", "Turo did pay what it charged"
+    assert toll.recovered_at is None, "but not the whole of the crossings"
+
+
+@requires_db
+def test_an_invoice_recorded_filed_before_this_is_caught_up(
+    session, car, rental
+) -> None:
+    """The invoices already in the ledger are never re-read, so the stored body
+    is what moves them. Re-match is how the operator triggers it."""
+    toll = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+    row = _emailed(session, rental, total=14040, state="filed", invoice_id="113672232")
+    row.toll_cents = 4071
+    row.turo_body = {**AUSTIN, "reimbursementStatus": OWNER_FAVOUR}
+    session.flush()
+
+    result = relink_invoices(session, now=NOW)
+
+    assert row.state == "charged"
+    assert row.charged_at == NOW
+    assert toll.recovered_at == NOW
+    assert result.updated == 1
+
+
+@requires_db
+def test_catching_up_leaves_other_filed_invoices_alone(session, car, rental) -> None:
+    toll = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+    row = _emailed(session, rental, total=14040, state="filed", invoice_id="113672232")
+    row.toll_cents = 4071
+    row.turo_body = {**AUSTIN, "reimbursementStatus": "ACCEPTED"}
+    session.flush()
+
+    result = relink_invoices(session, now=NOW)
+
+    assert row.state == "filed"
+    assert toll.recovered_at is None
+    assert result.updated == 0

@@ -229,8 +229,8 @@ class InvoicesResponse(BaseModel):
     itemised: list[str]
     tolls_asked: int
     tolls_recovered: int
-    # Turo's reimbursementStatus values, reported because none has been read
-    # unmasked yet and nothing here acts on them until one has.
+    # Turo's reimbursementStatus values, reported so a new one is noticed. Only
+    # those in `OWNER_PAID_STATUSES` change anything; the rest are for reading.
     statuses: list[str]
 
 

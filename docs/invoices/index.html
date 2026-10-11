@@ -41,14 +41,19 @@
   .ledger-totals{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 14px;
     font-family:var(--mono);font-size:11px;color:var(--dim)}
   .ledger-totals b{font-weight:600;color:var(--ink)}
-  .ledger-table{width:100%;border-collapse:collapse;font-size:12px}
-  .ledger-table th{text-align:left;font-family:var(--mono);font-size:9.5px;
-    letter-spacing:.1em;text-transform:uppercase;color:var(--dim);
-    padding:6px 8px;border-bottom:1px solid var(--line);font-weight:500}
-  .ledger-table td{padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:top}
-  .ledger-table .num{text-align:right;font-family:var(--mono);white-space:nowrap}
-  .ledger-table .zero{color:var(--dim)}
-  .ledger-table .who{font-size:11px;color:var(--dim)}
+  .lrows{display:flex;flex-direction:column}
+  .lrow{display:flex;gap:12px;justify-content:space-between;padding:10px 2px;
+    border-bottom:1px solid var(--line)}
+  .lmain{min-width:0;flex:1}
+  .lname{font-size:13px;font-weight:600}
+  .lrow .who{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
+  .lfig{font-family:var(--mono);font-size:11.5px;margin-top:4px}
+  .lturo{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:2px}
+  .lturo .unread{color:var(--amber)}
+  .lside{text-align:right;flex-shrink:0;max-width:45%}
+  .lrow .btn{font-size:11px;padding:3px 9px;margin-top:5px}
+  .lrow .trip-link{font-size:10.5px;color:var(--blue);text-decoration:none;font-weight:400}
+  .lquiet>summary{cursor:pointer;font-size:12px;color:var(--dim);padding:10px 0}
   .ledger-state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
     text-transform:uppercase;white-space:nowrap}
   .ledger-state.tobill{color:var(--amber)}
@@ -56,13 +61,7 @@
   .dist{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:4px;text-transform:none;letter-spacing:0}
   .ledger-state.expired{color:var(--dim)}
   .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
-  .ledger-table .btn{font-size:11px;padding:3px 9px;margin-top:5px}
-  .ledger-table .trip-link{font-size:10.5px;color:var(--blue);text-decoration:none}
-  .ledger-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
-  .ledger-table th,.ledger-table td{white-space:nowrap}
-  .ledger-table td:first-child{white-space:normal;min-width:150px}
   .ledger-cover{font-size:12px;color:var(--muted);margin:0 0 10px}
-  .ledger-table .unread{color:var(--amber);font-size:10.5px}
   .remote{margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
   .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
   .remote-status{font-size:12.5px;color:var(--muted)}
@@ -165,27 +164,11 @@
     <summary>Every rental on the account, and what became of its crossings</summary>
     <div class="ledger-totals" id="ledgerTotals"></div>
     <div class="ledger-cover" id="ledgerCover"></div>
-    <div class="ledger-scroll">
-    <table class="ledger-table">
-      <thead>
-        <tr>
-          <th>Rental</th>
-          <th class="num">Tolls</th>
-          <th class="num">To bill</th>
-          <th class="num">Asked</th>
-          <th class="num">Settled</th>
-          <th class="num">Turo charged</th>
-          <th class="num">Turo: tolls</th>
-          <th class="num">tickets</th>
-          <th class="num">distance</th>
-          <th class="num">other</th>
-          <th class="num">Days left</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody id="ledgerBody"></tbody>
-    </table>
-    </div>
+    <div class="lrows" id="ledgerBody"></div>
+    <details class="lquiet" id="ledgerQuietWrap" hidden>
+      <summary id="ledgerQuietSum"></summary>
+      <div class="lrows" id="ledgerQuiet"></div>
+    </details>
   </details>
 </main>
 
@@ -458,13 +441,29 @@
       .then(function () { state.busy = false; });
   }
 
+  // One row per rental, as a short list rather than a thirteen-column table:
+  // only the figures that are not zero, ours on one line and Turo's on the
+  // next, and the state with what can be done about it on the right. Rentals
+  // with nothing on them at all are folded away at the bottom.
   function renderLedger(data) {
     var body = el("ledgerBody");
+    var quiet = el("ledgerQuiet");
     body.textContent = "";
+    quiet.textContent = "";
+    var quietCount = 0;
     (data.rows || []).forEach(function (row) {
-      var tr = document.createElement("tr");
-      var who = document.createElement("td");
+      // Folded: covered by a statement, no crossings, nothing from Turo. A
+      // rental outside every statement stays in view, since importing another
+      // date range is something to do about it.
+      var empty = row.state === "no crossings" && !row.charged_cents && !row.asked_cents &&
+        !row.turo_unknown_cents && !row.distance_unbilled_cents;
+      if (empty) quietCount++;
+      var item = document.createElement("div");
+      item.className = "lrow";
+      var main = document.createElement("div");
+      main.className = "lmain";
       var name = document.createElement("div");
+      name.className = "lname";
       name.textContent = (row.vehicle_nickname || "—") + " · " + (row.guest_name || "—");
       // Everything about the rental — Turo's side, invoices, crossings — is
       // one click away on the trips page.
@@ -474,48 +473,61 @@
       link.textContent = "trip ›";
       name.appendChild(document.createTextNode(" "));
       name.appendChild(link);
-      var when = document.createElement("div");
-      when.className = "who";
-      when.textContent = String(row.ends_at).slice(0, 10) +
-        (row.turo_trip_id ? " · " + row.turo_trip_id : " · off-platform");
-      who.appendChild(name);
-      who.appendChild(when);
+      main.appendChild(name);
+      var meta = document.createElement("div");
+      meta.className = "who";
+      meta.textContent = String(row.ends_at).slice(0, 10) +
+        (row.turo_trip_id ? " · " + row.turo_trip_id : " · off-platform") +
+        (row.days_left == null ? "" : row.days_left < 0 ? " · window closed" :
+          " · " + row.days_left + " days left");
+      main.appendChild(meta);
+      var ours = [["tolls", row.tolls_cents], ["to bill", row.unfiled_cents],
+                  ["asked", row.filed_cents], ["settled", row.recovered_cents]]
+        .filter(function (p) { return p[1]; })
+        .map(function (p) { return p[0] + " " + money(p[1]); });
+      var fig = document.createElement("div");
+      fig.className = "lfig";
+      fig.textContent = ours.length ? ours.join(" · ") : "no crossings";
+      main.appendChild(fig);
+      var kinds = [["tolls", row.turo_tolls_cents], ["tickets", row.turo_tickets_cents],
+                   ["distance", row.turo_distance_cents], ["other", row.turo_other_cents]]
+        .filter(function (p) { return p[1]; })
+        .map(function (p) { return p[0] + " " + money(p[1]); });
+      if (row.charged_cents || kinds.length || row.turo_unknown_cents) {
+        var turo = document.createElement("div");
+        turo.className = "lturo";
+        // What Turo invoiced, by kind, and how much of it has been charged:
+        // an invoice can be asked for and not yet paid.
+        turo.textContent = "Turo invoiced " +
+          (kinds.length ? kinds.join(" · ") : money(row.asked_cents)) +
+          " · charged " + money(row.charged_cents);
+        if (row.turo_unknown_cents) {
+          // Money Turo invoiced that nobody has broken down yet: amber,
+          // because it is the part that may be these tolls.
+          var unread = document.createElement("span");
+          unread.className = "unread";
+          unread.textContent = " · +" + money(row.turo_unknown_cents) + " not broken down";
+          turo.appendChild(unread);
+        }
+        main.appendChild(turo);
+      }
       if (row.note) {
         var note = document.createElement("div");
         note.className = "ledger-note";
         note.textContent = row.note;
-        who.appendChild(note);
+        main.appendChild(note);
       }
-      tr.appendChild(who);
-      [row.tolls_cents, row.unfiled_cents, row.filed_cents, row.recovered_cents,
-       row.charged_cents, row.turo_tolls_cents || 0, row.turo_tickets_cents || 0,
-       row.turo_distance_cents || 0, row.turo_other_cents || 0].forEach(function (cents) {
-        var td = document.createElement("td");
-        td.className = "num" + (cents ? "" : " zero");
-        td.textContent = money(cents);
-        tr.appendChild(td);
-      });
-      if (row.turo_unknown_cents) {
-        // Money Turo invoiced that nobody has broken down yet. Under "other"
-        // so the columns still add up, and amber because it is the part that
-        // may be these tolls.
-        var unread = document.createElement("div");
-        unread.className = "unread";
-        unread.textContent = "+" + money(row.turo_unknown_cents) + " not broken down";
-        tr.lastChild.appendChild(unread);
-      }
-      var left = document.createElement("td");
-      left.className = "num" + (row.days_left == null || row.days_left < 0 ? " zero" : "");
-      left.textContent = row.days_left == null ? "—" :
-        row.days_left < 0 ? "closed" : String(row.days_left);
-      tr.appendChild(left);
-      var state = document.createElement("td");
+      item.appendChild(main);
+      var side = document.createElement("div");
+      side.className = "lside";
+      var state = document.createElement("div");
       state.className = "ledger-state " +
         (row.state === "to bill" || row.state === "partly billed" ||
          row.state === "short" || row.state.indexOf("check ") === 0 ||
          row.state === "no statement yet" ? "tobill" :
          row.state === "expired" ? "expired" : "");
       state.textContent = row.state;
+      side.appendChild(state);
       if (row.turo_trip_id && (row.state === "to bill" || row.state === "partly billed") &&
           row.days_left != null && row.days_left >= 0) {
         var file = document.createElement("button");
@@ -523,8 +535,7 @@
         file.className = "btn go";
         file.textContent = "File " + money(row.unfiled_cents);
         file.addEventListener("click", function () { queueFiling(row); });
-        state.appendChild(document.createElement("br"));
-        state.appendChild(file);
+        side.appendChild(file);
       }
       // Additional distance beside the tolls, tolls | distance, while the
       // window is open. Filed on Turo for now: the site cannot file it yet.
@@ -534,11 +545,14 @@
         dist.className = "dist" + (closed ? " gone" : "");
         dist.textContent = "| " + money(row.distance_unbilled_cents) + " distance" +
           (closed ? " expired" : "");
-        state.appendChild(dist);
+        side.appendChild(dist);
       }
-      tr.appendChild(state);
-      body.appendChild(tr);
+      item.appendChild(side);
+      (empty ? quiet : body).appendChild(item);
     });
+    el("ledgerQuietWrap").hidden = !quietCount;
+    el("ledgerQuietSum").textContent = quietCount + (quietCount === 1 ? " rental" : " rentals") +
+      " with no crossings and nothing from Turo";
     el("ledgerTotals").textContent =
       "tolls " + money(data.tolls_cents) +
       " · to bill " + money(data.unfiled_cents) +

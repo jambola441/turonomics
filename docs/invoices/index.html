@@ -65,6 +65,7 @@
   .remote{margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
   .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
   .remote-status{font-size:12.5px;color:var(--muted)}
+  .remote-buttons{display:flex;gap:8px;flex-wrap:wrap}
   .remote-status.on{color:var(--green)}
   .remote-log{list-style:none;margin:10px 0 0;padding:0;font-size:12px}
   .remote-log li{padding:5px 0;border-top:1px solid var(--line);line-height:1.45}
@@ -150,7 +151,10 @@
   <section class="remote" id="remote" hidden>
     <div class="remote-head">
       <span class="remote-status" id="remoteStatus">looking for the extension…</span>
-      <button class="btn" id="pullTuro" type="button">Pull from Turo</button>
+      <span class="remote-buttons">
+        <button class="btn" id="pullTuro" type="button">Pull from Turo</button>
+        <button class="btn" id="readEzpass" type="button">Read E-ZPass</button>
+      </span>
     </div>
     <ol class="remote-log" id="remoteLog"></ol>
   </section>
@@ -609,6 +613,7 @@
       st.textContent = c.state;
       li.appendChild(st);
       var what = c.kind === "pull" ? "Pull from Turo" :
+        c.kind === "tolls" ? "Read E-ZPass" :
         "File " + (c.guest_name || "rental") + (c.turo_trip_id ? " · " + c.turo_trip_id : "");
       li.appendChild(document.createTextNode(what + (c.result ? " — " + c.result : "")));
       log.appendChild(li);
@@ -662,6 +667,9 @@
   }
 
   el("pullTuro").addEventListener("click", function () { queue({ kind: "pull" }); });
+  // Runs in the computer's Chrome, on an E-ZPass tab left open and logged in:
+  // the extension reads the same windows a Send tolls click would.
+  el("readEzpass").addEventListener("click", function () { queue({ kind: "tolls" }); });
 
   function loadLedger() {
     return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })

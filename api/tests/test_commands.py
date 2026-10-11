@@ -137,6 +137,15 @@ def test_a_pull_is_one_at_a_time_too(api_client) -> None:
 
 
 @requires_db
+def test_reading_e_zpass_can_be_queued_once_and_not_for_a_rental(api_client, rental) -> None:
+    """From the phone: the extension reads E-ZPass in the computer's Chrome."""
+    first = _queue(api_client, "tolls").json()
+    assert first["kind"] == "tolls" and first["state"] == "queued"
+    assert _queue(api_client, "tolls").json()["id"] == first["id"], "one at a time"
+    assert _queue(api_client, "tolls", trip=rental).status_code == 422
+
+
+@requires_db
 def test_nonsense_is_refused(api_client, rental) -> None:
     assert _queue(api_client, "delete-everything").status_code == 422
     assert _queue(api_client, "file").status_code == 422, "which rental?"

@@ -191,3 +191,22 @@ def test_the_ledger_carries_distance_beside_the_tolls(api_client, monkeypatch, s
     assert rows["70000001"]["distance_unbilled_cents"] == 4588
     assert rows["70000002"]["distance_unbilled_cents"] == 4588
     assert body["distance_collectable_cents"] == 4588, "the closed one is not collectable"
+
+
+@requires_db
+def test_distance_past_the_window_is_counted_as_lost(api_client, monkeypatch, session) -> None:
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    car = Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2024, plate="LEH9892")
+    session.add(car)
+    session.flush()
+    now = datetime.now(UTC)
+    for res, ended, over in (("71000001", now - td(days=5), 10), ("71000002", now - td(days=300), 68)):
+        session.add(Trip(
+            vehicle_id=car.id, turo_trip_id=res, guest_name="Joe",
+            starts_at=ended - td(days=3), ends_at=ended, state=TripState.completed,
+            source=TripSource.email, turo_detail=_detail(over=over, rate=0.40),
+        ))
+    session.commit()
+    body = api_client.get("/api/invoices/ledger").json()
+    assert body["distance_collectable_cents"] == 400
+    assert body["distance_lost_cents"] == 2720

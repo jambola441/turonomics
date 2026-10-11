@@ -388,10 +388,16 @@
     el("s-bill").textContent = lg ? money(lg.collectable_cents) : "—";
     el("s-wait").textContent = lg ? money(lg.awaiting_cents) : "—";
     var lost = el("s-lost");
-    lost.hidden = !(lg && lg.lost_cents);
-    if (lg && lg.lost_cents) {
-      lost.textContent = money(lg.lost_cents) + " on rentals was never charged and can no " +
-        "longer be filed — the 90-day window closed, or Turo charged less than the crossings.";
+    var lostTolls = lg ? lg.lost_cents || 0 : 0;
+    var lostMiles = lg ? lg.distance_lost_cents || 0 : 0;
+    lost.hidden = !(lostTolls || lostMiles);
+    if (lostTolls || lostMiles) {
+      // Tolls | distance, as everywhere else the two sit side by side.
+      lost.textContent = "Lost past the 90-day window: " +
+        [lostTolls ? money(lostTolls) + " tolls" : null,
+         lostMiles ? money(lostMiles) + " additional distance" : null]
+          .filter(Boolean).join(" | ") +
+        ". Never charged, and Turo will no longer take a filing for it.";
     }
   }
 

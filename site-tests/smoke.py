@@ -205,8 +205,10 @@ def main() -> int:
                   and page.locator("#s-bill").text_content() != _money(owed))
             check("and what Turo was asked for is apart from it",
                   page.locator("#s-wait").text_content() == _money(ledger["awaiting_cents"]))
-            check("nothing is called lost when nothing is",
-                  page.locator("#s-lost").is_hidden())
+            check("distance past the window is counted as lost, apart from tolls",
+                  page.locator("#s-lost").is_visible()
+                  and "$93.33 additional distance" in page.locator("#s-lost").inner_text()
+                  and " tolls" not in page.locator("#s-lost").inner_text())
             check("unattributed money is reported apart from recoverable money",
                   page.locator("#s-loose").text_content() == _money(loose))
 
@@ -471,6 +473,8 @@ def main() -> int:
                   "arrived after the first invoice" in ledger)
             check("additional distance sits beside the tolls to file, tolls | distance",
                   "| $54.60 distance" in ledger and "| distance to file $54.60" in ledger)
+            check("and distance past the window is totalled as expired",
+                  "| distance expired $93.33" in ledger)
             check("a settled rental appears in the ledger though not in the list",
                   "settled" in ledger and "$9.79" in ledger)
             check("Turo's own charge is shown beside ours, not merged into it",

@@ -487,6 +487,7 @@ def _ledger_payload() -> dict[str, object]:
         "awaiting_cents": 679,
         "lost_cents": 0,
         "distance_collectable_cents": 5460,
+        "distance_lost_cents": 9333,
     }
 
 

@@ -516,9 +516,11 @@ class LedgerResponse(BaseModel):
     collectable_cents: int = 0
     awaiting_cents: int = 0
     lost_cents: int = 0
-    # Additional distance not yet invoiced on rentals still inside the window.
-    # The window is the tolls' 90 days, assumed to hold for distance too.
+    # Additional distance not yet invoiced on rentals still inside the window,
+    # and on rentals past it. The window is the tolls' 90 days, assumed to
+    # hold for distance too.
     distance_collectable_cents: int = 0
+    distance_lost_cents: int = 0
 
 
 def _ledger_state(
@@ -751,6 +753,11 @@ def ledger(session: DbSession) -> LedgerResponse:
             r.distance_unbilled_cents
             for r in rows
             if r.days_left is not None and r.days_left >= 0
+        ),
+        distance_lost_cents=sum(
+            r.distance_unbilled_cents
+            for r in rows
+            if r.days_left is not None and r.days_left < 0
         ),
         awaiting_cents=sum(r.filed_cents for r in rows),
         lost_cents=sum(r.unfiled_cents for r in rows if not _collectable(r)),

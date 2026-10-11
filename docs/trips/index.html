@@ -71,6 +71,8 @@
   .badge.off{color:var(--blue);border-color:var(--blue)}
   .badge.odd{color:var(--red);border-color:var(--red);font-weight:700}
   .badge.miles{color:var(--amber);border-color:var(--amber)}
+  .badge.miles.gone{color:var(--dim);border-color:var(--border)}
+  .note.dim-note{color:var(--muted)}
   .side{text-align:right;flex-shrink:0}
   .state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
          color:var(--dim)}
@@ -388,6 +390,15 @@
       .filter(Boolean).join(" | "));
   }
 
+  // Turo's 90 days from the end of the rental, assumed for distance as for
+  // tolls; never for an off-platform rental.
+  function windowClosed(trip) {
+    if (off(trip)) return false;
+    var row = state.ledger[trip.id];
+    if (row && row.days_left != null) return row.days_left < 0;
+    return Date.now() > new Date(trip.ends_at).getTime() + 90 * 864e5;
+  }
+
   function renderTrip(trip, into) {
     var card = add(into, "div", "trip");
     card.id = "trip-" + trip.id;
@@ -400,10 +411,12 @@
     if (odd) add(who, "span", "badge odd", flagText(odd));
     // Turo's miles and the tracker's far enough apart to look at.
     if (trip.distance_disagrees) add(who, "span", "badge miles", "miles differ");
-    // Miles over the limit that Turo was never asked to charge for.
+    // Miles over the limit that Turo was never asked to charge for: amber
+    // while it can still be filed, grey and "expired" once the window closed.
     if (trip.distance_unbilled_cents) {
-      add(who, "span", "badge miles", trip.distance_over_mi + " mi over · " +
-          money(trip.distance_unbilled_cents));
+      var shut = windowClosed(trip);
+      add(who, "span", "badge miles" + (shut ? " gone" : ""), trip.distance_over_mi + " mi over · " +
+          money(trip.distance_unbilled_cents) + (shut ? " expired" : ""));
     }
     add(body, "div", "meta",
         when(trip.starts_at) + " → " + when(trip.ends_at) +
@@ -552,9 +565,11 @@
         tile("Distance", D.tracker_mi + " mi", "tracker only — Turo has no odometer reading",
              D.tracker_over_mi ? "warn" : null);
       } else if (D.over_mi > 0) {
+        var shut = windowClosed(trip);
         tile("Distance", D.over_mi + " mi over",
-             D.unbilled_cents ? money(D.unbilled_cents) + " not invoiced" : "invoiced",
-             D.unbilled_cents || D.disagrees ? "warn" : null);
+             !D.unbilled_cents ? "invoiced" :
+             shut ? money(D.unbilled_cents) + " expired" : money(D.unbilled_cents) + " not invoiced",
+             (D.unbilled_cents && !shut) || D.disagrees ? "warn" : null);
       } else {
         tile("Distance", D.driven_mi + " mi",
              D.disagrees ? "tracker says " + D.tracker_mi + " mi" :
@@ -630,6 +645,7 @@
     // tracker apart, or only the tracker's figure to go on.
     if (D && (D.over_mi > 0 || D.disagrees || D.driven_mi == null)) {
       section(box, "Distance");
+      D.window_closed = windowClosed(trip);
       renderDistance(box, D);
     }
 
@@ -779,7 +795,10 @@
       add(box, "div", "line dim", D.invoiced_cents
         ? "Invoiced for distance: " + money(D.invoiced_cents)
         : "Not invoiced for distance");
-      if (D.unbilled_cents) {
+      if (D.unbilled_cents && D.window_closed) {
+        add(box, "div", "note dim-note", money(D.unbilled_cents) +
+            " of additional distance was never invoiced, and the 90-day window has closed.");
+      } else if (D.unbilled_cents) {
         add(box, "div", "note", money(D.unbilled_cents) +
             " of additional distance has not been invoiced. Filing it from here is not built " +
             "yet — file it from Turo's invoice page.");

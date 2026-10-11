@@ -239,6 +239,15 @@ drawing, because the sheet goes to a guest and to Turo:
   having passed.
 * **No guessed plazas.** High and medium confidence only, never a zone's middle;
   a medium plaza is labelled "position approximate".
+* **A charging zone by the drive that went in** (`ingest/crz.py`). A CRZ line
+  names no gantry, so it is matched to the drive under way at the time (start to
+  end, ten minutes either side), and the inset is centred where that drive
+  crossed into the zone, with the zone shaded and its edge dashed. The caption
+  says "drive 10:00–10:30 AM entered the zone here", or "began inside the zone".
+  No drive at the time, or one that never went in, leaves the charge a row. The
+  outline is the MTA's own (data.ny.gov `srxy-5nxn`, "Central Business District
+  Geofence"): its first polygon is the zone with the FDR Drive and West Side
+  Highway already left out, and the others are those highway strips.
 * **No data, no inset.** No tracker, Bouncie not answering, an unknown plaza or
   any error building the picture leaves that sheet as the plain table. A toll
   invoice never fails to draft for want of a map.

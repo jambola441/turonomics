@@ -28,10 +28,12 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
+from turonomics_api.ingest.crz import ZONE, entry
 from turonomics_api.ingest.evidence import INSET_RADIUS_M, Inset
-from turonomics_api.ingest.trip_map import Placed, Route, nearest_km, place
+from turonomics_api.ingest.trip_map import Drive, Placed, Route, nearest_km, place
+from turonomics_api.settings import fleet_timezone
 
 # The tracker must have come at least this close for the sheet to draw an inset.
 # Tighter than the circle on purpose: the caption says the tracker "came within
@@ -148,7 +150,13 @@ def build_insets(route: Route, crossings: Sequence[Crossing]) -> tuple[list[Inse
     if not route.drives:
         return [], 0
     groups: dict[tuple[float, float], _Group] = {}
+    zone: dict[int, tuple[Drive, list[datetime]]] = {}
     for plaza, agency, when in crossings:
+        if plaza.strip().upper() == "CRZ":
+            drive = _drive_at(route, when)
+            if drive is not None:
+                zone.setdefault(id(drive), (drive, []))[1].append(when)
+            continue
         spot = place(plaza, route, agency)
         if spot is None or spot.how != "plaza" or spot.confidence not in ("high", "medium"):
             continue
@@ -175,5 +183,57 @@ def build_insets(route: Route, crossings: Sequence[Crossing]) -> tuple[list[Inse
                 approximate=group.spot.confidence == "medium",
             )
         )
+    for drive, times in zone.values():
+        found = _zone_inset(route, drive, sorted(times))
+        if found is not None:
+            insets.append(found)
     insets.sort(key=lambda i: i.times[0])
     return insets[:MAX_INSETS], max(0, len(insets) - MAX_INSETS)
+
+
+# A CRZ charge is matched to the drive that was under way when it was made.
+# The statement's time and the tracker's drive bounds are both to the minute or
+# so; this is the slack between them, not room for a different drive.
+DRIVE_SLACK = timedelta(minutes=10)
+
+
+def _drive_at(route: Route, when: datetime) -> Drive | None:
+    for drive in route.drives:
+        if drive.starts_at - DRIVE_SLACK <= when <= drive.ends_at + DRIVE_SLACK:
+            return drive
+    return None
+
+
+def _zone_inset(route: Route, drive: Drive, times: list[datetime]) -> Inset | None:
+    """The congestion relief zone, for the drive a CRZ charge fell on.
+
+    Centred where that drive went into the zone, with the zone's edge drawn,
+    and worded as what it is: this drive, between these times, went in here.
+    A drive that never went in gives no inset, and the charge stays a row.
+    """
+    found = entry(drive.points)
+    if found is None:
+        return None
+    point, crossed = found
+    segments = local_segments(route, point, INSET_RADIUS_M)
+    if not segments:
+        return None
+    tz = fleet_timezone()
+    span = (
+        f"{drive.starts_at.astimezone(tz):%-I:%M}\u2013"
+        f"{drive.ends_at.astimezone(tz):%-I:%M %p}"
+    )
+    return Inset(
+        plaza="CRZ",
+        name="Congestion relief zone",
+        lat=point[0],
+        lon=point[1],
+        segments=segments,
+        closest_m=0,
+        times=times,
+        # The whole outline: it is public, and the renderer cuts it to the
+        # circle, shading the inside so the side that is the zone is plain.
+        zone_edges=[list(ZONE)],
+        caption=(f"drive {span} entered the zone here" if crossed
+                 else f"drive {span} began inside the zone"),
+    )

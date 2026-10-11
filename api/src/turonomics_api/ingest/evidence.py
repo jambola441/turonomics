@@ -107,6 +107,11 @@ class Inset:
     # Roads inside the circle, drawn faintly beneath the track. Empty when none
     # could be fetched, and the inset is then exactly what it was without them.
     roads: Sequence[RoadLine] = ()
+    # For a charging zone (CRZ): its whole outline, cut to the circle when
+    # drawn, and the sentence that replaces "tracker came within N m", which
+    # means nothing for a zone. The marker is then where the drive went in.
+    zone_edges: Sequence[Sequence[tuple[float, float]]] = ()
+    caption: str | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +283,15 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         f'<clipPath id="inset-clip-{index}"><circle cx="{cx}" cy="{cy}" r="{radius_px:.1f}"/>'
         f'</clipPath><g clip-path="url(#inset-clip-{index})">'
     )
+    # The zone, shaded so it is plain which side of the line is inside. Drawn
+    # whole and cut by the circle like everything else; it is public, and
+    # nothing of the guest's.
+    for outline in inset.zone_edges:
+        drawn = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in outline)
+        )
+        out.append(f'<polygon points="{drawn}" fill="#f3e8ff" stroke="none"/>')
     for kind in _ROAD_ORDER:
         width, colour = _ROAD_STYLE[kind]
         for road in inset.roads:
@@ -291,6 +305,17 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
                 f'<polyline points="{drawn}" fill="none" stroke="{colour}" '
                 f'stroke-width="{width}" stroke-linejoin="round" stroke-linecap="round"/>'
             )
+    # The zone's edge, under the track: dashed, so it reads as a line drawn on
+    # the map rather than a road.
+    for edge in inset.zone_edges:
+        drawn = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in edge)
+        )
+        out.append(
+            f'<polyline points="{drawn}" fill="none" stroke="#9333ea" stroke-width="2" '
+            f'stroke-dasharray="6 4" stroke-linejoin="round"/>'
+        )
     for segment in inset.segments:
         points = " ".join(
             f"{px:.1f},{py:.1f}"
@@ -321,7 +346,7 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         f'<text x="{x + 8 + bar + 4:.1f}" y="{base + 4}" font-size="9" fill="#374151">500 m</text>'
     )
     label = inset.plaza if not inset.name else f"{inset.plaza} \u00b7 {inset.name}"
-    near = f"tracker came within {inset.closest_m} m"
+    near = inset.caption or f"tracker came within {inset.closest_m} m"
     # The first time and a count, not a list: every crossing is in the table
     # above with its own time, and a list longer than the column is cut, which
     # once dropped the count and made the caption misleading.
@@ -335,7 +360,7 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         f'<text x="{x}" y="{ty + 14}" font-size="10" fill="#374151">{escape(near)}</text>'
     )
     line = ty + 27
-    if inset.approximate:
+    if inset.approximate and not inset.zone_edges:
         out.append(
             f'<text x="{x}" y="{line}" font-size="10" fill="#374151">'
             f"plaza position approximate</text>"
@@ -353,7 +378,12 @@ def _insets_height(sheet: EvidenceSheet) -> int:
         return 0
     rows = math.ceil(len(sheet.insets) / _INSET_COLUMNS)
     extra = 16 if sheet.insets_omitted else 0
-    return _INSETS_HEADER + rows * _INSET_ROW + extra
+    return _INSETS_HEADER + _zone_line(sheet) + rows * _INSET_ROW + extra
+
+
+def _zone_line(sheet: EvidenceSheet) -> int:
+    """The height of the line that explains a zone inset, when there is one."""
+    return 14 if any(inset.zone_edges for inset in sheet.insets) else 0
 
 
 def evidence_svg(sheet: EvidenceSheet) -> str:
@@ -457,13 +487,20 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
             )
             + "</text>"
         )
+        zone_line = _zone_line(sheet)
+        if zone_line:
+            parts.append(
+                f'<text x="32" y="{top + 45}" font-size="10.5" fill="#6b7280">'
+                "Purple is the congestion relief zone (MTA open data); there the marker is "
+                "where the drive went into it.</text>"
+            )
         for index, inset in enumerate(sheet.insets):
             column, grid_row = index % _INSET_COLUMNS, index // _INSET_COLUMNS
             parts.append(
                 _inset_svg(
                     inset,
                     32 + column * (_INSET_W + _INSET_GAP),
-                    top + 44 + grid_row * _INSET_ROW,
+                    top + 44 + zone_line + grid_row * _INSET_ROW,
                     index,
                 )
             )

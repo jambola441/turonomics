@@ -147,11 +147,60 @@ def test_a_track_between_the_threshold_and_the_circle_is_not_evidence() -> None:
     assert build_insets(route, [("VNB", None, T0)]) == ([], 0)
 
 
-def test_a_charging_zone_is_not_drawn() -> None:
-    """A zone's point is its middle, and no gantry stands there."""
+def test_a_charging_zone_is_drawn_where_the_drive_went_in_not_at_its_middle() -> None:
+    """A zone's point is its middle, and no gantry stands there. A CRZ charge
+    is drawn where the drive under way at the time crossed into the zone."""
     zone = locate("CRZ")
     assert zone is not None and zone.zone
-    assert build_insets(_through(zone.lat, zone.lon), [("CRZ", None, T0)]) == ([], 0)
+    insets, _ = build_insets(_through(zone.lat, zone.lon), [("CRZ", None, T0 + td(minutes=5))])
+    assert len(insets) == 1
+    inset = insets[0]
+    assert (round(inset.lat, 4), round(inset.lon, 4)) != (round(zone.lat, 4), round(zone.lon, 4))
+    assert inset.caption is not None and "entered the zone here" in inset.caption
+    assert inset.zone_edges, "the zone's edge is drawn"
+
+
+def _drive(points, start=T0, minutes=30):
+    return Drive(starts_at=start, ends_at=start + td(minutes=minutes), points=points)
+
+
+# Down Broadway from W 65th St to Times Square: in at 60th St.
+DOWN_BROADWAY = [(40.7740, -73.9820), (40.7700, -73.9830), (40.7650, -73.9840), (40.7580, -73.9855)]
+
+
+def test_a_crz_inset_sits_where_the_drive_crossed_60th_street() -> None:
+    route = Route(drives=[_drive(DOWN_BROADWAY)], source="bouncie")
+    insets, _ = build_insets(route, [("CRZ", "MTA", T0 + td(minutes=12))])
+    assert len(insets) == 1
+    assert 40.768 < insets[0].lat < 40.772, "at 60th St, not at the zone's middle"
+    assert insets[0].times == [T0 + td(minutes=12)]
+
+
+def test_a_drive_that_began_inside_the_zone_says_so() -> None:
+    route = Route(drives=[_drive(list(reversed(DOWN_BROADWAY)))], source="bouncie")
+    insets, _ = build_insets(route, [("CRZ", None, T0 + td(minutes=3))])
+    assert insets and insets[0].caption is not None and "began inside the zone" in insets[0].caption
+
+
+def test_a_crz_charge_with_no_drive_under_way_gets_no_inset() -> None:
+    route = Route(drives=[_drive(DOWN_BROADWAY)], source="bouncie")
+    assert build_insets(route, [("CRZ", None, T0 + td(hours=3))]) == ([], 0)
+
+
+def test_a_drive_that_never_entered_the_zone_gets_no_inset() -> None:
+    uptown = [(40.7900, -73.9700), (40.7950, -73.9650)]
+    route = Route(drives=[_drive(uptown)], source="bouncie")
+    assert build_insets(route, [("CRZ", None, T0 + td(minutes=5))]) == ([], 0)
+
+
+def test_a_zone_inset_draws_the_edge_and_its_own_caption() -> None:
+    route = Route(drives=[_drive(DOWN_BROADWAY)], source="bouncie")
+    insets, _ = build_insets(route, [("CRZ", None, T0 + td(minutes=12))])
+    svg = evidence_svg(_sheet(insets=insets, track_source="bouncie"))
+    minidom.parseString(svg)
+    assert "#9333ea" in svg, "the zone's edge"
+    assert "entered the zone here" in svg
+    assert "tracker came within" not in svg
 
 
 def test_a_plaza_that_was_a_guess_is_not_drawn() -> None:

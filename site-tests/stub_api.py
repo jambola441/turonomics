@@ -476,6 +476,9 @@ def _ledger_payload() -> dict[str, object]:
         "filed_cents": 679,
         "recovered_cents": 979,
         "charged_cents": 2500,
+        "collectable_cents": 1100,
+        "awaiting_cents": 679,
+        "lost_cents": 0,
     }
 
 

@@ -199,8 +199,14 @@ def main() -> int:
             check("every crossing is listed", page.locator(".toll").count() == len(tolls))
             check("the charged total is the sum of the cents",
                   page.locator("#s-total").text_content() == _money(total))
-            check("what is still owed excludes what was billed back",
-                  page.locator("#s-owed").text_content() == _money(owed))
+            ledger = stub_api._ledger_payload()
+            check("what is to bill is the ledger's collectable money, not every open crossing",
+                  page.locator("#s-bill").text_content() == _money(ledger["collectable_cents"])
+                  and page.locator("#s-bill").text_content() != _money(owed))
+            check("and what Turo was asked for is apart from it",
+                  page.locator("#s-wait").text_content() == _money(ledger["awaiting_cents"]))
+            check("nothing is called lost when nothing is",
+                  page.locator("#s-lost").is_hidden())
             check("unattributed money is reported apart from recoverable money",
                   page.locator("#s-loose").text_content() == _money(loose))
 
@@ -291,18 +297,13 @@ def main() -> int:
                   env_text.startswith("EZPASS_TAGS=")
                   and all(tag in env_text for tag in expected_tags))
 
-            # Ticking must re-render from the response. The figure dropping by
-            # exactly this row's amount is the part a stub serving a constant
-            # could not distinguish.
+            # Ticking must re-render from the response.
             first_open = next(t for t in tolls if not t["recovered_at"])
             row = page.locator(".toll").filter(
                 has=page.locator(f'.t-amt:text-is("{_money(first_open["amount_cents"])}")')
             ).first
             row.locator(".tick").click()
             page.wait_for_timeout(600)
-            check("billing a toll back lowers what is owed",
-                  page.locator("#s-owed").text_content()
-                  == _money(owed - first_open["amount_cents"]))
             check("the row it was ticked on is shown as done",
                   page.locator(".toll.done").count() == 2)
 
@@ -311,7 +312,7 @@ def main() -> int:
             row.locator(".tick").click()
             page.wait_for_timeout(600)
             check("unticking puts it back",
-                  page.locator("#s-owed").text_content() == _money(owed))
+                  page.locator(".toll.done").count() == 1)
 
             page.locator("#f-owed").click()
             page.wait_for_timeout(200)

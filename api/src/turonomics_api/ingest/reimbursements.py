@@ -310,9 +310,13 @@ def _recover(
             )
             return
     elif asked < total:
-        # Part of the crossings, or a toll this fleet has not imported. Either
-        # way some of the money is still owed and guessing which part is not
-        # this function's business.
+        # Part of the crossings. Which part, Turo does not say, and several
+        # sets of crossings can add up to the same figure. One is picked: the
+        # operator's call, because the alternative was every old rental reading
+        # as owed in full when most of it was paid. Nobody disputes which of a
+        # guest's own crossings a paid toll line covered, and the pick is a
+        # stamp on rows, so it can be undone.
+        _pick_covered(session, invoice, asked, result)
         result.unmatched_totals.append(
             f"{invoice.reservation_id}: toll line {asked}c covers only part of {total}c"
         )
@@ -391,3 +395,59 @@ def relink_invoices(session: Session, *, now: datetime) -> ReimbursementResult:
             invoice.charged_at = now
         _recover(session, invoice, result)
     return result
+
+
+def pick_subset(amounts: list[int], target: int) -> list[int]:
+    """Indexes of `amounts` whose sum is as close to `target` as it can get
+    without going over: exactly, where some set adds up to it.
+
+    Earlier items are preferred where two sets tie, so the same input always
+    picks the same crossings.
+    """
+    if target <= 0:
+        return []
+    # reach[s] = (item index, previous sum) of the first way found to make s.
+    reach: dict[int, tuple[int, int]] = {0: (-1, -1)}
+    for index, cents in enumerate(amounts):
+        if cents <= 0:
+            continue
+        for made in sorted(reach, reverse=True):
+            total = made + cents
+            if total <= target and total not in reach:
+                reach[total] = (index, made)
+        if target in reach:
+            break
+    best = max(reach)
+    picked: list[int] = []
+    while best > 0:
+        index, best = reach[best]
+        picked.append(index)
+    return sorted(picked)
+
+
+def _pick_covered(
+    session: Session, invoice: ReimbursementInvoice, asked: int, result: ReimbursementResult
+) -> None:
+    """Stamp as recovered the crossings a short toll line most plausibly paid.
+
+    `asked` is every charged toll line on the rental together. What earlier
+    picks already stamped counts against it, so a second invoice on the same
+    rental covers the next crossings rather than the same ones again.
+    """
+    tolls = session.scalars(
+        select(Toll).where(Toll.trip_id == invoice.trip_id).order_by(Toll.occurred_at)
+    ).all()
+    covered = sum(t.amount_cents for t in tolls if t.recovered_at is not None)
+    open_tolls = [t for t in tolls if t.recovered_at is None]
+    picked = pick_subset([t.amount_cents for t in open_tolls], asked - covered)
+    for index in picked:
+        open_tolls[index].recovered_at = invoice.charged_at
+    if picked:
+        result.tolls_recovered += len(picked)
+        log.info(
+            "reimbursement %s: a toll line of %dc taken to cover %d crossing(s) on %s",
+            invoice.turo_invoice_id or invoice.fingerprint,
+            asked,
+            len(picked),
+            invoice.reservation_id,
+        )

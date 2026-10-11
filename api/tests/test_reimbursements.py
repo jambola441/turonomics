@@ -525,12 +525,12 @@ def test_the_toll_line_is_what_gets_reconciled(
 
 
 @requires_db
-def test_a_toll_line_that_does_not_match_is_still_refused(
+def test_a_toll_line_short_of_ours_covers_only_what_fits_in_it(
     api_client, monkeypatch, session, trip
 ) -> None:
-    """Itemising does not mean guessing. A toll line of $9.00 against $15.55 of
-    crossings is a part-payment or a different set, and writing the rest off
-    would lose it."""
+    """A toll line of $9.00 against $9.11 and $6.44 of crossings paid for one
+    of them at most. The $6.44 fits inside it and is taken as paid; the $9.11
+    does not, and writing it off would lose it."""
     monkeypatch.delenv("TOLLS_TOKEN", raising=False)
     api_client.post("/api/tolls/import",
                     files={"statement": ("a.csv", _statement("-9.11", "-6.44"), "text/csv")})
@@ -539,7 +539,7 @@ def test_a_toll_line_that_does_not_match_is_still_refused(
     assert parsed is not None
     record_invoice(session, parsed, now=NOW)
     session.commit()
-    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 1555
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911
 
 
 @requires_db
@@ -910,11 +910,12 @@ def test_a_toll_line_covering_more_than_ours_ticks_the_crossings_off(
 
 
 @requires_db
-def test_a_toll_line_covering_less_than_ours_is_reported_not_applied(
+def test_a_toll_line_covering_less_than_ours_covers_what_fits(
     api_client, monkeypatch, session, trip
 ) -> None:
-    """Part of the crossings is not all of them, and which part is unknowable
-    from a single figure."""
+    """Part of the crossings is not all of them. Which part is unknowable from
+    a single figure, so one set is picked — the most the line can cover — and
+    the rest stays owed."""
     monkeypatch.delenv("TOLLS_TOKEN", raising=False)
     api_client.post("/api/tolls/import",
                     files={"statement": ("a.csv", _statement("-9.11", "-11.00"), "text/csv")})
@@ -926,8 +927,8 @@ def test_a_toll_line_covering_less_than_ours_is_reported_not_applied(
     record_invoice(session, parsed, now=NOW, result=result)
     session.commit()
 
-    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 2011, "untouched"
-    assert result.tolls_recovered == 0
+    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911
+    assert result.tolls_recovered == 1
     assert any("covers only part" in entry for entry in result.unmatched_totals)
 
 
@@ -1064,3 +1065,22 @@ def test_a_re_read_email_does_not_claim_a_later_crossing(
     assert len(_filed_tolls(session, trip)) == 1, "the new one is still to be asked for"
     out = api_client.get("/api/invoices/next-draft").json()
     assert out["total_cents"] == 450
+
+
+def test_a_pick_is_exact_where_any_set_adds_up() -> None:
+    from turonomics_api.ingest.reimbursements import pick_subset
+
+    amounts = [700, 300, 200, 150]
+    picked = pick_subset(amounts, 650)
+    assert sum(amounts[i] for i in picked) == 650
+    assert picked == pick_subset(amounts, 650), "the same input picks the same crossings"
+
+
+def test_a_pick_never_goes_over_the_line() -> None:
+    from turonomics_api.ingest.reimbursements import pick_subset
+
+    amounts = [911, 644]
+    assert pick_subset(amounts, 900) == [1]
+    assert pick_subset(amounts, 500) == []
+    assert pick_subset(amounts, 0) == []
+    assert sorted(pick_subset(amounts, 5000)) == [0, 1]

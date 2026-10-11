@@ -504,6 +504,13 @@ class LedgerResponse(BaseModel):
     filed_cents: int
     recovered_cents: int
     charged_cents: int
+    # The three figures that answer "what am I owed": still to ask for (a
+    # rental Turo will take a filing for, or one off-platform), asked and not
+    # yet paid, and not asked for in time. Crossings with no rental, and other
+    # cars', are on none of these rows, so they are in none of these figures.
+    collectable_cents: int = 0
+    awaiting_cents: int = 0
+    lost_cents: int = 0
 
 
 def _ledger_state(
@@ -537,6 +544,14 @@ def _ledger_state(
             f"Turo has asked for ${unreadable / 100:,.2f} on this rental without "
             f"saying what for — read its invoice before asking for "
             f"${unfiled / 100:,.2f} of tolls",
+        )
+    if unfiled > 0 and left is not None and left < 0 and (filed > 0 or recovered > 0):
+        # Part of it was asked for or paid, the rest never was, and Turo will
+        # no longer take it. Ahead of "partly billed", which is fileable.
+        return (
+            "expired",
+            f"${unfiled / 100:,.2f} of these crossings was never charged, "
+            "and the 90-day window has closed",
         )
     if unfiled > 0 and (filed > 0 or recovered > 0):
         # The case the per-crossing tracking exists for: a statement arriving
@@ -615,9 +630,11 @@ def _tally(
     offered Austin's $40.71 while the ledger — had it been able to see the
     $140.40 — would have said to check Turo first.
     """
-    tolls = session.scalars(
-        select(Toll).where(Toll.id.in_([line.toll_id for line in invoice.lines]))
-    ).all()
+    # Every crossing on the rental, settled ones included, whichever way the
+    # invoice was built: next-draft builds it from the open crossings only,
+    # and judged on those alone a rental half paid by a toll line read as
+    # wholly covered by it.
+    tolls = session.scalars(select(Toll).where(Toll.trip_id == invoice.trip_id)).all()
     unfiled = sum(t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is None)
     filed = sum(
         t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
@@ -626,7 +643,7 @@ def _tally(
     toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
     left = invoice.days_left(window, now)
     state, note = _ledger_state(
-        tolls=invoice.total_cents,
+        tolls=unfiled + filed + recovered,
         unfiled=unfiled,
         filed=filed,
         recovered=recovered,
@@ -720,7 +737,19 @@ def ledger(session: DbSession) -> LedgerResponse:
         filed_cents=sum(r.filed_cents for r in rows),
         recovered_cents=sum(r.recovered_cents for r in rows),
         charged_cents=sum(r.charged_cents for r in rows),
+        collectable_cents=sum(r.unfiled_cents for r in rows if _collectable(r)),
+        awaiting_cents=sum(r.filed_cents for r in rows),
+        lost_cents=sum(r.unfiled_cents for r in rows if not _collectable(r)),
     )
+
+
+def _collectable(row: LedgerRow) -> bool:
+    """Whether a row's unbilled money can still be asked for.
+
+    The state already says: a rental past its window is "expired" before it
+    can be anything fileable, so the window needs no second check here.
+    """
+    return row.state in _FILEABLE
 
 
 NO_CROSSINGS = "no crossings"

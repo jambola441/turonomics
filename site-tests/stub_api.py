@@ -282,9 +282,10 @@ def _trip_view(trip_id: str) -> dict | None:
             ],
             "extras_synced_at": NOW.isoformat(),
             "receipt": {
-                "earnings": [{"label": "Turo fee", "value": "-$21.25"},
+                "earnings": [{"label": "Turo fees", "value": "-$21.25"},
                              {"label": "Total earned", "value": "$191.25"}],
-                "reimbursements": [{"label": "Tolls", "value": "$17.79"}],
+                "reimbursements": [{"label": "Tolls were incurred", "value": "$17.79"},
+                                   {"label": "Reimbursement total", "value": "$17.79"}],
                 "total_earned": "$191.25",
                 "synced_at": NOW.isoformat(),
             },

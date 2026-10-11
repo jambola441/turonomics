@@ -347,7 +347,8 @@
     var row = state.ledger[trip.id];
     if (row) {
       var tobill = row.state === "to bill" || row.state === "partly billed" ||
-        row.state.indexOf("check ") === 0 || row.state === "no statement yet";
+        row.state === "short" || row.state.indexOf("check ") === 0 ||
+        row.state === "no statement yet";
       add(side, "div", "state" + (tobill ? " tobill" : ""), row.state);
       if (row.unfiled_cents) add(side, "div", "amt", money(row.unfiled_cents));
     } else if (trip.earnings_cents) {
@@ -392,6 +393,59 @@
         var card = el("trip-" + id);
         if (card && card.scrollIntoView) card.scrollIntoView({ block: "start" });
       });
+  }
+
+  // Turo's receipt as a person reads it. Its reimbursement section ends in a
+  // "Reimbursement total" line that only repeats the lines above it, its
+  // labels read as sentences ("Tolls were incurred"), and its last earnings
+  // line is the answer; so: what the guest paid back, what Turo took, and
+  // what you earned, with the repeats gone.
+  function receiptCents(text) {
+    var n = parseFloat(String(text).replace(/[^0-9.]/g, ""));
+    if (isNaN(n)) return null;
+    return Math.round(n * 100) * (/^\s*-|^\(/.test(String(text)) ? -1 : 1);
+  }
+  function tidyLabel(label) {
+    var t = String(label).replace(/\s+(were|was|is|are)?\s*incurred$/i, "").trim();
+    return t ? t.charAt(0).toUpperCase() + t.slice(1) : label;
+  }
+  function renderReceipt(rc, card) {
+    function line(text, value, strong) {
+      var row = add(card, "div", "top");
+      add(row, "div", null, text);
+      var cell = add(row, "div", "num", value);
+      if (strong) { row.style.fontWeight = "700"; cell.style.fontWeight = "700"; }
+    }
+    function heading(text) {
+      var h = add(card, "div", "sub", text);
+      h.style.marginTop = "6px";
+    }
+    var back = rc.reimbursements.slice();
+    // A line named "total" that equals the rest is the section repeating itself.
+    var totalAt = -1;
+    back.forEach(function (f, i) { if (/total/i.test(f.label)) totalAt = i; });
+    if (totalAt !== -1) {
+      var others = back.filter(function (f, i) { return i !== totalAt; });
+      var sum = others.reduce(function (a, f) { return a + (receiptCents(f.value) || 0); }, 0);
+      if (others.length && receiptCents(back[totalAt].value) === sum) back.splice(totalAt, 1);
+    }
+    if (back.length) {
+      heading("Paid back to you");
+      back.forEach(function (f) { line(tidyLabel(f.label), f.value, false); });
+    }
+    var shown = 0;
+    if (rc.earnings.length) {
+      heading("Your trip");
+      rc.earnings.forEach(function (f, i) {
+        var last = i === rc.earnings.length - 1;
+        // The closing line is the total, whatever Turo labelled it.
+        var isTotal = rc.total_earned && f.value === rc.total_earned && last;
+        line(isTotal ? "You earned" : f.label, f.value, isTotal);
+        shown++;
+      });
+    }
+    if (!back.length && !shown) line("Nothing itemised", "", false);
+    if (rc.synced_at) add(card, "div", "sub", "read " + when(rc.synced_at));
   }
 
   function renderView(trip, card) {
@@ -468,7 +522,7 @@
         add(top, "div", "num", money(inv.total_cents));
         add(card, "div", "sub",
             inv.state + (inv.turo_status ? " · Turo: " + inv.turo_status : "") +
-            (inv.charged_at ? " · charged " + when(inv.charged_at) : "") +
+            (inv.charged_at ? " · first seen charged " + when(inv.charged_at) : "") +
             (inv.toll_cents != null ? " · tolls " + money(inv.toll_cents) : ""));
         if (inv.url) {
           var link = add(card, "a", null, "Open on Turo");
@@ -485,19 +539,7 @@
     add(box, "h2", null, "Receipt");
     if (view.receipt) {
       var rc = view.receipt;
-      var rcard = add(box, "div", "inv");
-      var rows = [];
-      rc.reimbursements.forEach(function (f) { rows.push(["Reimbursed: " + f.label, f.value]); });
-      rc.earnings.forEach(function (f) { rows.push([f.label, f.value]); });
-      if (!rows.length) rows.push(["Nothing itemised", ""]);
-      rows.forEach(function (r) {
-        var line = add(rcard, "div", "top");
-        add(line, "div", null, r[0]);
-        add(line, "div", "num", r[1]);
-      });
-      add(rcard, "div", "sub",
-          (rc.total_earned ? "total earned " + rc.total_earned + " · " : "") +
-          (rc.synced_at ? "read " + when(rc.synced_at) : ""));
+      renderReceipt(rc, add(box, "div", "inv"));
     } else {
       add(box, "div", "quiet", "Not read yet. Pull from Turo reads it.");
     }

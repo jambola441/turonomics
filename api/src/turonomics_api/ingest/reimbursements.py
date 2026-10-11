@@ -254,6 +254,23 @@ def _recover(
         return
 
     asked = invoice.toll_cents
+    if asked is not None:
+        own = asked
+        # Turo can split one rental's tolls over several invoices (one for
+        # the outbound crossings, one for the rest), and each is short of the
+        # total on its own. Judged together: every charged toll line on the
+        # rental, this one included.
+        asked = int(
+            session.scalar(
+                select(func.coalesce(func.sum(ReimbursementInvoice.toll_cents), 0)).where(
+                    ReimbursementInvoice.trip_id == invoice.trip_id,
+                    ReimbursementInvoice.state == INVOICE_CHARGED,
+                    ReimbursementInvoice.toll_cents.is_not(None),
+                )
+            )
+            or 0
+        )
+        asked = max(asked, own)
     if asked is None and invoice.lines:
         # Itemised, and no single readable toll line. The total is emphatically
         # not a substitute here, and this is the case that used to be able to

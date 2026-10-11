@@ -281,6 +281,13 @@ def _trip_view(trip_id: str) -> dict | None:
                  "text": "Returned, thanks", "images": 2},
             ],
             "extras_synced_at": NOW.isoformat(),
+            "receipt": {
+                "earnings": [{"label": "Turo fee", "value": "-$21.25"},
+                             {"label": "Total earned", "value": "$191.25"}],
+                "reimbursements": [{"label": "Tolls", "value": "$17.79"}],
+                "total_earned": "$191.25",
+                "synced_at": NOW.isoformat(),
+            },
         }
     for trip in TRIPS:
         if trip["id"] == trip_id:

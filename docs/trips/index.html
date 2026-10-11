@@ -407,6 +407,28 @@
       add(box, "div", "quiet", "None.");
     }
 
+    // What Turo's receipt says reached the host. Absent until a pull has read
+    // it, which is not the same as a trip that earned nothing.
+    add(box, "h2", null, "Receipt");
+    if (view.receipt) {
+      var rc = view.receipt;
+      var rcard = add(box, "div", "inv");
+      var rows = [];
+      rc.reimbursements.forEach(function (f) { rows.push(["Reimbursed: " + f.label, f.value]); });
+      rc.earnings.forEach(function (f) { rows.push([f.label, f.value]); });
+      if (!rows.length) rows.push(["Nothing itemised", ""]);
+      rows.forEach(function (r) {
+        var line = add(rcard, "div", "top");
+        add(line, "div", null, r[0]);
+        add(line, "div", "num", r[1]);
+      });
+      add(rcard, "div", "sub",
+          (rc.total_earned ? "total earned " + rc.total_earned + " · " : "") +
+          (rc.synced_at ? "read " + when(rc.synced_at) : ""));
+    } else {
+      add(box, "div", "quiet", "Not read yet. Pull from Turo reads it.");
+    }
+
     add(box, "h2", null, "Crossings");
     if (view.tolls && view.tolls.length) {
       var wrap = add(box, "div", "scroll");

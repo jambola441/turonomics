@@ -74,6 +74,7 @@ import type {
   SiteCommand,
   TuroDiscovery,
   TuroInvoicesResult,
+  TuroReceiptsResult,
   TuroPullResult,
   TuroWanted,
 } from "./types.js";
@@ -663,6 +664,10 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
     apiBase,
     tollsToken
   );
+  // Asked for again, now that the invoices are in: which receipts are worth
+  // reading depends on which invoices the API has a toll line for, and the
+  // list fetched at the start of the pull predates them.
+  const receipts = await readReceipts(tabId, await getWanted(), apiBase, tollsToken);
   return {
     ...(result as TuroPullResult),
     asked: wanted.reservations.length,
@@ -670,11 +675,66 @@ async function pullTuro(tabId: number): Promise<TuroPullResult> {
     discovered,
     extras_read: extrasRead,
     ...(invoices ? { invoices } : {}),
+    ...(receipts ? { receipts } : {}),
   };
 }
 
 const LIST_PAGE_SIZE = 50;
 const EXTRAS_BATCH = 10;
+
+/**
+ * Each wanted rental's receipt, posted in batches.
+ *
+ * The receipt is what reached the host, and the API settles an invoice whose
+ * toll line it shows paid. This only fetches and forwards: a body Turo would
+ * not return goes up as null, which the API counts and does not store, so
+ * "Turo did not answer" is never read as "nothing was paid".
+ */
+async function readReceipts(
+  tabId: number,
+  wanted: TuroWanted,
+  apiBase: string,
+  tollsToken: string | undefined
+): Promise<TuroReceiptsResult | null> {
+  if (!wanted.receipts?.length || !wanted.receipt_path) return null;
+  const summary: TuroReceiptsResult = { read: 0, settled: [], recovered: 0, failed: 0 };
+  let batch: { reservation_id: string; receipt: unknown }[] = [];
+  const flush = async () => {
+    if (!batch.length) return;
+    const response = await fetch(`${apiBase}/api/turo/receipts`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(tollsToken ? { Authorization: `Bearer ${tollsToken}` } : {}),
+      },
+      body: JSON.stringify({ items: batch }),
+    });
+    if (!response.ok) throw new Error(`the API said ${response.status} to the receipts`);
+    const reply = (await response.json()) as {
+      stored: number;
+      tolls_recovered: number;
+      unreadable: number;
+      settled: string[];
+    };
+    summary.read += reply.stored;
+    summary.recovered += reply.tolls_recovered;
+    summary.failed += reply.unreadable;
+    summary.settled.push(...reply.settled);
+    batch = [];
+  };
+  for (const id of wanted.receipts) {
+    if (!/^\d+$/.test(id)) continue;
+    const receipt = await inPage(
+      tabId, fetchJsonInPage, [wanted.receipt_path.replace("{id}", id)], 12, "MAIN"
+    );
+    if (receipt === null) summary.failed += 1;
+    batch.push({ reservation_id: id, receipt });
+    if (batch.length >= EXTRAS_BATCH) await flush();
+    await new Promise((resolve) => setTimeout(resolve, PULL_GAP_MS));
+  }
+  await flush();
+  return summary;
+}
 
 /**
  * Each wanted trip's photos and message thread, posted in batches for the

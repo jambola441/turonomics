@@ -64,7 +64,14 @@ def settle_by_turo_status(
     charged email — so a status cannot write off a crossing the invoice did not
     cover. Returns whether anything changed.
     """
-    if status not in OWNER_PAID_STATUSES or invoice.state == INVOICE_CHARGED:
+    if status not in OWNER_PAID_STATUSES:
+        return False
+    return mark_charged(invoice, now=now)
+
+
+def mark_charged(invoice: ReimbursementInvoice, *, now: datetime) -> bool:
+    """Move an invoice to charged, once. Returns whether anything changed."""
+    if invoice.state == INVOICE_CHARGED:
         return False
     invoice.state = INVOICE_CHARGED
     if invoice.charged_at is None:

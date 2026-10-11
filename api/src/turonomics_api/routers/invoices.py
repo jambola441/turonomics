@@ -761,7 +761,7 @@ def _distance_unbilled(trip: Trip | None, theirs: list[ReimbursementInvoice]) ->
     if trip is None:
         return 0
     invoiced = sum(distance_lines_cents(r.lines or []) for r in theirs)
-    found = summarise(trip.turo_detail, invoiced)
+    found = summarise(trip.turo_detail, invoiced, trip.tracker_miles)
     return found.unbilled_cents if found else 0
 
 

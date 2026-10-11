@@ -564,8 +564,8 @@ def main() -> int:
                   page.locator(".trip").count() == 1)
             page.fill("#q", "")
             check("a rental that went over its miles uninvoiced says so on the list",
-                  "156 mi over" in page.locator(
-                      "#trip-11111111-1111-1111-1111-111111111111 .badge.miles").inner_text().lower())
+                  page.locator("#trip-11111111-1111-1111-1111-111111111111 .badge.miles",
+                               has_text="mi over").count() == 1)
             check("and a rental with no crossings does not say '0 crossings'",
                   "0 crossings" not in page.locator("#list").inner_text())
             page.locator("#trip-11111111-1111-1111-1111-111111111111 .trip-head").click()
@@ -580,6 +580,13 @@ def main() -> int:
             check("the view opens on its answers: tolls, distance, earnings, the window",
                   "$11.00" in tiles and "156 mi over" in tiles
                   and "$54.60 not invoiced" in tiles and "$191.25" in tiles and "4 days" in tiles)
+            check("Turo's miles and the tracker's are both shown, and a gap is said",
+                  "Turo: 756 mi driven of 600 included" in view
+                  and "Tracker (Bouncie): 845 mi" in view
+                  and "differ by 89 mi" in view and "Filing uses Turo's figure" in view)
+            check("and the list flags a trip whose miles differ",
+                  page.locator("#trip-11111111-1111-1111-1111-111111111111 .badge.miles",
+                               has_text="differ").count() == 1)
             check("the trip says what is left to file, tolls | distance",
                   "To file: $11.00 tolls | $54.60 distance" in view)
             check("and says what additional distance is owed and how it was worked out",

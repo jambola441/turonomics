@@ -72,7 +72,7 @@ def test_under_the_limit_owes_nothing() -> None:
 def test_no_odometer_reading_is_no_answer_rather_than_zero() -> None:
     detail = _detail()
     detail["odometerDetail"]["distanceDriven"] = None
-    assert summarise(detail) is None
+    assert summarise(detail) is None, "and no tracker either"
     assert summarise({}) is None
     assert summarise(None) is None
 
@@ -83,6 +83,40 @@ def test_unlimited_has_no_limit() -> None:
     detail["booking"]["distanceLimit"] = _mi(None, unlimited=True)
     found = summarise(detail)
     assert found is not None and found.included_mi is None and found.owed_cents == 0
+
+
+def test_the_trackers_miles_are_a_check_and_never_billed() -> None:
+    close = summarise(_detail(), tracker_mi=230)
+    assert close is not None and not close.disagrees and close.owed_cents == 770
+    far = summarise(_detail(), tracker_mi=300)
+    assert far is not None and far.disagrees
+    assert far.tracker_over_mi == 100 and far.owed_cents == 770, "billing stays Turo's"
+
+
+def test_a_small_trip_needs_a_real_gap_to_disagree() -> None:
+    """10% of 40 miles is 4: an absolute floor stops every short trip flagging."""
+    found = summarise(_detail(limit=200, driven=40, over=0), tracker_mi=52)
+    assert found is not None and not found.disagrees
+    found = summarise(_detail(limit=200, driven=40, over=0), tracker_mi=70)
+    assert found is not None and found.disagrees
+
+
+def test_a_long_trip_needs_a_real_share_to_disagree() -> None:
+    """50 miles on a 1,000-mile trip is 5%: hand-typed odometers and a host's
+    delivery drive account for that much."""
+    found = summarise(_detail(limit=1200, driven=1000, over=0), tracker_mi=1050)
+    assert found is not None and not found.disagrees
+    found = summarise(_detail(limit=1200, driven=1000, over=0), tracker_mi=1150)
+    assert found is not None and found.disagrees
+
+
+def test_with_only_the_trackers_miles_nothing_is_owed() -> None:
+    detail = _detail()
+    detail["odometerDetail"]["distanceDriven"] = None
+    found = summarise(detail, tracker_mi=260)
+    assert found is not None
+    assert found.driven_mi is None and found.owed_cents == 0 and found.tracker_over_mi == 60
+    assert not found.disagrees, "nothing of Turo's to disagree with"
 
 
 def test_distance_lines_are_found_by_label() -> None:

@@ -64,6 +64,10 @@ class Drive:
     ends_at: datetime
     # [lat, lon] pairs, in order of travel.
     points: list[tuple[float, float]]
+    # Bouncie's own figures for the drive, where it gave them.
+    distance_mi: float | None = None
+    start_odometer: float | None = None
+    end_odometer: float | None = None
 
 
 def _when(value: Any) -> datetime | None:
@@ -133,7 +137,49 @@ def parse_drive(raw: Mapping[str, Any]) -> Drive | None:
     if starts is None or ends is None or ends < starts:
         return None
     points = _points(raw.get("gps"))
-    return Drive(starts_at=starts, ends_at=ends, points=points) if points else None
+    if not points:
+        return None
+    return Drive(
+        starts_at=starts,
+        ends_at=ends,
+        points=points,
+        distance_mi=_number(raw.get("distance")),
+        start_odometer=_number(raw.get("startOdometer")),
+        end_odometer=_number(raw.get("endOdometer")),
+    )
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return None
+    return float(value)
+
+
+def rental_miles(route: Route, *, starts: datetime, ends: datetime) -> float | None:
+    """Miles the tracker recorded over a rental, or None if it cannot say.
+
+    Only drives that start inside the rental: the route is read with a margin
+    either side for the map, and the host's own driving before and after is
+    not the guest's. The odometer span from the first drive to the last is the
+    tracker's equivalent of Turo's check-in and check-out readings; the drives'
+    own distances are summed where the odometer is missing.
+    """
+    if route.source != "bouncie":
+        return None
+    drives = [d for d in route.drives if starts <= d.starts_at <= ends]
+    if not drives:
+        return None
+    first, last = drives[0], drives[-1]
+    if (
+        first.start_odometer is not None
+        and last.end_odometer is not None
+        and last.end_odometer >= first.start_odometer
+    ):
+        return round(last.end_odometer - first.start_odometer, 1)
+    distances = [d.distance_mi for d in drives]
+    if any(d is None for d in distances):
+        return None
+    return round(sum(d for d in distances if d is not None), 1)
 
 
 @dataclass

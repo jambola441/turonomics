@@ -543,6 +543,11 @@ class Trip(Base):
     # reimbursement was settled.
     turo_receipt: Mapped[dict[str, object] | None] = mapped_column(JSONB)
     receipt_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Miles the tracker recorded over the rental, from Bouncie's odometer at
+    # the first and last drive. Set the first time the rental's route is read
+    # after it ended; a check on Turo's odometer figure, never a substitute.
+    tracker_miles: Mapped[float | None] = mapped_column(Float)
+    tracker_miles_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 

@@ -534,8 +534,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/api/commands"):
             self._send(_commands_payload())
         elif self.path.startswith("/api/invoices/ledger"):
+            if not self._authorized(record=False):
+                return
             self._send(_ledger_payload())
         elif self.path.startswith("/api/invoices"):
+            if not self._authorized(record=False):
+                return
             self._send(_invoices_payload())
         elif self.path.startswith("/api/trips/") and self.path.endswith("/map"):
             if not self._authorized():
@@ -570,6 +574,9 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send(view)
         elif self.path.startswith("/api/trips"):
+            # The list names guests: behind the token, as the real one is.
+            if not self._authorized(record=False):
+                return
             everything = "manual_only=false" in self.path
             self._send({"trips": ([TURO_TRIP] if everything else []) + TRIPS})
         elif self.path.startswith("/seen-auth"):

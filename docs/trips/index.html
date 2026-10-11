@@ -1000,10 +1000,13 @@
   // -------------------------------------------------------------------------
 
   function load() {
-    return Promise.all([
-      fetch(API + "/api/trips?manual_only=false").then(json),
-      fetch(API + "/api/invoices/ledger").then(json).catch(function () { return { rows: [] }; })
-    ])
+    // Both behind the token: they name guests. The list asks for it once if
+    // it is missing; the ledger then goes with whatever the list settled on.
+    return authed("/api/trips?manual_only=false").then(json).then(function (trips) {
+      return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
+        .then(json).catch(function () { return { rows: [] }; })
+        .then(function (ledger) { return [trips, ledger]; });
+    })
       .then(function (both) {
         state.trips = both[0].trips || [];
         state.ledger = {};

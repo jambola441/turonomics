@@ -44,3 +44,11 @@ reading the result as a pass.
 Twice now a test here passed against a knowingly broken implementation, and
 only breaking the code on purpose caught it. Before trusting a new test,
 invert the thing it is supposed to be testing and confirm the test fails.
+
+## Merging
+
+The operator's standing instruction: **merge your own PRs when it is safe**, without
+asking. Safe means CI (`test`, and `smoke` where it runs) is green on the exact
+commit being merged. Pass that commit as `expectedHeadSha` so a later push cannot
+slip in, then check it is on `origin/main` afterwards. A merge once went through
+before a follow-up commit was pushed, and the follow-up never reached main.

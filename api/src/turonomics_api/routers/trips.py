@@ -176,12 +176,19 @@ def _row(session: Session, trip: Trip) -> TripRow:
 
 
 @router.get("", response_model=TripsResponse)
-def list_trips(session: DbSession, manual_only: bool = True) -> TripsResponse:
+def list_trips(
+    session: DbSession,
+    manual_only: bool = True,
+    authorization: Annotated[str | None, Header()] = None,
+) -> TripsResponse:
     """Rentals, newest first. Manual ones by default.
+
+    Behind the token: each row names the guest and what the rental earned.
 
     The Turo ones are not editable here and there are hundreds of them; what
     this list is for is seeing and correcting what was typed in by hand.
     """
+    require_token(authorization)
     query = select(Trip).order_by(Trip.starts_at.desc()).limit(200)
     if manual_only:
         query = query.where(Trip.source == TripSource.manual)

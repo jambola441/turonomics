@@ -24,6 +24,7 @@ it is made only on an exact match for a rental whose invoice is not yet charged.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -124,7 +125,6 @@ def wanted_receipts(session: Session, *, now: datetime, limit: int = 20) -> list
         .where(
             Trip.turo_trip_id.is_not(None),
             ReimbursementInvoice.state != INVOICE_CHARGED,
-            ReimbursementInvoice.toll_cents.is_not(None),
             or_(
                 Trip.receipt_synced_at.is_(None),
                 Trip.receipt_synced_at < now - REREAD_AFTER,
@@ -167,6 +167,86 @@ class ReceiptResult:
 
 
 def settle_by_receipt(session: Session, trip: Trip, *, now: datetime, result: ReceiptResult) -> None:
+    """Mark charged each uncharged invoice the receipt shows paid: by its toll
+    line, and an invoice for anything else by every one of its lines."""
+    _settle_tolls(session, trip, now=now, result=result)
+    _settle_other_lines(session, trip, now=now, result=result)
+
+
+# A receipt's own subtotal, "Reimbursement total", which repeats the lines.
+_SUBTOTAL = re.compile(r"\btotal\b", re.IGNORECASE)
+
+
+def _settle_other_lines(
+    session: Session, trip: Trip, *, now: datetime, result: ReceiptResult
+) -> None:
+    """An invoice with no toll line, settled when each of its lines is on the
+    receipt for exactly its amount.
+
+    Ian Alexander's refueling: an invoice of $13.36 refueling and a $10.00
+    convenience fee, ACCEPTED on Turo, and his receipt reading "Gas was not
+    replaced $13.36" and "Convenience fee $10.00". Turo words the two
+    differently, so amounts decide, not labels; and every line has to be
+    there, so one coincidental amount settles nothing. Lines about tolls are
+    left to the toll rule, and each receipt line pays one invoice line once.
+    """
+    body = trip.turo_receipt
+    if not isinstance(body, Mapping) or trip.turo_trip_id is None:
+        return
+    pool = [
+        cents
+        for label, cents in reimbursement_lines(body)
+        if not _SUBTOTAL.search(label) and not names_tolls(label)
+    ]
+    if not pool:
+        return
+    invoices = session.scalars(
+        select(ReimbursementInvoice)
+        .where(
+            ReimbursementInvoice.reservation_id == trip.turo_trip_id,
+            ReimbursementInvoice.toll_cents.is_(None),
+        )
+        .order_by(ReimbursementInvoice.first_seen_at)
+    ).all()
+
+    def amounts(invoice: ReimbursementInvoice) -> list[int]:
+        return [
+            entry[1]
+            for entry in invoice.lines or []
+            if isinstance(entry, list) and len(entry) == 2 and isinstance(entry[1], int)
+        ]
+
+    # What is already known charged takes its lines first, so they cannot be
+    # read again as paying something else.
+    for invoice in invoices:
+        if invoice.state == INVOICE_CHARGED:
+            for cents in amounts(invoice):
+                if cents in pool:
+                    pool.remove(cents)
+    for invoice in invoices:
+        if invoice.state == INVOICE_CHARGED:
+            continue
+        wanted = amounts(invoice)
+        left = list(pool)
+        found = bool(wanted)
+        for cents in wanted:
+            if cents not in left:
+                found = False
+                break
+            left.remove(cents)
+        if not found:
+            continue
+        pool = left
+        if mark_charged(invoice, now=now):
+            result.charged += 1
+            result.settled.append(
+                f"{trip.turo_trip_id}: ${invoice.total_cents / 100:,.2f} is on the receipt line by line"
+            )
+            if invoice.trip_id is None:
+                invoice.trip_id = trip.id
+
+
+def _settle_tolls(session: Session, trip: Trip, *, now: datetime, result: ReceiptResult) -> None:
     """Mark charged each uncharged invoice whose toll line the receipt shows paid.
 
     Exact amount, one receipt line per invoice. Anything looser — a total, a
@@ -244,7 +324,6 @@ def resettle_receipts(session: Session, *, now: datetime) -> ReceiptResult:
         .where(
             Trip.turo_receipt.is_not(None),
             ReimbursementInvoice.state != INVOICE_CHARGED,
-            ReimbursementInvoice.toll_cents.is_not(None),
         )
         .distinct()
     ):

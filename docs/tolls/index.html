@@ -525,12 +525,15 @@
   }
 
   function load() {
-    return Promise.all([
-      readTolls(),
-      fetch(API + "/api/invoices/ledger")
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; })
-    ])
+    // The tolls first, since that is what asks for the token; the ledger
+    // after, with whatever it settled on.
+    return readTolls()
+      .then(function (data) {
+        return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
+          .then(function (r) { return r.ok ? r.json() : null; })
+          .catch(function () { return null; })
+          .then(function (ledger) { return [data, ledger]; });
+      })
       .then(function (both) {
         var data = both[0];
         state.ledger = both[1];
@@ -648,7 +651,7 @@
   // the API reads a bare time as fleet-local. Converting here would mean two
   // places deciding what "2pm" means.
   function loadRentals() {
-    return fetch(API + "/api/trips")
+    return fetch(API + "/api/trips", { headers: authHeaders() })
       .then(function (r) { return r.ok ? r.json() : { trips: [] }; })
       .then(function (data) { renderRentals(data.trips || []); })
       .catch(function () { /* the ledger above is the page's real job */ });
@@ -772,8 +775,7 @@
   el("f-all").addEventListener("click", function () { setFilter(false); });
   el("f-owed").addEventListener("click", function () { setFilter(true); });
 
-  load();
-  loadRentals();
+  load().then(loadRentals);
 })();
 </script>
 </body>

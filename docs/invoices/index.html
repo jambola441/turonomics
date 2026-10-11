@@ -251,6 +251,23 @@
     var v = token();
     return v ? { Authorization: "Bearer " + v } : {};
   }
+  // A read that needs the token: tried with the saved one, and once more after
+  // asking if the API refuses it. The lists name guests and what they owe.
+  function readAuthed(path) {
+    var go = function () { return fetch(API + path, { headers: authHeaders() }); };
+    return go().then(function (r) {
+      if (r.status !== 401) return r;
+      rememberToken("");
+      var entered = window.prompt("This page needs the tolls token (TOLLS_TOKEN).");
+      if (!entered) throw new Error("the token is needed to see this");
+      rememberToken(entered.trim());
+      return go();
+    }).then(function (r) {
+      if (r.status === 401) { rememberToken(""); throw new Error("the token was rejected"); }
+      return r;
+    });
+  }
+
   function handleStatus(r) {
     if (r.status === 401) {
       rememberToken("");
@@ -633,7 +650,7 @@
   el("pullTuro").addEventListener("click", function () { queue({ kind: "pull" }); });
 
   function loadLedger() {
-    return fetch(API + "/api/invoices/ledger")
+    return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (data) { if (data) renderLedger(data); })
       .catch(function () {
@@ -644,10 +661,12 @@
   }
 
   function load() {
-    loadLedger();
     if (!remote.polling) loadCommands();
-    return fetch(API + "/api/invoices")
+    // The list first, since it is what asks for the token; the ledger after,
+    // with whatever the list settled on.
+    return readAuthed("/api/invoices")
       .then(function (r) {
+        loadLedger();
         if (!r.ok) throw new Error("the API said " + r.status);
         return r.json();
       })

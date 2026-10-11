@@ -687,6 +687,14 @@ _FILEABLE = frozenset({"to bill", "partly billed"})
 
 
 @router.get("/ledger", response_model=LedgerResponse)
+def ledger_endpoint(
+    session: DbSession, authorization: Annotated[str | None, Header()] = None
+) -> LedgerResponse:
+    """The ledger, behind the token: it names each guest and what they owe."""
+    require_token(authorization)
+    return ledger(session)
+
+
 def ledger(session: DbSession) -> LedgerResponse:
     """Every rental with crossings, and what has become of each.
 
@@ -1021,7 +1029,13 @@ def filed(
 
 
 @router.get("", response_model=InvoicesResponse)
-def list_invoices(session: DbSession, include_recovered: bool = False) -> InvoicesResponse:
+def list_invoices(
+    session: DbSession,
+    include_recovered: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
+) -> InvoicesResponse:
+    # Behind the token: guests by name, and what each is to be asked for.
+    require_token(authorization)
     now = datetime.now(UTC)
     window = toll_filing_window_days()
     built = build_invoices(session, now=now, include_recovered=include_recovered)

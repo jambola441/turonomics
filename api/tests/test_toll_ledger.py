@@ -1107,3 +1107,11 @@ def test_the_tolls_list_needs_the_token_when_one_is_set(api_client, monkeypatch)
     assert api_client.get(
         "/api/tolls", headers={"Authorization": "Bearer s3cret"}
     ).status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/api/trips?manual_only=false", "/api/invoices/ledger", "/api/invoices"])
+def test_the_lists_that_name_guests_need_the_token(api_client, monkeypatch, path) -> None:
+    """Each names guests, and what they earned the fleet or owe it."""
+    monkeypatch.setenv("TOLLS_TOKEN", "s3cret")
+    assert api_client.get(path).status_code == 401
+    assert api_client.get(path, headers={"Authorization": "Bearer s3cret"}).status_code == 200

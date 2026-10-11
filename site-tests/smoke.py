@@ -542,6 +542,13 @@ def main() -> int:
                   typed_in >= 1 and page.locator(".trip").count() == typed_in + 1)
             check("a Turo rental shows its ledger state beside it",
                   "partly billed" in trips_text and "$11.00" in trips_text)
+            page.wait_for_timeout(600)
+            odd_card = page.locator("#trip-11111111-1111-1111-1111-111111111111 .badge.odd")
+            check("a rental with a plaza off its route says so on the list",
+                  odd_card.count() == 1 and "1 off route" in odd_card.inner_text().lower()
+                  and page.locator(".trip .badge.odd").count() == 1)
+            check("and the header counts them",
+                  "1 with a plaza off the route" in page.locator("#stamp").inner_text())
             page.locator("#seg button[data-f=off]").click()
             check("the off-platform filter shows only typed-in rentals",
                   page.locator(".trip").count() == typed_in

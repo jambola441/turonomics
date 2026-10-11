@@ -41,9 +41,9 @@ from turonomics_api.ingest.trip_map import Placed, Route, nearest_km, place
 # sampled track can miss a gantry by a few hundred metres on a fast road.
 NEAR_M = 1000.0
 
-# Three rows of three. More plazas than this is a long trip across a region, and
+# Three rows of two. More plazas than this is a long trip across a region, and
 # the sheet says how many it left out.
-MAX_INSETS = 9
+MAX_INSETS = 6
 
 _METRES_PER_DEGREE = 111_320.0
 
@@ -96,22 +96,29 @@ def clip_segment(
     )
 
 
+def clip_polyline(points: Sequence[Point], centre: Point, radius_m: float) -> list[list[Point]]:
+    """The parts of a polyline inside the circle, as polylines; nothing outside."""
+    out: list[list[Point]] = []
+    current: list[Point] | None = None
+    for a, b in zip(points, points[1:], strict=False):
+        clipped = clip_segment(a, b, centre, radius_m)
+        if clipped is None:
+            current = None
+            continue
+        start, end = clipped
+        if current is not None and _same(current[-1], start):
+            current.append(end)
+        else:
+            current = [start, end]
+            out.append(current)
+    return out
+
+
 def local_segments(route: Route, centre: Point, radius_m: float) -> list[list[Point]]:
     """Polylines of the route's legs inside the circle; nothing outside it."""
     out: list[list[Point]] = []
     for drive in route.drives:
-        current: list[Point] | None = None
-        for a, b in zip(drive.points, drive.points[1:], strict=False):
-            clipped = clip_segment(a, b, centre, radius_m)
-            if clipped is None:
-                current = None
-                continue
-            start, end = clipped
-            if current is not None and _same(current[-1], start):
-                current.append(end)
-            else:
-                current = [start, end]
-                out.append(current)
+        out.extend(clip_polyline(drive.points, centre, radius_m))
     return out
 
 

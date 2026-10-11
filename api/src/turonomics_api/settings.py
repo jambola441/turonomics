@@ -221,3 +221,14 @@ def vapid_subject() -> str:
     if raw.startswith(("mailto:", "https://")):
         return raw
     return f"mailto:{raw}"
+
+
+def overpass_url() -> str:
+    """Where road data for the evidence maps comes from.
+
+    OpenStreetMap's Overpass API. A setting so a different instance (or a
+    self-hosted one) can be used without a code change: the public servers ask
+    for light use, and the answers are cached per plaza, so this is one small
+    request the first time a plaza appears on a filing and none afterwards.
+    """
+    return os.environ.get("OVERPASS_URL", "").strip() or "https://overpass-api.de/api/interpreter"

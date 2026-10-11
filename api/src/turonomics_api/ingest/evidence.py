@@ -49,13 +49,42 @@ class EvidenceRow:
 # nobody's business but theirs. The track outside this circle is not drawn, and
 # is not in the data this module is given.
 INSET_RADIUS_M = 1200.0
-_INSET_W = 220
-_INSET_MAP_H = 130
+# Two to a row and large: a 1.2 km circle in a 220 px box is about 110 px across,
+# which leaves no room to name a road. At this size a street name fits along the
+# road it names, and the plaza and its approaches can be told apart.
+_INSET_W = 340
+_INSET_MAP_H = 190
 _INSET_CAPTION_H = 66
-_INSET_GAP = 18
-_INSET_COLUMNS = 3
+_INSET_GAP = 16
+_INSET_COLUMNS = 2
 _INSET_ROW = _INSET_MAP_H + _INSET_CAPTION_H + 14
 _INSETS_HEADER = 62
+
+
+@dataclass(frozen=True)
+class RoadLine:
+    """A stretch of road inside an inset's circle, for context under the track."""
+
+    # The street's name, or its route number ("I-87") when it has none.
+    name: str | None
+    # motorway, trunk, primary, secondary or tertiary: how heavily to draw it.
+    kind: str
+    points: Sequence[tuple[float, float]]
+
+
+# How each class of road is drawn: width in pixels and colour. Quiet greys, so
+# the blue track is what the eye finds and the roads only say where it is.
+_ROAD_STYLE = {
+    "motorway": (3.2, "#94a3b8"),
+    "trunk": (3.0, "#9aa7ba"),
+    "primary": (2.5, "#a8b3c4"),
+    "secondary": (2.0, "#b8c2d0"),
+    "tertiary": (1.5, "#c9d1dc"),
+}
+_ROAD_ORDER = ("tertiary", "secondary", "primary", "trunk", "motorway")
+_MAX_LABELS = 3
+# A road shorter than this inside the circle is not worth naming.
+_MIN_LABEL_M = 300.0
 
 
 @dataclass(frozen=True)
@@ -75,6 +104,9 @@ class Inset:
     times: Sequence[datetime]
     # The plaza's position is approximate (medium confidence).
     approximate: bool = False
+    # Roads inside the circle, drawn faintly beneath the track. Empty when none
+    # could be fetched, and the inset is then exactly what it was without them.
+    roads: Sequence[RoadLine] = ()
 
 
 @dataclass(frozen=True)
@@ -121,6 +153,102 @@ def _project(
     return cx + east * scale, cy - north * scale
 
 
+def _polyline_metres(points: Sequence[tuple[float, float]]) -> float:
+    total = 0.0
+    for (alat, alon), (blat, blon) in zip(points, points[1:], strict=False):
+        east = (blon - alon) * 111_320 * math.cos(math.radians((alat + blat) / 2))
+        north = (blat - alat) * 111_320
+        total += math.hypot(east, north)
+    return total
+
+
+_ABBREVIATIONS = (
+    ("Expressway", "Expwy"), ("Boulevard", "Blvd"), ("Parkway", "Pkwy"), ("Highway", "Hwy"),
+    ("Avenue", "Ave"), ("Street", "St"), ("Drive", "Dr"), ("Road", "Rd"), ("Bridge", "Br"),
+    ("Turnpike", "Tpke"), ("Tunnel", "Tnl"), ("Memorial", "Mem"), ("Interstate", "I-"),
+    ("North", "N"), ("South", "S"), ("East", "E"), ("West", "W"),
+)
+# Rough width of one character at the label's size, to decide whether a name
+# fits along its road at all. A label that is longer than the road it names, or
+# that runs across the plaza marker, is worse than no label.
+_LABEL_CHAR_PX = 4.6
+_LABEL_CLEAR_PX = 15.0
+
+
+def _short(name: str) -> str:
+    for long, short in _ABBREVIATIONS:
+        name = name.replace(long, short)
+    return name
+
+
+def _near_segment(
+    point: tuple[float, float], a: tuple[float, float], b: tuple[float, float]
+) -> float:
+    dx, dy = b[0] - a[0], b[1] - a[1]
+    length = dx * dx + dy * dy
+    t = 0.0 if length == 0 else max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length))
+    return math.hypot(point[0] - (a[0] + t * dx), point[1] - (a[1] + t * dy))
+
+
+def _road_labels(
+    roads: Sequence[RoadLine], centre: tuple[float, float], scale: float, cx: float, cy: float
+) -> list[tuple[str, float, float, float]]:
+    """(text, x, y, angle) for the few longest named roads, laid along them.
+
+    Only where the name fits along the road and stays clear of the plaza
+    marker; a road that cannot be named tidily is left unnamed.
+    """
+    by_name: dict[str, list[RoadLine]] = {}
+    for road in roads:
+        if road.name:
+            by_name.setdefault(road.name, []).append(road)
+    ranked = sorted(
+        by_name.items(),
+        key=lambda item: -sum(_polyline_metres(r.points) for r in item[1]),
+    )
+    out: list[tuple[str, float, float, float]] = []
+    for name, parts in ranked:
+        if sum(_polyline_metres(r.points) for r in parts) < _MIN_LABEL_M:
+            continue
+        text = _fit(_short(name), 20)
+        width = len(text) * _LABEL_CHAR_PX
+        longest = max(parts, key=lambda r: _polyline_metres(r.points))
+        pts = longest.points
+        # OpenStreetMap cuts one road into a way per block, so the name has to
+        # fit along the road's whole length in view, anchored on its longest
+        # piece, and that piece has to be a fair part of the label.
+        total_px = sum(_polyline_metres(r.points) for r in parts) * scale
+        if len(pts) < 2 or total_px < width * 1.15 or _polyline_metres(pts) * scale < width * 0.5:
+            continue
+        # The vertex nearest the middle of the road's length.
+        half, run, mid = _polyline_metres(pts) / 2, 0.0, 0
+        for index in range(1, len(pts)):
+            run += _polyline_metres(pts[index - 1 : index + 1])
+            if run >= half:
+                mid = index
+                break
+        a = _project(*pts[max(mid - 1, 0)], centre, scale, cx, cy)
+        b = _project(*pts[min(mid + 1, len(pts) - 1)], centre, scale, cx, cy)
+        here = _project(*pts[mid], centre, scale, cx, cy)
+        angle = math.degrees(math.atan2(b[1] - a[1], b[0] - a[0]))
+        # Upright, never upside down.
+        if angle > 90:
+            angle -= 180
+        elif angle < -90:
+            angle += 180
+        direction = (math.cos(math.radians(angle)), math.sin(math.radians(angle)))
+        ends = (
+            (here[0] - direction[0] * width / 2, here[1] - direction[1] * width / 2),
+            (here[0] + direction[0] * width / 2, here[1] + direction[1] * width / 2),
+        )
+        if _near_segment((cx, cy), ends[0], ends[1]) < _LABEL_CLEAR_PX:
+            continue
+        out.append((text, here[0], here[1], angle))
+        if len(out) >= _MAX_LABELS:
+            break
+    return out
+
+
 def _fit(text: str, limit: int) -> str:
     """Cut to what fits a caption column, with an ellipsis. A caption that runs
     into the next inset reads as one sentence about two plazas."""
@@ -133,7 +261,7 @@ def _fit(text: str, limit: int) -> str:
     return cut.rstrip(" ([,\u00b7-") + "\u2026"
 
 
-def _inset_svg(inset: Inset, x: float, y: float) -> str:
+def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
     cx, cy = x + _INSET_W / 2, y + _INSET_MAP_H / 2
     radius_px = min(_INSET_W, _INSET_MAP_H) / 2 - 6
     scale = radius_px / INSET_RADIUS_M
@@ -144,6 +272,25 @@ def _inset_svg(inset: Inset, x: float, y: float) -> str:
         f'<circle cx="{cx}" cy="{cy}" r="{radius_px:.1f}" fill="#ffffff" '
         f'stroke="#9ca3af" stroke-dasharray="3 3"/>',
     ]
+    # Everything drawn from here to the marker is cut to the circle, so a label
+    # or a stray road can never run out over the caption or the next inset.
+    out.append(
+        f'<clipPath id="inset-clip-{index}"><circle cx="{cx}" cy="{cy}" r="{radius_px:.1f}"/>'
+        f'</clipPath><g clip-path="url(#inset-clip-{index})">'
+    )
+    for kind in _ROAD_ORDER:
+        width, colour = _ROAD_STYLE[kind]
+        for road in inset.roads:
+            if road.kind != kind or len(road.points) < 2:
+                continue
+            drawn = " ".join(
+                f"{px:.1f},{py:.1f}"
+                for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in road.points)
+            )
+            out.append(
+                f'<polyline points="{drawn}" fill="none" stroke="{colour}" '
+                f'stroke-width="{width}" stroke-linejoin="round" stroke-linecap="round"/>'
+            )
     for segment in inset.segments:
         points = " ".join(
             f"{px:.1f},{py:.1f}"
@@ -153,6 +300,16 @@ def _inset_svg(inset: Inset, x: float, y: float) -> str:
             f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="2.5" '
             f'stroke-linejoin="round" stroke-linecap="round"/>'
         )
+    # Names go on top of the track, haloed: the car often drove the very road
+    # being named, and a label hidden under the line names nothing.
+    for text, lx, ly, angle in _road_labels(inset.roads, centre, scale, cx, cy):
+        out.append(
+            f'<text transform="translate({lx:.1f} {ly:.1f}) rotate({angle:.1f})" '
+            f'text-anchor="middle" dominant-baseline="central" font-size="8" fill="#475569" '
+            f'stroke="#ffffff" stroke-width="2.6" stroke-linejoin="round" paint-order="stroke">'
+            f"{escape(_fit(text, 24))}</text>"
+        )
+    out.append("</g>")
     out.append(
         f'<circle cx="{cx}" cy="{cy}" r="5" fill="#dc2626" stroke="#ffffff" stroke-width="1.5"/>'
     )
@@ -292,7 +449,13 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
             f"Blue is {escape(what)}, shown only within 1.2 km of the plaza. The red "
             f"marker is where the plaza is, not where the car was when it was charged.</text>"
             f'<text x="32" y="{top + 31}" font-size="10.5" fill="#6b7280">'
-            f"The rest of the trip is not shown.</text>"
+            f"The rest of the trip is not shown."
+            + (
+                " Roads: \u00a9 OpenStreetMap contributors."
+                if any(inset.roads for inset in sheet.insets)
+                else ""
+            )
+            + "</text>"
         )
         for index, inset in enumerate(sheet.insets):
             column, grid_row = index % _INSET_COLUMNS, index // _INSET_COLUMNS
@@ -301,6 +464,7 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
                     inset,
                     32 + column * (_INSET_W + _INSET_GAP),
                     top + 44 + grid_row * _INSET_ROW,
+                    index,
                 )
             )
         below = total_y + 30 + _insets_height(sheet)

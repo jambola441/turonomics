@@ -131,6 +131,21 @@ class User(Base):
 # ---------------------------------------------------------------------------
 
 
+class MapCache(Base):
+    """Things fetched from a map service, kept so each is fetched once.
+
+    Keyed by what was asked: the roads around a plaza do not change from one
+    filing to the next, and the service asks to be used lightly. A failed fetch
+    is never stored here, so a service that was down is asked again next time.
+    """
+
+    __tablename__ = "map_cache"
+
+    key: Mapped[str] = mapped_column(String(120), primary_key=True)
+    data: Mapped[dict[str, object]] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class OAuthToken(Base):
     """Stored provider tokens.
 

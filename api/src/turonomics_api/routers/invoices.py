@@ -26,6 +26,7 @@ from turonomics_api.gmail.parse import names_tolls
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, Inset, evidence_svg
 from turonomics_api.ingest.evidence_map import build_insets
 from turonomics_api.ingest.invoices import OFF_PLATFORM, Invoice, InvoiceLine, build_invoices
+from turonomics_api.ingest.osm_roads import add_roads
 from turonomics_api.ingest.trip_map import trip_route
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
@@ -377,6 +378,9 @@ def _location_insets(
         insets, omitted = build_insets(
             route, [(line.plaza, agencies.get(line.toll_id), line.occurred_at) for line in lines]
         )
+        # Roads beneath the tracks, where they could be had. Its own failures
+        # never reach here, and a draft without them is what it was before.
+        insets = add_roads(session, insets)
         return insets, omitted, route.source if insets else None
     except Exception:  # noqa: BLE001 - see the docstring
         log.warning("evidence map left out for trip %s", trip.id, exc_info=True)

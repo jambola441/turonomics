@@ -243,7 +243,27 @@ drawing, because the sheet goes to a guest and to Turo:
   any error building the picture leaves that sheet as the plain table. A toll
   invoice never fails to draft for want of a map.
 * Stored telemetry (a fix every few minutes) is described as such, not as a GPS
-  track. At most nine plazas are drawn and the sheet says how many it left out.
+  track. At most six plazas are drawn (two to a row, 340 by 190 px each) and the
+  sheet says how many it left out.
+
+**Roads under the track** (`ingest/osm_roads.py`). A track on a blank square does
+not say that a plaza is on a bridge approach, so the major roads inside each
+circle are drawn faintly beneath it, with up to three names laid along them.
+
+* From OpenStreetMap's Overpass API (`OVERPASS_URL` to point at another
+  instance), one small query per plaza, **kept in `map_cache`** for 180 days: the
+  roads around a plaza do not change between filings and the public servers ask
+  for light use. A failed fetch is never cached.
+* **Never at the invoice's expense.** Misses are fetched in parallel under a
+  12 s deadline (8 s per request). Slow, down, or any error: no roads, the inset
+  is drawn as it was, and the next filing asks again.
+* Motorway to tertiary only. A name is drawn only if it fits along the road
+  (OpenStreetMap cuts a road into a way per block, so the road's whole length in
+  view counts), stays off the plaza marker and is never upside down. Everything
+  is clipped to the circle, so a label cannot run out over a caption.
+* The data is ODbL, which requires saying so: the sheet carries "Roads:
+  (c) OpenStreetMap contributors" whenever roads are drawn.
+* Tests never reach the service: `tests/conftest.py` stubs the fetch.
 
 **`automatedTollTransactionsDto.transactionUuids` was empty** on a manual
 filing. Turo evidently has its own automated toll feed, and those uuids are

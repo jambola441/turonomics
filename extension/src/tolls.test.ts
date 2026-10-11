@@ -14,6 +14,7 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  describeTollsCommand,
   addDays,
   addMonths,
   amountsLookPositive,
@@ -863,4 +864,25 @@ test("a row or two on the edge of the window does not fail it", () => {
   ];
   const table: ScrapedTable = { headers: ["Tag/Plate #", "Date", "Amount"], rows };
   assert.equal(windowApplied(dateCoverage(table, { from: "2026-07-08", to: "2026-10-07" })), true);
+});
+
+test("a Read E-ZPass command says what the run read", () => {
+  const out = describeTollsCommand({
+    result: { rows: 120, imported: 7, already_known: 113, matched: 5 },
+    source: "table",
+    windows: [{}],
+  });
+  assert.equal(out.ok, true);
+  assert.equal(out.result, "120 rows read over 1 date range · 7 new · 113 already on file · 5 attributed");
+});
+
+test("a Read E-ZPass command passes a problem on as it was said", () => {
+  const out = describeTollsCommand({ result: null, source: "none", problem: "paused for an hour" });
+  assert.deepEqual(out, { ok: false, result: "paused for an hour" });
+});
+
+test("a Read E-ZPass command calls an empty page probably logged out", () => {
+  const out = describeTollsCommand({ result: null, source: "none" });
+  assert.equal(out.ok, false);
+  assert.match(out.result, /logged out/);
 });

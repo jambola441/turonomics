@@ -41,7 +41,9 @@ router = APIRouter(prefix="/api/commands", tags=["commands"])
 
 DbSession = Annotated[Session, Depends(get_session)]
 
-KINDS = frozenset({"pull", "file"})
+# "tolls" reads E-ZPass in the computer's Chrome, from a tab already open on
+# it: the phone has no E-ZPass session and the site has no E-ZPass password.
+KINDS = frozenset({"pull", "file", "tolls"})
 QUEUED, RUNNING, DONE, FAILED, ABANDONED = "queued", "running", "done", "failed", "abandoned"
 
 # A filing takes seconds and a full pull under a minute. Ten minutes without a
@@ -161,7 +163,7 @@ def queue_command(
             # person clicking learns why while they are looking at the row.
             raise HTTPException(status_code=409, detail=held)
     elif payload.trip_id is not None:
-        raise HTTPException(status_code=422, detail="a pull is not for one rental")
+        raise HTTPException(status_code=422, detail=f"a {payload.kind} is not for one rental")
 
     # A second click while one is waiting is the same request. For a filing
     # this is the double-click that would otherwise ask a guest twice.

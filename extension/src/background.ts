@@ -30,6 +30,7 @@ import {
   parsePagerRange,
   type PagerRange,
   describeShape,
+  describeTollsCommand,
   formatForField,
   maskValue,
   mergeActivityPages,
@@ -2138,6 +2139,7 @@ async function runCommands(): Promise<void> {
 }
 
 async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: string }> {
+  if (command.kind === "tolls") return runTollsCommand();
   let tab: { id: number; opened: boolean };
   try {
     tab = await turoTabForCommands();
@@ -2158,6 +2160,50 @@ async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: 
   } finally {
     if (tab.opened) chrome.tabs.remove(tab.id).catch(() => undefined);
   }
+}
+
+/**
+ * Read E-ZPass, queued from the site — from the phone, typically.
+ *
+ * Only on an E-ZPass tab already open in this Chrome. Opening one would land
+ * on a login page whenever the session has lapsed, and the extension never
+ * holds the E-ZPass password; an open, logged-in tab is the operator having
+ * signed in. The run is the same one a Send tolls click makes, gentle pacing
+ * and pause-on-refusal included.
+ */
+async function runTollsCommand(): Promise<{ ok: boolean; result: string }> {
+  const open = await chrome.tabs.query({ url: "https://*.e-zpassny.com/*" });
+  const tab = open.find((t) => t.id !== undefined && !t.discarded) ?? open.find((t) => t.id !== undefined);
+  if (tab?.id === undefined) {
+    return {
+      ok: false,
+      result:
+        "no E-ZPass tab is open in Chrome. Open Account Activity on the computer, log in, " +
+        "and leave the tab open; then this works from anywhere.",
+    };
+  }
+  if (tab.discarded || tab.status !== "complete") {
+    // Chrome unloads a tab left alone long enough; reloading brings the page
+    // and its session back, if the session is still good.
+    const id = tab.id;
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }, 30_000);
+      const listener = (updated: number, info: chrome.tabs.TabChangeInfo) => {
+        if (updated !== id || info.status !== "complete") return;
+        clearTimeout(timer);
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+      if (tab.discarded) chrome.tabs.reload(id).catch(() => undefined);
+    });
+  }
+  const run = await sendStatement(tab.id);
+  await chrome.storage.local.set({ lastTollsRun: { at: Date.now(), log: run.log ?? [] } });
+  return describeTollsCommand(run);
 }
 
 /**

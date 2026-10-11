@@ -919,3 +919,35 @@ export function describeShape(page: ScrapedPage): string {
   });
   return lines.join("\n");
 }
+
+/**
+ * What a Read E-ZPass command from the site reports back, in one line.
+ *
+ * Run from the phone, with nobody at the computer to see the popup, so the
+ * line has to say what happened and, when nothing did, the likeliest reason:
+ * an E-ZPass page that is not logged in shows no activity at all.
+ */
+export function describeTollsCommand(run: {
+  result: { rows: number; imported: number; already_known: number; matched: number } | null;
+  source: string;
+  problem?: string;
+  windows?: unknown[];
+}): { ok: boolean; result: string } {
+  if (run.problem) return { ok: false, result: run.problem };
+  if (run.result) {
+    const r = run.result;
+    const windows = run.windows?.length;
+    return {
+      ok: true,
+      result:
+        `${r.rows} rows read${windows ? ` over ${windows} date range${windows === 1 ? "" : "s"}` : ""}` +
+        ` · ${r.imported} new · ${r.already_known} already on file · ${r.matched} attributed`,
+    };
+  }
+  return {
+    ok: false,
+    result:
+      "no activity on the E-ZPass page — it is probably logged out. Log in on the computer " +
+      "and leave Account Activity open, then try again.",
+  };
+}

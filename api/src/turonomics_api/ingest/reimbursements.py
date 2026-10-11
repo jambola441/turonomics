@@ -49,9 +49,15 @@ _RANK = {"filed": 0, "unanswered": 1, INVOICE_CHARGED: 2}
 # tied to money arriving; that left a settled claim listed as outstanding,
 # which is the mistake that invites asking the guest twice.
 #
+# RESOLVED_BY_ADMIN_OWNER_FAVOR is the same decision taken by a person at
+# Turo rather than automatically. Also on the operator's word: Ian Alexander's
+# (Apr 2025) carried it, and his receipt shows the whole $34.66 paid as tolls.
+#
 # ACCEPTED is deliberately not here. It has been seen and has not been
 # reported as paid. Add a status to this set when one is, not before.
-OWNER_PAID_STATUSES = frozenset({"RESOLVED_AUTOMATICALLY_OWNER_FAVOR"})
+OWNER_PAID_STATUSES = frozenset(
+    {"RESOLVED_AUTOMATICALLY_OWNER_FAVOR", "RESOLVED_BY_ADMIN_OWNER_FAVOR"}
+)
 
 
 def settle_by_turo_status(

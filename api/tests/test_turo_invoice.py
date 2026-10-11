@@ -847,6 +847,21 @@ def test_a_claim_turo_resolved_for_the_host_is_charged(session, car, rental) -> 
 
 
 @requires_db
+def test_a_claim_a_turo_admin_resolved_for_the_host_is_charged(session, car, rental) -> None:
+    """Ian Alexander's trip: RESOLVED_BY_ADMIN_OWNER_FAVOR, and his receipt
+    shows the whole toll line paid."""
+    toll = _crossing(session, car, rental, cents=4071, imported_at=NOW - td(days=10))
+
+    row, result = _apply(
+        session, {**AUSTIN, "reimbursementStatus": "RESOLVED_BY_ADMIN_OWNER_FAVOR"}
+    )
+
+    assert row.state == "charged"
+    assert toll.recovered_at == NOW
+    assert result.charged_by_status == 1
+
+
+@requires_db
 def test_a_status_that_is_not_known_to_mean_paid_changes_nothing(
     session, car, rental
 ) -> None:

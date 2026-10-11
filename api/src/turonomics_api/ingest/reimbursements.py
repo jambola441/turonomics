@@ -39,6 +39,38 @@ log = logging.getLogger("turonomics.ingest.reimbursements")
 # un-charge it.
 _RANK = {"filed": 0, "unanswered": 1, INVOICE_CHARGED: 2}
 
+# Turo reimbursement statuses that mean the host has been paid, so the invoice
+# is charged whether or not the "charged" email ever arrives.
+#
+# One status, on the operator's word: RESOLVED_AUTOMATICALLY_OWNER_FAVOR is
+# Turo deciding the claim for the host without the guest contesting it, and it
+# was sitting on an invoice marked merely filed (Kaela's, Nov 24-29 2025).
+# The code used to wait for the email, on the grounds that no status had been
+# tied to money arriving; that left a settled claim listed as outstanding,
+# which is the mistake that invites asking the guest twice.
+#
+# ACCEPTED is deliberately not here. It has been seen and has not been
+# reported as paid. Add a status to this set when one is, not before.
+OWNER_PAID_STATUSES = frozenset({"RESOLVED_AUTOMATICALLY_OWNER_FAVOR"})
+
+
+def settle_by_turo_status(
+    invoice: ReimbursementInvoice, status: str | None, *, now: datetime
+) -> bool:
+    """Mark an invoice charged when Turo's own status says the host was paid.
+
+    Forwards only, and only sets the state and the date: whether the crossings
+    are ticked off is still `_recover`'s decision, on the same test as for a
+    charged email — so a status cannot write off a crossing the invoice did not
+    cover. Returns whether anything changed.
+    """
+    if status not in OWNER_PAID_STATUSES or invoice.state == INVOICE_CHARGED:
+        return False
+    invoice.state = INVOICE_CHARGED
+    if invoice.charged_at is None:
+        invoice.charged_at = now
+    return True
+
 
 @dataclass
 class ReimbursementResult:
@@ -300,6 +332,22 @@ def relink_invoices(session: Session, *, now: datetime) -> ReimbursementResult:
     outstanding, so this is run after a mail sync and after a toll import.
     """
     result = ReimbursementResult()
+    # Invoices recorded before a status was trusted: Turo's page said the host
+    # was paid and nothing moved them, because they are never re-read. Their
+    # body is stored, so catch them up here rather than asking for another pull.
+    for pending in session.scalars(
+        select(ReimbursementInvoice).where(
+            ReimbursementInvoice.state != INVOICE_CHARGED,
+            ReimbursementInvoice.turo_body.is_not(None),
+        )
+    ):
+        body = pending.turo_body
+        status = body.get("reimbursementStatus") if isinstance(body, dict) else None
+        if settle_by_turo_status(
+            pending, status if isinstance(status, str) else None, now=now
+        ):
+            result.updated += 1
+    session.flush()
     invoices = session.scalars(
         select(ReimbursementInvoice).where(
             ReimbursementInvoice.state == INVOICE_CHARGED

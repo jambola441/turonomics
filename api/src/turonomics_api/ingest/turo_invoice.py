@@ -39,7 +39,12 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip
 from turonomics_api.gmail.parse import INVOICE_FILED, names_tolls
-from turonomics_api.ingest.reimbursements import _RANK, ReimbursementResult, _recover
+from turonomics_api.ingest.reimbursements import (
+    _RANK,
+    ReimbursementResult,
+    _recover,
+    settle_by_turo_status,
+)
 
 log = logging.getLogger("turonomics.ingest.turo_invoice")
 
@@ -176,8 +181,10 @@ class TuroInvoiceResult:
     # Crossings stamped as asked for, or ticked off as paid, as a result.
     tolls_asked: int = 0
     tolls_recovered: int = 0
-    # Every reimbursementStatus seen, because the values have never been
-    # observed unmasked and nothing here acts on them until they have been.
+    # Invoices made charged by Turo's own status rather than by the mail.
+    charged_by_status: int = 0
+    # Every reimbursementStatus seen, so a new one is noticed. Only the ones in
+    # `OWNER_PAID_STATUSES` change anything.
     statuses: list[str] = field(default_factory=list)
 
 
@@ -304,10 +311,10 @@ def apply_turo_invoice(
             fingerprint=f"inv:{invoice.invoice_id}",
             reservation_id=invoice.reservation_id,
             turo_invoice_id=invoice.invoice_id,
-            # Filed, whatever the status says. "Charged" is the claim that
-            # ticks crossings off as paid, and the statuses seen so far —
-            # ACCEPTED, RESOLVED_AUTOMATICALLY_OWNER_FAVOR — have not been tied
-            # to money arriving. The charged email moves it forward as usual.
+            # Filed to begin with: "charged" is the claim that ticks crossings
+            # off as paid. A status Turo reports as paid to the host
+            # (`OWNER_PAID_STATUSES`) moves it on just below; the charged email
+            # moves it forward as usual for the rest.
             state=INVOICE_FILED,
             total_cents=invoice.total_cents,
             lines=[],
@@ -349,6 +356,15 @@ def apply_turo_invoice(
     elif row.toll_cents is None and was_unanswered:
         result.newly_itemised.append(
             f"{invoice.reservation_id}: none of ${row.total_cents / 100:,.2f} was tolls"
+        )
+
+    if settle_by_turo_status(row, invoice.status, now=now):
+        result.charged_by_status += 1
+        log.info(
+            "reimbursement %s on reservation %s is charged: Turo says %s",
+            row.turo_invoice_id or row.fingerprint,
+            row.reservation_id,
+            invoice.status,
         )
 
     if row.charged_at is not None and row.toll_cents is not None:

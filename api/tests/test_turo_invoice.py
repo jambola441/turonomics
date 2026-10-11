@@ -941,3 +941,32 @@ def test_a_pick_is_not_repeated_by_running_the_match_again(session, car, rental)
     relink_invoices(session, now=NOW)
     relink_invoices(session, now=NOW)
     assert sum(t.recovered_at is not None for t in tolls) == 2
+
+
+@requires_db
+def test_a_toll_line_not_yet_paid_marks_its_crossings_asked(
+    api_client, session, car, rental
+) -> None:
+    """44623088: two toll invoices, $27.13 paid and $40.69 not. The crossings
+    came in after both were first seen, so neither stamped them, and the
+    unpaid one's $40.69 read as never charged when Turo had been asked."""
+    seen = NOW - td(days=30)
+    paid = _crossing(session, car, rental, cents=2713, imported_at=NOW - td(days=10))
+    asked = _crossing(session, car, rental, cents=4069, imported_at=NOW - td(days=10))
+    _charged_toll_line(session, rental, 2713, invoice_id="900001")
+    session.add(
+        ReimbursementInvoice(
+            fingerprint="inv:900002", reservation_id=RES, turo_invoice_id="900002",
+            guest_name="Austin", state="filed", total_cents=4069,
+            lines=[["Tolls", 4069]], toll_cents=4069, trip_id=rental.id,
+            first_seen_at=seen, last_seen_at=seen,
+        )
+    )
+    relink_invoices(session, now=NOW)
+    relink_invoices(session, now=NOW)
+    session.commit()
+    assert paid.recovered_at is not None and paid.filed_at is None
+    assert asked.filed_at is not None and asked.recovered_at is None
+    row = api_client.get("/api/invoices/ledger").json()["rows"][0]
+    assert row["state"] == "awaiting payment"
+    assert (row["unfiled_cents"], row["filed_cents"], row["recovered_cents"]) == (0, 4069, 2713)

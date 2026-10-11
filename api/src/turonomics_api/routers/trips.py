@@ -14,16 +14,14 @@ a parallel notion of a rental that each of them would have to learn about.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Annotated
 
-import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import (
     ExtensionCommand,
@@ -35,11 +33,11 @@ from turonomics_api.db.models import (
     Vehicle,
 )
 from turonomics_api.ingest.tolls import rematch_unattributed
-from turonomics_api.ingest.trip_map import Route, bouncie_route, place, telemetry_route
+from turonomics_api.ingest.trip_map import place, trip_route
 from turonomics_api.ingest.turo_extras import photo_groups, thread
 from turonomics_api.ingest.turo_receipt import receipt_summary
 from turonomics_api.routers.tolls import require_token
-from turonomics_api.settings import fleet_timezone, toll_overrun_minutes
+from turonomics_api.settings import fleet_timezone
 
 router = APIRouter(prefix="/api/trips", tags=["trips"])
 
@@ -582,11 +580,6 @@ class TripMap(BaseModel):
     note: str | None
 
 
-# The route is read from a little before the booking to the end of the grace
-# the toll matcher allows, so a crossing on the way back is on the map too.
-_MAP_BEFORE = timedelta(minutes=30)
-
-
 @router.get("/{trip_id}/map", response_model=TripMap)
 def trip_map(
     trip_id: uuid.UUID,
@@ -599,26 +592,7 @@ def trip_map(
     trip = session.get(Trip, trip_id)
     if trip is None:
         raise HTTPException(status_code=404, detail="no such rental")
-    starts = trip.starts_at - _MAP_BEFORE
-    ends = trip.ends_at + timedelta(minutes=toll_overrun_minutes())
-
-    route = Route()
-    imei = trip.vehicle.bouncie_imei if trip.vehicle else None
-    if imei:
-        try:
-            route = bouncie_route(BouncieClient(session), imei, starts=starts, ends=ends)
-        except (BouncieError, httpx.HTTPError, RuntimeError) as error:
-            # A map is not worth an error page. Fall back, and say why.
-            route = Route(note=f"Bouncie did not answer ({error})")
-    if not route.drives:
-        fallback = telemetry_route(session, trip.vehicle_id, starts=starts, ends=ends)
-        if fallback.drives:
-            fallback.note = "; ".join(n for n in (route.note, fallback.note) if n)
-            route = fallback
-        elif route.source is None and not route.note:
-            route.note = (
-                "no tracker on this car" if not imei else "the tracker recorded no driving"
-            )
+    route = trip_route(session, trip)
 
     tolls = session.scalars(
         select(Toll).where(Toll.trip_id == trip.id).order_by(Toll.occurred_at)

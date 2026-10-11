@@ -21,6 +21,7 @@ talks to Turo — is running in a browser that rasterises SVG natively.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -43,6 +44,39 @@ class EvidenceRow:
     amount_cents: int
 
 
+# How much of the track an inset shows, in metres from the plaza. Small on
+# purpose: the sheet goes to a guest and to Turo, and a guest's whole route is
+# nobody's business but theirs. The track outside this circle is not drawn, and
+# is not in the data this module is given.
+INSET_RADIUS_M = 1200.0
+_INSET_W = 220
+_INSET_MAP_H = 130
+_INSET_CAPTION_H = 66
+_INSET_GAP = 18
+_INSET_COLUMNS = 3
+_INSET_ROW = _INSET_MAP_H + _INSET_CAPTION_H + 14
+_INSETS_HEADER = 62
+
+
+@dataclass(frozen=True)
+class Inset:
+    """The tracker's positions within a short distance of one plaza."""
+
+    # What the statement calls it, and the researched name if there is one.
+    plaza: str
+    name: str | None
+    lat: float
+    lon: float
+    # Polylines of (lat, lon), already clipped to the circle.
+    segments: Sequence[Sequence[tuple[float, float]]]
+    # The nearest the tracker came to the plaza at any point in the rental.
+    closest_m: int
+    # When the crossings at this plaza were charged, for the caption.
+    times: Sequence[datetime]
+    # The plaza's position is approximate (medium confidence).
+    approximate: bool = False
+
+
 @dataclass(frozen=True)
 class EvidenceSheet:
     reservation_id: str | None
@@ -55,6 +89,14 @@ class EvidenceSheet:
     # When the statement these came from was imported, so the sheet can say
     # how it knows rather than simply asserting.
     imported_at: datetime | None = None
+    # Where the car's tracker was near each plaza, when it was available. Empty
+    # means no location data, and the sheet is the plain table it always was.
+    insets: Sequence[Inset] = ()
+    # "bouncie" (a full GPS track) or "telemetry" (stored positions, a fix every
+    # few minutes), so the sheet says what the lines are.
+    track_source: str | None = None
+    # Plazas that had a track but did not fit the sheet.
+    insets_omitted: int = 0
 
     @property
     def total_cents(self) -> int:
@@ -69,6 +111,94 @@ def _local(when: datetime) -> str:
     return f"{when.astimezone(fleet_timezone()):%a %-d %b %Y, %-I:%M %p}"
 
 
+def _project(
+    lat: float, lon: float, centre: tuple[float, float], scale: float, cx: float, cy: float
+) -> tuple[float, float]:
+    """Metres east/north of the plaza, as pixels. Flat, which is exact enough at
+    a kilometre."""
+    east = (lon - centre[1]) * 111_320 * math.cos(math.radians(centre[0]))
+    north = (lat - centre[0]) * 111_320
+    return cx + east * scale, cy - north * scale
+
+
+def _fit(text: str, limit: int) -> str:
+    """Cut to what fits a caption column, with an ellipsis. A caption that runs
+    into the next inset reads as one sentence about two plazas."""
+    if len(text) <= limit:
+        return text
+    cut = text[: limit - 1]
+    # At a word, so it does not end on an open bracket or half a name.
+    if " " in cut and cut.rfind(" ") > limit // 2:
+        cut = cut[: cut.rfind(" ")]
+    return cut.rstrip(" ([,\u00b7-") + "\u2026"
+
+
+def _inset_svg(inset: Inset, x: float, y: float) -> str:
+    cx, cy = x + _INSET_W / 2, y + _INSET_MAP_H / 2
+    radius_px = min(_INSET_W, _INSET_MAP_H) / 2 - 6
+    scale = radius_px / INSET_RADIUS_M
+    centre = (inset.lat, inset.lon)
+    out = [
+        f'<rect x="{x}" y="{y}" width="{_INSET_W}" height="{_INSET_MAP_H}" '
+        f'fill="#f9fafb" stroke="#d1d5db"/>',
+        f'<circle cx="{cx}" cy="{cy}" r="{radius_px:.1f}" fill="#ffffff" '
+        f'stroke="#9ca3af" stroke-dasharray="3 3"/>',
+    ]
+    for segment in inset.segments:
+        points = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in segment)
+        )
+        out.append(
+            f'<polyline points="{points}" fill="none" stroke="#2563eb" stroke-width="2.5" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+        )
+    out.append(
+        f'<circle cx="{cx}" cy="{cy}" r="5" fill="#dc2626" stroke="#ffffff" stroke-width="1.5"/>'
+    )
+    bar = 500 * scale
+    base = y + _INSET_MAP_H - 10
+    out.append(
+        f'<line x1="{x + 8}" y1="{base}" x2="{x + 8 + bar:.1f}" y2="{base}" '
+        f'stroke="#374151" stroke-width="2"/>'
+        f'<text x="{x + 8 + bar + 4:.1f}" y="{base + 4}" font-size="9" fill="#374151">500 m</text>'
+    )
+    label = inset.plaza if not inset.name else f"{inset.plaza} \u00b7 {inset.name}"
+    near = f"tracker came within {inset.closest_m} m"
+    # The first time and a count, not a list: every crossing is in the table
+    # above with its own time, and a list longer than the column is cut, which
+    # once dropped the count and made the caption misleading.
+    stamps = f"{inset.times[0].astimezone(fleet_timezone()):%-d %b %-I:%M %p}"
+    if len(inset.times) > 1:
+        stamps += f" +{len(inset.times) - 1} more"
+    ty = y + _INSET_MAP_H + 15
+    out.append(
+        f'<text x="{x}" y="{ty}" font-size="11" font-weight="600" fill="#111827">'
+        f"{escape(_fit(label, 34))}</text>"
+        f'<text x="{x}" y="{ty + 14}" font-size="10" fill="#374151">{escape(near)}</text>'
+    )
+    line = ty + 27
+    if inset.approximate:
+        out.append(
+            f'<text x="{x}" y="{line}" font-size="10" fill="#374151">'
+            f"plaza position approximate</text>"
+        )
+        line += 13
+    out.append(
+        f'<text x="{x}" y="{line}" font-size="10" fill="#6b7280">'
+        f"{escape(_fit('charged ' + stamps, 40))}</text>"
+    )
+    return "".join(out)
+
+
+def _insets_height(sheet: EvidenceSheet) -> int:
+    if not sheet.insets:
+        return 0
+    rows = math.ceil(len(sheet.insets) / _INSET_COLUMNS)
+    extra = 16 if sheet.insets_omitted else 0
+    return _INSETS_HEADER + rows * _INSET_ROW + extra
+
+
 def evidence_svg(sheet: EvidenceSheet) -> str:
     """The sheet, as SVG.
 
@@ -78,7 +208,12 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
     one produces XML that a browser refuses to render, so the evidence silently
     becomes a broken image.
     """
-    height = _HEADER_HEIGHT + _ROW_HEIGHT * (len(sheet.rows) + 1) + _FOOTER_HEIGHT
+    height = (
+        _HEADER_HEIGHT
+        + _ROW_HEIGHT * (len(sheet.rows) + 1)
+        + _FOOTER_HEIGHT
+        + _insets_height(sheet)
+    )
     who = sheet.guest_name or "the guest"
     plate = f" · {sheet.plate}" if sheet.plate else ""
     # Both ends through the same formatter. Written differently at first, so
@@ -142,6 +277,39 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
         f'fill="#111827" text-anchor="end">{_money(sheet.total_cents)}</text>'
     )
 
+    below = total_y + 30
+    if sheet.insets:
+        top = total_y + 36
+        what = (
+            "the car's GPS track"
+            if sheet.track_source == "bouncie"
+            else "positions the car's tracker stored (a fix every few minutes)"
+        )
+        parts.append(
+            f'<text x="32" y="{top}" font-size="14" font-weight="600" fill="#111827">'
+            f"Where the car's tracker was near each plaza</text>"
+            f'<text x="32" y="{top + 17}" font-size="10.5" fill="#6b7280">'
+            f"Blue is {escape(what)}, shown only within 1.2 km of the plaza. The red "
+            f"marker is where the plaza is, not where the car was when it was charged.</text>"
+            f'<text x="32" y="{top + 31}" font-size="10.5" fill="#6b7280">'
+            f"The rest of the trip is not shown.</text>"
+        )
+        for index, inset in enumerate(sheet.insets):
+            column, grid_row = index % _INSET_COLUMNS, index // _INSET_COLUMNS
+            parts.append(
+                _inset_svg(
+                    inset,
+                    32 + column * (_INSET_W + _INSET_GAP),
+                    top + 44 + grid_row * _INSET_ROW,
+                )
+            )
+        below = total_y + 30 + _insets_height(sheet)
+        if sheet.insets_omitted:
+            parts.append(
+                f'<text x="32" y="{below - 8}" font-size="10.5" fill="#6b7280">'
+                f"{sheet.insets_omitted} more plaza(s) not drawn.</text>"
+            )
+
     # Provenance, on the face of the sheet. This is the fleet's own record of an
     # E-ZPass statement, not a copy of one, and saying so is what keeps it
     # honest evidence rather than a lookalike.
@@ -149,7 +317,7 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
     if sheet.imported_at:
         source += f", imported {sheet.imported_at.astimezone(fleet_timezone()):%-d %b %Y}"
     parts.append(
-        f'<text x="32" y="{total_y + 30}" font-size="11" fill="#6b7280">'
+        f'<text x="32" y="{below}" font-size="11" fill="#6b7280">'
         f"Prepared by Turonomics {escape(source)}. The statement itself is "
         f"available on request.</text>"
     )

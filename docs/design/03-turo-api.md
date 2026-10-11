@@ -221,6 +221,30 @@ Note the image is uploaded as `step: TRIP_PHOTO`, the same bucket as the
 check-in photos, rather than as anything invoice-specific. Evidence is a trip
 photo that a reimbursement happens to point at.
 
+### What the evidence image shows
+
+The image uploaded above is rendered by `ingest/evidence.py`: a table of the
+crossings, and, when the car's tracker has data, a small drawing per plaza of
+where the tracker was near it (`ingest/evidence_map.py`). Decisions behind the
+drawing, because the sheet goes to a guest and to Turo:
+
+* **Local only.** Each leg of the route is clipped to a 1.2 km circle around the
+  plaza before anything is drawn; the rest of the trip is not in the data the
+  renderer receives. A guest's whole route is theirs.
+* **The claim is "came within N m", not "was there at that minute".** A drive's
+  GPS points carry no timestamps, so nothing can say when the car was at the
+  plaza. The red marker is the plaza's position, labelled as such.
+* **Tighter than the circle.** An inset is drawn only if the tracker came within
+  1 km. Track between 1 and 1.2 km is in the circle but is not evidence of
+  having passed.
+* **No guessed plazas.** High and medium confidence only, never a zone's middle;
+  a medium plaza is labelled "position approximate".
+* **No data, no inset.** No tracker, Bouncie not answering, an unknown plaza or
+  any error building the picture leaves that sheet as the plain table. A toll
+  invoice never fails to draft for want of a map.
+* Stored telemetry (a fix every few minutes) is described as such, not as a GPS
+  track. At most nine plazas are drawn and the sheet says how many it left out.
+
 **`automatedTollTransactionsDto.transactionUuids` was empty** on a manual
 filing. Turo evidently has its own automated toll feed, and those uuids are
 presumably its transactions rather than ours. Filing with an empty list and an

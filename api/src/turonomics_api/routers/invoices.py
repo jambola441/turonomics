@@ -23,8 +23,10 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip, TripState
 from turonomics_api.gmail.parse import names_tolls
-from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, evidence_svg
+from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, Inset, evidence_svg
+from turonomics_api.ingest.evidence_map import build_insets
 from turonomics_api.ingest.invoices import OFF_PLATFORM, Invoice, InvoiceLine, build_invoices
+from turonomics_api.ingest.trip_map import trip_route
 from turonomics_api.routers.tolls import require_token, token_configured
 from turonomics_api.settings import toll_filing_window_days
 
@@ -353,6 +355,34 @@ def _unfiled(session: Session, invoice: Invoice) -> list[InvoiceLine]:
     return [line for line in invoice.lines if line.toll_id not in filed]
 
 
+def _location_insets(
+    session: Session, trip: Trip | None, lines: list[InvoiceLine]
+) -> tuple[list[Inset], int, str | None]:
+    """The tracker's positions near each plaza, or nothing at all.
+
+    Nothing at all is a normal answer: no tracker on the car, Bouncie not
+    answering, a plaza this app cannot place. The evidence then goes out as the
+    plain table it always was. It is also the answer to any error here, because
+    a toll invoice must never fail to draft for want of a picture.
+    """
+    if trip is None or not lines:
+        return [], 0, None
+    try:
+        route = trip_route(session, trip)
+        agencies = dict(
+            session.execute(
+                select(Toll.id, Toll.agency).where(Toll.id.in_([line.toll_id for line in lines]))
+            ).all()
+        )
+        insets, omitted = build_insets(
+            route, [(line.plaza, agencies.get(line.toll_id), line.occurred_at) for line in lines]
+        )
+        return insets, omitted, route.source if insets else None
+    except Exception:  # noqa: BLE001 - see the docstring
+        log.warning("evidence map left out for trip %s", trip.id, exc_info=True)
+        return [], 0, None
+
+
 def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> DraftResponse:
     lines = _unfiled(session, invoice)
     if not lines:
@@ -363,6 +393,7 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
     trip = session.get(Trip, invoice.trip_id)
     from_turo = trip.can_file_reimbursement if trip is not None else None
     left = invoice.days_left(window, now)
+    insets, omitted, track_source = _location_insets(session, trip, lines)
     sheet = EvidenceSheet(
         reservation_id=invoice.turo_trip_id,
         guest_name=invoice.guest_name,
@@ -377,6 +408,9 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
             for line in lines
         ],
         imported_at=trip.detail_synced_at if trip is not None else None,
+        insets=insets,
+        track_source=track_source,
+        insets_omitted=omitted,
     )
     return DraftResponse(
         trip_id=invoice.trip_id,

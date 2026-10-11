@@ -20,6 +20,7 @@ import {
   describePager,
   describeSubmitCandidates,
   HISTORY_MONTHS,
+  nextIsDisabled,
   looksBlocked,
   PACE_MS,
   runGate,
@@ -469,13 +470,16 @@ function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, 
   const set = (index: number, value: string): boolean => {
     const input = inputs[index];
     if (!input) return false;
+    // Focus, set, blur: a date field that commits on blur needs a real one,
+    // and a dispatched "blur" event is not the same thing.
+    input.focus();
     // The native setter, so a framework that wraps `value` still sees a change.
     const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
     if (setter) setter.call(input, value);
     else input.value = value;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    input.blur();
     return true;
   };
   return set(fromIndex, fromValue) && set(toIndex, toValue);
@@ -528,9 +532,13 @@ function chooseListboxOptionInPage(index: number): boolean {
   return true;
 }
 
-function readValuesInPage(indices: number[]): string[] {
+function readValuesInPage(indices: number[]): { value: string; invalid: boolean }[] {
   const inputs = Array.from(document.querySelectorAll("input"));
-  return indices.map((i) => inputs[i]?.value ?? "<missing>");
+  return indices.map((i) => ({
+    value: inputs[i]?.value ?? "<missing>",
+    // MUI marks a date it will not accept (out of range, unparseable) here.
+    invalid: inputs[i]?.getAttribute("aria-invalid") === "true",
+  }));
 }
 
 /** Enter in a field is how most forms are submitted without their button. */
@@ -558,7 +566,7 @@ function submitFormInPage(index: number): boolean {
 function readFormMessagesInPage(): string[] {
   const nodes = Array.from(
     document.querySelectorAll<HTMLElement>(
-      "[role='alert'], .Mui-error, [class*='helperText'], [class*='HelperText'], [class*='error' i]"
+      "[role='alert'], p.Mui-error, [class*='FormHelperText'], [class*='helperText']"
     )
   );
   const seen = new Set<string>();
@@ -1379,7 +1387,14 @@ async function raiseRowsPerPage(tabId: number, descriptor: PageDescriptor): Prom
   );
   if (pick === null) return descriptor;
   const before = tableSignature(activityOf(descriptor));
+  const alreadyThere = options[Number(pick)]?.label === found.current;
   if (!(await inPage(tabId, chooseListboxOptionInPage, [Number(pick)]))) return descriptor;
+  if (alreadyThere) {
+    // Choosing the value it already has closes the menu and changes nothing, so
+    // there is nothing to wait for. Waiting anyway cost 8s per window.
+    note("  rows per page: already at that, nothing to wait for");
+    return descriptor;
+  }
   const after = await waitForChange(tabId, before, descriptor, 8000);
   note(`  rows per page: now ${activityOf(after)?.rows.length ?? 0} rows on the page, pager "${after.pagerText}"`);
   return after;
@@ -1429,22 +1444,29 @@ async function pageThrough(tabId: number, start: PageDescriptor): Promise<Scrape
     }
 
     let ranked = rankNextControls(descriptor.nextControls);
-    if (!ranked.length && lastRange) {
-      // The pager says there is more and offers no way to it. Re-read for a
-      // few seconds before believing that: the bar is re-rendered after each
-      // page and can be missing for a moment.
+    if (!ranked.length && !nextIsDisabled(descriptor.nextControls)) {
+      // No next control at all, and no disabled one saying "this is the end".
+      // That is also what a pager looks like while it re-renders after a page
+      // loads, so look again for a few seconds before believing it. DOM reads
+      // only; nothing is requested from the site.
       for (let attempt = 0; attempt < 8 && !ranked.length; attempt++) {
         await sleep(500);
         descriptor = await inPage(tabId, readPageInPage, []);
         ranked = rankNextControls(descriptor.nextControls);
+        if (nextIsDisabled(descriptor.nextControls)) break;
       }
-      note(`  pager says more, next control ${ranked.length ? "reappeared after a wait" : "never reappeared"}`);
+      note(`  no next control at first; after looking again: ${ranked.length ? "it reappeared" : nextIsDisabled(descriptor.nextControls) ? "it is disabled (the last page)" : "still none"}`);
     }
     if (!ranked.length) {
+      if (nextIsDisabled(descriptor.nextControls)) {
+        // The site's own word that this is the end. Nothing to explain.
+        stopped = "last page";
+        break;
+      }
       stopped = lastRange
         ? `incomplete: no next control, but the pager says ${lastRange.to} of ${lastRange.total}`
         : "no next page";
-      note("  no control looked like next; pager controls:");
+      note("  no control looked like next, and none is a disabled next; pager controls:");
       for (const line of describePager(descriptor.nextControls)) note(line);
       break;
     }
@@ -1659,7 +1681,12 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   // date picker can rewrite or reject what was typed.
   await sleep(400);
   const [fromNow, toNow] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
-  note(`  fields now read "${fromNow}" and "${toNow}"${sameDate(fromNow, fromText) && sameDate(toNow, toText) ? "" : "  <-- NOT WHAT WAS TYPED"}`);
+  note(
+    `  fields now read "${fromNow.value}" and "${toNow.value}"` +
+      (sameDate(fromNow.value, fromText) && sameDate(toNow.value, toText) ? "" : "  <-- NOT WHAT WAS TYPED") +
+      (fromNow.invalid ? "  <-- THE PAGE MARKS THE START DATE INVALID" : "") +
+      (toNow.invalid ? "  <-- THE PAGE MARKS THE END DATE INVALID" : "")
+  );
   if (!filled) {
     return { result: null, source: "none", rowCount: 0, problem: "could not type the dates" };
   }
@@ -1673,7 +1700,11 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
   if (messages.length) note(`  the page shows: ${messages.map((m) => `"${m}"`).join(" | ")}`);
 
   const baseline = tableSignature(activityOf(before));
+  // Submitting the form first: in a real run, clicking Filter and pressing Enter
+  // each did nothing, and requestSubmit was the one that ran the search. The
+  // other two stay as fallbacks, in case the page changes.
   const attempts: { name: string; run: () => Promise<boolean> }[] = [
+    { name: "submitting the form", run: () => inPage(tabId, submitFormInPage, [fields.to.index]) },
     {
       name: "the search button",
       run: async () => {
@@ -1689,7 +1720,6 @@ async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsRes
       },
     },
     { name: "Enter in the end-date field", run: () => inPage(tabId, pressEnterInPage, [fields.to.index]) },
-    { name: "submitting the form", run: () => inPage(tabId, submitFormInPage, [fields.to.index]) },
   ];
 
   let after = before;

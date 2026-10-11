@@ -27,6 +27,8 @@ import {
   describeSubmitCandidates,
   windowApplied,
   HISTORY_MONTHS,
+  nextIsDisabled,
+  WINDOW_DAYS,
   looksBlocked,
   runGate,
   parsePagerRange,
@@ -472,16 +474,37 @@ test("days roll over month and year ends", () => {
   assert.equal(addDays("2026-01-01", -1), "2025-12-31");
 });
 
-test("windows run newest first, three months each, ending today", () => {
+test("windows run newest first, 90 days each, ending today", () => {
   const ranges = quarterRanges("2026-10-07", 12);
   assert.equal(ranges.length, 4);
-  assert.deepEqual(ranges[0], { from: "2026-07-08", to: "2026-10-07" });
-  assert.equal(ranges[3].from, "2025-10-08");
+  assert.deepEqual(ranges[0], { from: "2026-07-10", to: "2026-10-07" });
+  assert.equal(ranges[3].to, addDays(ranges[2].from, -1));
+});
+
+test("no window is longer than the filter accepts", () => {
+  // A real run: 90 and 91 days were taken, 92 was not. Calendar quarters are 91
+  // or 92 days, which is why the oldest window of that run was refused.
+  const days = (r: { from: string; to: string }): number => {
+    let n = 1;
+    for (let d = r.from; d < r.to; d = addDays(d, 1)) n++;
+    return n;
+  };
+  for (let i = 0; i < 400; i++) {
+    for (const r of quarterRanges(addDays("2025-01-01", i), 24)) {
+      assert.ok(days(r) <= WINDOW_DAYS, `${r.from}..${r.to} is ${days(r)} days`);
+    }
+  }
+  assert.equal(WINDOW_DAYS, 90);
+});
+
+test("3 months is one window and 9 is three", () => {
+  assert.equal(quarterRanges("2026-10-10", 3).length, 1);
+  assert.equal(quarterRanges("2026-10-10", 9).length, 3);
+  assert.equal(quarterRanges("2026-10-10", 24).length, 8);
 });
 
 test("windows leave no gap and no overlap, whatever day it is", () => {
-  // A gap is a crossing never read. Checked across every day of two years so
-  // the month-end clamping cannot hide one.
+  // A gap is a crossing never read. Checked across every day of two years.
   for (let i = 0; i < 730; i++) {
     const today = addDays("2025-01-01", i);
     const ranges = quarterRanges(today, 12);
@@ -495,7 +518,7 @@ test("windows leave no gap and no overlap, whatever day it is", () => {
   }
 });
 
-test("a history that is not a multiple of three still covers it", () => {
+test("a history that is not a multiple of a window still covers it", () => {
   assert.equal(quarterRanges("2026-10-07", 4).length, 2);
 });
 
@@ -729,6 +752,18 @@ test("a read covers one window unless asked for more", () => {
   // the account refused.
   assert.equal(HISTORY_MONTHS, 3);
   assert.equal(quarterRanges("2026-10-07").length, 1);
+});
+
+test("a disabled next control is the last page; a missing one is not", () => {
+  // From a real run: the last page's next is aria "Go to next page" and disabled.
+  assert.equal(nextIsDisabled([{ text: "", ariaLabel: "Go to next page", disabled: true }]), true);
+  assert.equal(
+    nextIsDisabled([{ text: "", ariaLabel: "Go to next page", className: "Mui-disabled MuiPaginationItem-root" }]),
+    true
+  );
+  assert.equal(nextIsDisabled([{ text: "", ariaLabel: "Go to next page" }]), false, "enabled");
+  assert.equal(nextIsDisabled([{ text: "2", ariaLabel: "Go to page 2" }]), false, "absent");
+  assert.equal(nextIsDisabled([{ text: "", ariaLabel: "Go to last page", disabled: true }]), false, "last is not next");
 });
 
 test("recognises the wording of a block or an outage, and says which words", () => {

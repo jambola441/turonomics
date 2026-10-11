@@ -280,6 +280,22 @@ function disabledLooking(control: ControlDescriptor): boolean {
 }
 
 /**
+ * Whether the pager's next control is present and disabled: the last page.
+ *
+ * Distinct from there being no next control at all. A disabled one is the
+ * site saying "this is the end"; a missing one is a pager mid re-render, or
+ * markup we do not recognise, and calls for a second look.
+ */
+export function nextIsDisabled(controls: ControlDescriptor[]): boolean {
+  return controls.some(
+    (control) =>
+      /\bnext\b/i.test(control.ariaLabel ?? "") &&
+      !skipsPages(control.ariaLabel ?? "") &&
+      disabledLooking(control)
+  );
+}
+
+/**
  * Indices of the controls that plausibly advance one page, best first.
  *
  * Ranked rather than chosen, so the worker can try the next candidate when a
@@ -467,7 +483,17 @@ export interface DateRange {
   to: string;
 }
 
-export const WINDOW_MONTHS = 3;
+/**
+ * The longest range E-ZPass's filter accepts, in days, both ends included.
+ *
+ * Found from a real run, not assumed. Windows of 90 and 91 days (end minus
+ * start 89 and 90) were accepted; one of 92 days (91 apart) left the page
+ * showing the previous range. "Three months" is 91 or 92 days depending on the
+ * month, so calendar quarters were over the limit about half the time.
+ */
+export const WINDOW_DAYS = 90;
+/** A "month" of history, for sizing the read. Deliberately not calendar months. */
+export const DAYS_PER_MONTH = 30;
 /**
  * How far back a read goes unless told otherwise: one window. Everything older
  * is already on file after the first read, and re-reading a year of it on every
@@ -580,22 +606,24 @@ export function addDays(iso: string, days: number): string {
 }
 
 /**
- * Consecutive three-month windows ending on `today`, newest first.
+ * Consecutive windows of at most `WINDOW_DAYS` ending on `today`, newest first.
  *
  * Each window starts the day after the previous (older) one ends, both ends
  * inclusive, so together they cover the history exactly once: a gap would be a
  * crossing never read, and an overlap only costs the API a fingerprint check.
+ * History is sized as 30-day months so that 3 months is one window and 9 is
+ * three, rather than four with a 3-day tail.
  */
 export function quarterRanges(
   today: string,
   historyMonths = HISTORY_MONTHS,
-  windowMonths = WINDOW_MONTHS
+  windowDays = WINDOW_DAYS
 ): DateRange[] {
-  const count = Math.max(1, Math.ceil(historyMonths / windowMonths));
+  const count = Math.max(1, Math.ceil((historyMonths * DAYS_PER_MONTH) / windowDays));
   const ranges: DateRange[] = [];
   let to = today;
   for (let i = 0; i < count; i++) {
-    const from = addDays(addMonths(to, -windowMonths), 1);
+    const from = addDays(to, -(windowDays - 1));
     ranges.push({ from, to });
     to = addDays(from, -1);
   }

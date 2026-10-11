@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip, TripState
 from turonomics_api.gmail.parse import names_tolls
+from turonomics_api.ingest.distance import distance_lines_cents, summarise
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, Inset, evidence_svg
 from turonomics_api.ingest.evidence_map import build_insets
 from turonomics_api.ingest.invoices import OFF_PLATFORM, Invoice, InvoiceLine, build_invoices
@@ -490,6 +491,10 @@ class LedgerRow(BaseModel):
     state: str
     # Set when the two ledgers disagree in a way worth a person's attention.
     note: str | None = None
+    # Miles over the trip's limit at Turo's rate, less the distance Turo has
+    # invoiced. Apart from the tolls: a different thing to ask for, and not
+    # in any of the toll columns above.
+    distance_unbilled_cents: int = 0
 
 
 class LedgerResponse(BaseModel):
@@ -511,6 +516,9 @@ class LedgerResponse(BaseModel):
     collectable_cents: int = 0
     awaiting_cents: int = 0
     lost_cents: int = 0
+    # Additional distance not yet invoiced on rentals still inside the window.
+    # The window is the tolls' 90 days, assumed to hold for distance too.
+    distance_collectable_cents: int = 0
 
 
 def _ledger_state(
@@ -721,6 +729,7 @@ def ledger(session: DbSession) -> LedgerResponse:
                 ),
                 state=state,
                 note=note,
+                distance_unbilled_cents=_distance_unbilled(trip, theirs),
             )
         )
     first, last = session.execute(
@@ -738,9 +747,22 @@ def ledger(session: DbSession) -> LedgerResponse:
         recovered_cents=sum(r.recovered_cents for r in rows),
         charged_cents=sum(r.charged_cents for r in rows),
         collectable_cents=sum(r.unfiled_cents for r in rows if _collectable(r)),
+        distance_collectable_cents=sum(
+            r.distance_unbilled_cents
+            for r in rows
+            if r.days_left is not None and r.days_left >= 0
+        ),
         awaiting_cents=sum(r.filed_cents for r in rows),
         lost_cents=sum(r.unfiled_cents for r in rows if not _collectable(r)),
     )
+
+
+def _distance_unbilled(trip: Trip | None, theirs: list[ReimbursementInvoice]) -> int:
+    if trip is None:
+        return 0
+    invoiced = sum(distance_lines_cents(r.lines or []) for r in theirs)
+    found = summarise(trip.turo_detail, invoiced)
+    return found.unbilled_cents if found else 0
 
 
 def _collectable(row: LedgerRow) -> bool:
@@ -819,6 +841,7 @@ def _quiet_rentals(
                     else "outside the imported statements "
                     f"({first:%-d %b %Y} – {last:%-d %b %Y})"
                 ),
+                distance_unbilled_cents=_distance_unbilled(trip, theirs),
             )
         )
     return out

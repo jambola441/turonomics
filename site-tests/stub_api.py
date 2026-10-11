@@ -433,6 +433,7 @@ def _ledger_payload() -> dict[str, object]:
             "turo_unknown_cents": 777,
             "state": "partly billed",
             "note": "11.00 arrived after the first invoice",
+            "distance_unbilled_cents": 5460,
         },
         {
             "trip_id": "22222222-2222-2222-2222-222222222222",
@@ -483,6 +484,7 @@ def _ledger_payload() -> dict[str, object]:
         "collectable_cents": 1100,
         "awaiting_cents": 679,
         "lost_cents": 0,
+        "distance_collectable_cents": 5460,
     }
 
 

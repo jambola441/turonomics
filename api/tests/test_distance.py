@@ -133,3 +133,27 @@ def test_the_list_and_view_say_what_distance_was_never_invoiced(
     row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
                if r["id"] == str(trip.id))
     assert row["distance_unbilled_cents"] == 0, "invoiced now"
+
+
+@requires_db
+def test_the_ledger_carries_distance_beside_the_tolls(api_client, monkeypatch, session) -> None:
+    """A rental with no crossings at all still has distance to file, and the
+    total counts only rentals still inside the window."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    car = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2024, plate="LZA7293")
+    session.add(car)
+    session.flush()
+    now = datetime.now(UTC)
+    for res, ended in (("70000001", now - td(days=10)), ("70000002", now - td(days=200))):
+        session.add(Trip(
+            vehicle_id=car.id, turo_trip_id=res, guest_name="Liam",
+            starts_at=ended - td(days=3), ends_at=ended, state=TripState.completed,
+            source=TripSource.email, turo_detail=_detail(over=124, rate=0.37),
+        ))
+    session.commit()
+
+    body = api_client.get("/api/invoices/ledger").json()
+    rows = {r["turo_trip_id"]: r for r in body["rows"]}
+    assert rows["70000001"]["distance_unbilled_cents"] == 4588
+    assert rows["70000002"]["distance_unbilled_cents"] == 4588
+    assert body["distance_collectable_cents"] == 4588, "the closed one is not collectable"

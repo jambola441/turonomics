@@ -76,6 +76,9 @@
          color:var(--dim)}
   .state.tobill{color:var(--amber)}
   .amt{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:2px}
+  .amt-k{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--dim);margin-top:1px}
+  .tofile{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--amber);margin-top:8px}
 
   .view{border-top:1px solid var(--border);padding:4px 12px 14px}
   .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
@@ -348,6 +351,27 @@
     shown.forEach(function (trip) { renderTrip(trip, list); });
   }
 
+  // What is left to ask for on a rental, tolls | distance, each only while it
+  // can still be asked for. Distance uses the tolls' 90 days, assumed.
+  function toFileParts(row, fileable) {
+    var open = row.days_left == null || row.days_left >= 0;
+    return {
+      tolls: fileable && open ? row.unfiled_cents || 0 : 0,
+      distance: row.days_left != null && row.days_left >= 0 ? row.distance_unbilled_cents || 0 : 0
+    };
+  }
+  function renderToFile(into, row, fileable) {
+    var p = toFileParts(row, fileable);
+    if (!p.tolls && !p.distance) {
+      if (row.unfiled_cents) add(into, "div", "amt", money(row.unfiled_cents));
+      return;
+    }
+    add(into, "div", "amt", [p.tolls ? money(p.tolls) : null, p.distance ? money(p.distance) : null]
+      .filter(Boolean).join(" | "));
+    add(into, "div", "amt-k", [p.tolls ? "tolls" : null, p.distance ? "distance" : null]
+      .filter(Boolean).join(" | "));
+  }
+
   function renderTrip(trip, into) {
     var card = add(into, "div", "trip");
     card.id = "trip-" + trip.id;
@@ -370,11 +394,12 @@
     var side = add(head, "div", "side");
     var row = state.ledger[trip.id];
     if (row) {
-      var tobill = row.state === "to bill" || row.state === "partly billed" ||
+      var fileable = row.state === "to bill" || row.state === "partly billed";
+      var tobill = fileable ||
         row.state === "short" || row.state.indexOf("check ") === 0 ||
         row.state === "no statement yet";
       add(side, "div", "state" + (tobill ? " tobill" : ""), row.state);
-      if (row.unfiled_cents) add(side, "div", "amt", money(row.unfiled_cents));
+      renderToFile(side, row, fileable);
     } else if (trip.earnings_cents) {
       add(side, "div", "amt", money(trip.earnings_cents));
     }
@@ -542,6 +567,15 @@
       }
       if (L.note) add(box, "div", "note", L.note);
     }
+    if (L && (L.distance_unbilled_cents || L.unfiled_cents)) {
+      var parts = toFileParts(L, L.state === "to bill" || L.state === "partly billed");
+      if (parts.tolls || parts.distance) {
+        add(box, "div", "tofile", "To file: " +
+            [parts.tolls ? money(parts.tolls) + " tolls" : null,
+             parts.distance ? money(parts.distance) + " distance" : null]
+              .filter(Boolean).join(" | "));
+      }
+    }
     if (view.fileable && L && L.unfiled_cents) {
       var file = add(box, "button", "btn go", "File " + money(L.unfiled_cents) + " on Turo");
       file.type = "button";
@@ -580,7 +614,8 @@
         : "Not invoiced for distance");
       if (D.unbilled_cents) {
         add(box, "div", "note", money(D.unbilled_cents) +
-            " of additional distance has not been invoiced. File it from Turo's invoice page.");
+            " of additional distance has not been invoiced. Filing it from here is not built " +
+            "yet — file it from Turo's invoice page.");
       }
     }
 

@@ -289,7 +289,10 @@ def test_a_drive_keeps_bouncies_distance_and_odometer() -> None:
     assert (drive.distance_mi, drive.start_odometer, drive.end_odometer) == (12.4, 46684.2, 46696.6)
 
 
-def test_rental_miles_is_the_odometer_span_of_the_rentals_drives() -> None:
+def test_rental_miles_add_up_the_rentals_own_drives() -> None:
+    """Danny's rental: the odometer moved between two drives with no drive
+    recorded (here 1040 to 1050). That is a jump in the tracker, not miles the
+    guest drove, and the old odometer-span rule counted it."""
     starts, ends = T0, T0 + td(days=2)
     route = Route(source="bouncie", drives=[
         _drive(starts - td(minutes=20), 15, (1000.0, 1004.0), 4.0),   # the host, before
@@ -297,7 +300,15 @@ def test_rental_miles_is_the_odometer_span_of_the_rentals_drives() -> None:
         _drive(starts + td(days=1), 90, (1050.0, 1110.5), 60.5),
         _drive(ends + td(minutes=10), 15, (1110.5, 1113.0), 2.5),     # the host, after
     ])
-    assert rental_miles(route, starts=starts, ends=ends) == 106.5, "1110.5 - 1004.0"
+    assert rental_miles(route, starts=starts, ends=ends) == 96.5, "36.0 + 60.5, not 1110.5 - 1004.0"
+
+
+def test_a_drive_without_bouncies_distance_uses_its_own_odometer() -> None:
+    route = Route(source="bouncie", drives=[
+        _drive(T0 + td(hours=1), 60, (1004.0, 1040.0), None),
+        _drive(T0 + td(hours=5), 60, None, 10.5),
+    ])
+    assert rental_miles(route, starts=T0, ends=T0 + td(days=1)) == 46.5
 
 
 def test_a_guest_who_collects_early_has_the_first_drive_counted() -> None:
@@ -312,7 +323,7 @@ def test_a_guest_who_collects_early_has_the_first_drive_counted() -> None:
     assert rental_miles(route, starts=starts, ends=ends) == 300.0
 
 
-def test_without_an_odometer_the_drives_distances_are_summed() -> None:
+def test_without_an_odometer_bouncies_distances_are_summed() -> None:
     route = Route(source="bouncie", drives=[
         _drive(T0 + td(hours=1), 60, None, 36.0), _drive(T0 + td(hours=5), 60, None, 10.5),
     ])

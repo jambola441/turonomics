@@ -52,6 +52,7 @@
   .ledger-state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
     text-transform:uppercase;white-space:nowrap}
   .ledger-state.tobill{color:var(--amber)}
+  .dist.gone{color:var(--dim)}
   .dist{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:4px;text-transform:none;letter-spacing:0}
   .ledger-state.expired{color:var(--dim)}
   .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
@@ -510,10 +511,12 @@
       }
       // Additional distance beside the tolls, tolls | distance, while the
       // window is open. Filed on Turo for now: the site cannot file it yet.
-      if (row.distance_unbilled_cents && row.days_left != null && row.days_left >= 0) {
+      if (row.distance_unbilled_cents && row.days_left != null) {
         var dist = document.createElement("div");
-        dist.className = "dist";
-        dist.textContent = "| " + money(row.distance_unbilled_cents) + " distance";
+        var closed = row.days_left < 0;
+        dist.className = "dist" + (closed ? " gone" : "");
+        dist.textContent = "| " + money(row.distance_unbilled_cents) + " distance" +
+          (closed ? " expired" : "");
         state.appendChild(dist);
       }
       tr.appendChild(state);
@@ -525,7 +528,9 @@
       " · asked " + money(data.filed_cents) +
       " · settled " + money(data.recovered_cents) +
       (data.distance_collectable_cents
-        ? " | distance to file " + money(data.distance_collectable_cents) : "");
+        ? " | distance to file " + money(data.distance_collectable_cents) : "") +
+      (data.distance_lost_cents
+        ? " | distance expired " + money(data.distance_lost_cents) : "");
     el("ledgerCover").textContent = data.statements_from
       ? "E-ZPass statements imported cover " + when(data.statements_from) + " – " +
         when(data.statements_to) + ". Rentals outside that read “no statement yet”."

@@ -448,14 +448,12 @@ def test_rematching_and_ticking_are_behind_the_same_token(api_client, monkeypatc
     assert api_client.post(f"/api/tolls/{toll.id}/recovered", headers=auth).status_code == 200
 
 
-def test_reading_the_ledger_never_needs_a_token(api_client, monkeypatch):
-    """A token on the reads would mean the page cannot render at all.
-
-    It also would not protect much: the rest of this API serves fleet positions
-    and trip history unauthenticated. The token is about writes.
-    """
+def test_the_tolls_list_says_a_token_is_required_to_whoever_has_it(api_client, monkeypatch):
+    """The list used to be readable without the token, on the grounds that
+    the rest of the API was. Its rows name the transponder each crossing was
+    billed to, and the operator asked for it to be closed."""
     monkeypatch.setenv("TOLLS_TOKEN", "letmein")
-    response = api_client.get("/api/tolls")
+    response = api_client.get("/api/tolls", headers={"Authorization": "Bearer letmein"})
     assert response.status_code == 200
     assert response.json()["token_required"] is True
 
@@ -1099,3 +1097,13 @@ def test_a_statement_without_the_column_does_not_erase_one_that_had_it(session, 
     again = import_tolls(session, bare)
     assert again.described == 0
     assert session.scalars(select(Toll)).one().agency == "MTAB&T"
+
+
+def test_the_tolls_list_needs_the_token_when_one_is_set(api_client, monkeypatch) -> None:
+    """Every row names the transponder or plate it was billed to."""
+    monkeypatch.setenv("TOLLS_TOKEN", "s3cret")
+    assert api_client.get("/api/tolls").status_code == 401
+    assert api_client.get("/api/tolls", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert api_client.get(
+        "/api/tolls", headers={"Authorization": "Bearer s3cret"}
+    ).status_code == 200

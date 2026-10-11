@@ -574,15 +574,20 @@ class Handler(BaseHTTPRequestHandler):
         elif self.path.startswith("/seen-auth"):
             self._send({"seen": SEEN_AUTH})
         elif self.path.startswith("/api/tolls"):
+            # Behind the token, as the real one is: rows carry transponders.
+            # Not counted with the writes, which the smoke test tallies.
+            if not self._authorized(record=False):
+                return
             self._send(_tolls_payload())
         elif "/spots" in self.path:
             self._send(SPOTS)
         else:
             self._send(FLEET)
 
-    def _authorized(self) -> bool:
+    def _authorized(self, record: bool = True) -> bool:
         supplied = (self.headers.get("Authorization") or "").removeprefix("Bearer ").strip()
-        SEEN_AUTH.append(supplied)
+        if record:
+            SEEN_AUTH.append(supplied)
         if supplied == TOLLS_TOKEN:
             return True
         body = b'{"detail":"bad or missing token"}'

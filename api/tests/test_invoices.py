@@ -293,7 +293,9 @@ def test_ticking_an_invoice_needs_the_token(api_client, monkeypatch, session, je
     ), "text/csv")})
     monkeypatch.setenv("TOLLS_TOKEN", "letmein")
     assert api_client.post(f"/api/invoices/{trip.id}/recovered").status_code == 401
-    assert api_client.get("/api/tolls").json()["unrecovered_cents"] == 911
+    assert api_client.get(
+        "/api/tolls", headers={"Authorization": "Bearer letmein"}
+    ).json()["unrecovered_cents"] == 911
 
 
 def test_ticking_a_rental_with_no_crossings_is_a_404(api_client, monkeypatch, session, jerry):

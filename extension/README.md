@@ -28,11 +28,10 @@ Nothing stores your E-ZPass credentials — this extension never sees them.
    new, how many it could attribute to a guest, and any transponder that is not
    bound to a car.
 
-### Reading three months at a time
+### Reading 90 days at a time
 
 When the page has a from/to date pair and a search button the extension
-recognises, it drives them itself: it asks for the last 12 months as four
-consecutive three-month windows, **newest first**, and for each one fills in the
+recognises, it drives them itself: it asks for the history as consecutive windows of 90 days, **newest first**, and for each one fills in the
 dates, runs the search, pages through the results, and posts that window to the
 API before starting the next. Posting per window means a run that dies on the
 third has still delivered the first two. The windows meet exactly — each starts
@@ -199,6 +198,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.15.2 | build + reload | windows are 90 days, not calendar quarters (E-ZPass refused a 92-day one); the date search submits the form first, which is the method that worked; no wasted 8s waits |
 | 1.15.1 | build + reload | the date search is clicked after the dates are typed (it was chosen beforehand and could be a disabled or wrong control), verified by the rows returned, retried with Enter / form submit, and the run stops if it never applies |
 | 1.15.0 | build + reload | gentler on E-ZPass: one date window by default, paced clicks, a cooldown between runs, and a stop-and-pause-an-hour if the page reads like a block or outage |
 | 1.14.2 | build + reload | sets MUI rows-per-page to the largest option, reads the pager's "1–10 of N" to know the real last page, and calls a stop short of it incomplete (with the pager's controls in the log) |

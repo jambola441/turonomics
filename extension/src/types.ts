@@ -62,6 +62,19 @@ export interface TuroWanted {
   extras?: string[];
   photos_path?: string;
   messages_path?: string;
+  /** Rentals whose receipt is worth reading, and where Turo serves it. */
+  receipts?: string[];
+  receipt_path?: string;
+}
+
+/** What reading the receipts did. */
+export interface TuroReceiptsResult {
+  read: number;
+  /** Invoices the receipts showed paid, and one line each saying which. */
+  settled: string[];
+  recovered: number;
+  /** Bodies Turo would not return, or that were not receipts. */
+  failed: number;
 }
 
 /** What reading Turo's reservation lists found. */
@@ -111,6 +124,8 @@ export interface TuroPullResult {
   discovered?: TuroDiscovery;
   /** Trips whose photos and messages were read. */
   extras_read?: number;
+  /** Receipts read, and what they settled. */
+  receipts?: TuroReceiptsResult;
   /** How many the API asked for, and how many Turo would not hand over. */
   asked: number;
   failed: number;

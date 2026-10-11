@@ -196,6 +196,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.16.0 | build + reload | Pull also reads Turo's receipt for rentals with an uncharged reimbursement, and the API settles an invoice whose exact toll line the receipt shows paid |
 | 1.15.3 | build + reload | fixes 1.15.2 wiping the end date (it focused the field); refuses to search with a date the page rejects; checks the table is back on page 1; the 5-minute cooldown is gone |
 | 1.15.2 | build + reload | windows are 90 days, not calendar quarters (E-ZPass refused a 92-day one); the date search submits the form first, which is the method that worked; no wasted 8s waits |
 | 1.15.1 | build + reload | the date search is clicked after the dates are typed (it was chosen beforehand and could be a disabled or wrong control), verified by the rows returned, retried with Enter / form submit, and the run stops if it never applies |

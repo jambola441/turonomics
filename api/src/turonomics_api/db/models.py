@@ -522,6 +522,12 @@ class Trip(Base):
     turo_photos: Mapped[list[object] | None] = mapped_column(JSONB)
     turo_messages: Mapped[list[object] | None] = mapped_column(JSONB)
     extras_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Turo's receipt for the rental (`/api/reservation/<id>/receipt`), whole: what
+    # the guest paid, what the host earned, and the reimbursements on top. The
+    # place to see what actually reached the host, and the evidence that a
+    # reimbursement was settled.
+    turo_receipt: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    receipt_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 

@@ -442,6 +442,14 @@ export function describePull(result: TuroPullResult): string {
   if (result.failed) parts.push(`${result.failed} Turo would not return`);
   if (result.unparsed) parts.push(`${result.unparsed} unreadable`);
   if (result.extras_read) parts.push(`photos and messages for ${result.extras_read} trip(s)`);
+  const receipts = result.receipts;
+  if (receipts) {
+    if (receipts.read) parts.push(`${receipts.read} receipt(s) read`);
+    if (receipts.failed) parts.push(`${receipts.failed} receipt(s) Turo would not return`);
+    // The answers, not a count: which toll line was shown paid.
+    parts.push(...receipts.settled);
+    if (receipts.recovered) parts.push(`${receipts.recovered} crossing(s) ticked off by them`);
+  }
   const invoices = result.invoices;
   if (invoices && !invoices.asked && invoices.hubs) {
     parts.push(`${invoices.hubs} invoice hub(s) read, nothing new on them`);

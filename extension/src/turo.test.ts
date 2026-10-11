@@ -753,3 +753,38 @@ test("the E-ZPass report shows the shape of a POST's date fields", () => {
   );
   assert.match(report, /sent: \{startDate: us-date\(##\/##\/##\), endDate: us-date\(##\/##\/##\), page: int\}/);
 });
+
+// ---------------------------------------------------------------------------
+// Receipts
+// ---------------------------------------------------------------------------
+test("a pull says which toll line a receipt showed paid", () => {
+  const out = describePull({
+    ...EMPTY,
+    asked: 1,
+    stored: 1,
+    receipts: {
+      read: 3,
+      settled: ["53459553: $30.07 of tolls is on the receipt"],
+      recovered: 4,
+      failed: 0,
+    },
+  });
+  assert.match(out, /3 receipt\(s\) read/);
+  assert.ok(out.includes("53459553: $30.07 of tolls is on the receipt"), "the answer, not a count");
+  assert.match(out, /4 crossing\(s\) ticked off by them/);
+});
+
+test("a receipt Turo would not return is reported, not read as nothing paid", () => {
+  const out = describePull({
+    ...EMPTY,
+    asked: 1,
+    stored: 1,
+    receipts: { read: 0, settled: [], recovered: 0, failed: 2 },
+  });
+  assert.match(out, /2 receipt\(s\) Turo would not return/);
+  assert.ok(!/receipt\(s\) read/.test(out), "none were read");
+});
+
+test("a pull that read no receipts says nothing about them", () => {
+  assert.ok(!/receipt/.test(describePull({ ...EMPTY, asked: 1, stored: 1 })));
+});

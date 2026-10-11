@@ -310,6 +310,44 @@ charged. An invoice the mail never saw is recorded as filed, not charged,
 because `reimbursementStatus` has not yet been read unmasked; the response
 reports every status it sees until it has.
 
+### The receipt
+
+```
+GET /api/reservation/<id>/receipt
+  earningLineItems:       [{label, value, receiptLineItemType}]
+                          fees taken off (CURRENCY_NEGATIVE, value "-$x.xx") and
+                          one typed TOTAL_EARNED
+  reimbursementLineItems: [{label, value, receiptLineItemType: CURRENCY_POSITIVE}]
+  costDetailLineItems, depositLineItems, refundLineItems, disputes,
+  reimbursementPaymentDetailLineItems, reimbursementTotalLineItem  (null on the
+  trip probed), tripStart/EndBlock, titleLineItem, vehicleMakeModel
+```
+
+The reservation detail's `receiptAvailable` says whether there is one. The probe
+masks text, so the labels were seen by length only; nothing depends on their
+wording beyond `names_tolls`, the test the email path already uses for a toll
+line.
+
+The pull reads the receipts of rentals with a reimbursement that is not yet
+charged (re-read after a day), and a few never-read ones each time so the rest
+fill in over several pulls (`BACKFILL_PER_PULL`). Bodies go to
+`POST /api/turo/receipts` unmodified and are kept on the trip
+(`trip.turo_receipt`), shown on the trip view as what reached the host.
+
+One inference is made from it, and it is deliberately narrow. An invoice that is
+not yet charged, with a readable toll line, is marked charged when the receipt
+has a *reimbursement line naming tolls for exactly that amount*, one receipt
+line per invoice. The invoice's status word is not consulted: `ACCEPTED` has
+been seen before the guest was charged, and nothing in the mail links every
+charge back to its invoice. Crossings are then ticked off by the same coverage
+test as for a charged email. A bigger line, a smaller one, or a line not about
+tolls settles nothing.
+
+Not yet known: whether a receipt can list a reimbursement that has been
+accepted but not yet collected. If it can, the exact-match rule would mark an
+invoice charged early. The first pull that reads a receipt for a known-unpaid
+invoice will say.
+
 ## Driving it from the site
 
 The site cannot call Turo; only the operator's browser holds the session. So

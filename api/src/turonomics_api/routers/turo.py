@@ -42,6 +42,7 @@ from turonomics_api.ingest.turo_invoice import (
     parse_turo_invoice,
     wanted_invoices,
 )
+from turonomics_api.ingest.turo_receipt import ReceiptResult, apply_receipt, wanted_receipts
 from turonomics_api.ingest.turo_reservations import ReservationsResult, apply_reservations
 from turonomics_api.routers.tolls import require_token, token_configured
 
@@ -83,6 +84,9 @@ class WantedResponse(BaseModel):
     extras: list[str] = []
     photos_path: str = "/api/reservation/photos?reservationId={id}"
     messages_path: str = "/api/v2/reservation/conversation?reservationId={id}"
+    # Rentals whose receipt is worth reading this pull, and where Turo serves it.
+    receipts: list[str] = []
+    receipt_path: str = "/api/reservation/{id}/receipt"
 
 
 class DetailsIn(BaseModel):
@@ -116,6 +120,7 @@ def wanted(session: DbSession) -> WantedResponse:
         token_required=token_configured(),
         invoices=[[reservation, invoice] for reservation, invoice in wanted_invoices(session)],
         extras=wanted_extras(session, now=datetime.now(UTC)),
+        receipts=wanted_receipts(session, now=datetime.now(UTC)),
     )
 
 
@@ -441,3 +446,52 @@ def post_extras(
     if result.stored:
         log.info("turo extras: photos and messages for %d trip(s)", result.stored)
     return ExtrasResponse(stored=result.stored, unknown=result.unknown)
+
+
+class ReceiptItem(BaseModel):
+    reservation_id: str
+    # Exactly what Turo returned, or null when the fetch failed.
+    receipt: Any = None
+
+
+class ReceiptsIn(BaseModel):
+    items: list[ReceiptItem]
+
+
+class ReceiptsResponse(BaseModel):
+    stored: int
+    charged: int
+    tolls_recovered: int
+    unreadable: int
+    unknown: list[str]
+    settled: list[str]
+
+
+@router.post("/receipts", response_model=ReceiptsResponse)
+def post_receipts(
+    payload: ReceiptsIn,
+    session: DbSession,
+    authorization: Annotated[str | None, Header()] = None,
+) -> ReceiptsResponse:
+    """Keep a batch of rentals' receipts, and settle the invoices they show paid."""
+    require_token(authorization)
+    now = datetime.now(UTC)
+    result = ReceiptResult()
+    for item in payload.items:
+        apply_receipt(session, item.reservation_id, item.receipt, now=now, result=result)
+    session.commit()
+    if result.stored or result.charged:
+        log.info(
+            "turo receipts: %d stored, %d invoice(s) settled by them, %d crossing(s) recovered",
+            result.stored,
+            result.charged,
+            result.tolls_recovered,
+        )
+    return ReceiptsResponse(
+        stored=result.stored,
+        charged=result.charged,
+        tolls_recovered=result.tolls_recovered,
+        unreadable=result.unreadable,
+        unknown=result.unknown,
+        settled=result.settled,
+    )

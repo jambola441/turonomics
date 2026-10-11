@@ -568,6 +568,8 @@ def main() -> int:
                   "Guest check-in" in view and "12 photos by the guest" in view)
             check("and its messages read as a thread",
                   "Welcome! Keys are in the box." in view and "Returned, thanks [2 photos]" in view)
+            check("its receipt shows what reached the host",
+                  "Reimbursed: Tolls" in view and "$17.79" in view and "total earned $191.25" in view)
             page.wait_for_timeout(500)
             trip_card = page.locator("#trip-11111111-1111-1111-1111-111111111111")
             check("its route is drawn on a map",

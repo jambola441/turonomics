@@ -37,6 +37,7 @@ from turonomics_api.db.models import (
 from turonomics_api.ingest.tolls import rematch_unattributed
 from turonomics_api.ingest.trip_map import Route, bouncie_route, place, telemetry_route
 from turonomics_api.ingest.turo_extras import photo_groups, thread
+from turonomics_api.ingest.turo_receipt import receipt_summary
 from turonomics_api.routers.tolls import require_token
 from turonomics_api.settings import fleet_timezone, toll_overrun_minutes
 
@@ -290,6 +291,15 @@ class ViewCommand(BaseModel):
     result: str | None
 
 
+class ViewReceipt(BaseModel):
+    """Turo's receipt for the rental, as lines a person reads."""
+
+    earnings: list[Fact]
+    reimbursements: list[Fact]
+    total_earned: str | None
+    synced_at: datetime | None
+
+
 class TripView(BaseModel):
     trip: TripRow
     turo_trip_id: str | None
@@ -315,9 +325,25 @@ class TripView(BaseModel):
     photos: list[ViewPhotos] | None = None
     messages: list[ViewMessage] | None = None
     extras_synced_at: datetime | None = None
+    # What reached the host, from Turo's receipt — None until a pull has read it.
+    receipt: ViewReceipt | None = None
 
 
 _TURO = "https://turo.com/us/en"
+
+
+def _receipt_view(trip: Trip) -> ViewReceipt | None:
+    summary = receipt_summary(trip.turo_receipt)
+    if summary is None:
+        return None
+    return ViewReceipt(
+        earnings=[Fact(label=label, value=value) for label, value in summary["earnings"]],
+        reimbursements=[
+            Fact(label=label, value=value) for label, value in summary["reimbursements"]
+        ],
+        total_earned=summary["total_earned"],
+        synced_at=trip.receipt_synced_at,
+    )
 
 
 def _get(data: object, *path: str) -> object:
@@ -514,6 +540,7 @@ def view_trip(
             for m in thread(trip.turo_messages)
         ],
         extras_synced_at=trip.extras_synced_at,
+        receipt=_receipt_view(trip),
     )
 
 

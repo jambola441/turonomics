@@ -69,6 +69,7 @@
          border:1px solid var(--border);border-radius:999px;padding:2px 7px;margin-left:6px;
          color:var(--muted);vertical-align:2px}
   .badge.off{color:var(--blue);border-color:var(--blue)}
+  .badge.odd{color:var(--red);border-color:var(--red);font-weight:700}
   .side{text-align:right;flex-shrink:0}
   .state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
          color:var(--dim)}
@@ -169,7 +170,7 @@
   // Shared with the invoices and tolls pages, so the token is asked for once.
   var TOKEN_KEY = "turonomics.tolls.token";
   var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false,
-                maps: {}, tiles: null };
+                maps: {}, tiles: null, flags: {} };
 
   function el(id) { return document.getElementById(id); }
   function add(parent, tag, cls, text) {
@@ -240,6 +241,73 @@
   // The list
   // -------------------------------------------------------------------------
 
+  // Crossings at a plaza the car's route never came near, per rental. Only the
+  // map knows (it needs the route), and the map is behind the token, so the
+  // list learns it by reading the maps of finished rentals one by one in the
+  // background and remembering the answer. A finished rental's route does not
+  // change; the count of crossings is part of the key so a late statement
+  // re-reads it.
+  var FLAGS_KEY = "turonomics.trips.offroute.v1";
+  try { state.flags = JSON.parse(localStorage.getItem(FLAGS_KEY) || "{}") || {}; }
+  catch (e) { state.flags = {}; }
+
+  function oddCount(trip) {
+    var seen = state.flags[trip.id];
+    return seen && seen.n === trip.toll_count ? seen.odd : null;
+  }
+
+  function noteFlags(trip, map) {
+    // No route means no answer, which is not the same as "none".
+    if (!map || !map.route_source || !map.tolls) return;
+    var odd = map.tolls.filter(function (t) { return t.off_route_km != null; }).length;
+    state.flags[trip.id] = { n: trip.toll_count, odd: odd };
+    try { localStorage.setItem(FLAGS_KEY, JSON.stringify(state.flags)); } catch (e) { /* private */ }
+    paintFlag(trip);
+    stampTrips();
+  }
+
+  function paintFlag(trip) {
+    var card = el("trip-" + trip.id);
+    var odd = oddCount(trip);
+    if (!card || !odd || card.querySelector(".badge.odd")) return;
+    var who = card.querySelector(".who");
+    if (who) add(who, "span", "badge odd", flagText(odd));
+  }
+
+  function flagText(odd) { return odd + " off route"; }
+
+  function stampTrips() {
+    var offCount = state.trips.filter(off).length;
+    var odd = state.trips.filter(function (t) { return oddCount(t) > 0; }).length;
+    el("stamp").textContent = state.trips.length + " trips · " + offCount + " off-platform" +
+      (odd ? " · " + odd + " with a plaza off the route" : "");
+  }
+
+  function scanRoutes() {
+    // Quietly, and only with a token already saved: a background read must
+    // not be what pops the prompt.
+    if (!token()) return;
+    var now = Date.now();
+    var queue = state.trips.filter(function (t) {
+      return t.toll_count > 0 && new Date(t.ends_at).getTime() < now && oddCount(t) === null;
+    });
+    var stopped = false;
+    function next() {
+      var trip = queue.shift();
+      if (!trip || stopped) return Promise.resolve();
+      return fetch(API + "/api/trips/" + trip.id + "/map", { headers: authHeaders() })
+        .then(function (r) {
+          if (r.status === 401) { stopped = true; return null; }
+          return r.ok ? r.json() : null;
+        })
+        .then(function (m) { noteFlags(trip, m); })
+        .catch(function () { /* the next load tries again */ })
+        .then(next);
+    }
+    // Two at a time: each one can make Bouncie answer a request.
+    next(); next();
+  }
+
   function off(trip) { return trip.source === "manual"; }
 
   function matches(trip) {
@@ -269,6 +337,8 @@
     var who = add(body, "div", "who",
         (trip.guest_name || "No name") + " — " + (trip.vehicle_nickname || "?"));
     add(who, "span", "badge" + (off(trip) ? " off" : ""), off(trip) ? "off-platform" : "Turo");
+    var odd = oddCount(trip);
+    if (odd) add(who, "span", "badge odd", flagText(odd));
     add(body, "div", "meta",
         when(trip.starts_at) + " → " + when(trip.ends_at) +
         (trip.turo_trip_id ? " · " + trip.turo_trip_id : "") +
@@ -309,7 +379,10 @@
         // view does not wait for it.
         state.maps[id] = { loading: true };
         authed("/api/trips/" + id + "/map").then(json)
-          .then(function (m) { state.maps[id] = m; })
+          .then(function (m) {
+            state.maps[id] = m;
+            state.trips.forEach(function (t) { if (t.id === id) noteFlags(t, m); });
+          })
           .catch(function (e) { state.maps[id] = { error: e.message }; })
           .then(function () { if (state.open === id) render(); });
       })
@@ -697,10 +770,10 @@
         state.trips = both[0].trips || [];
         state.ledger = {};
         (both[1].rows || []).forEach(function (r) { state.ledger[r.trip_id] = r; });
-        var offCount = state.trips.filter(off).length;
-        el("stamp").textContent = state.trips.length + " trips · " + offCount + " off-platform";
+        stampTrips();
         el("err").hidden = true;
         render();
+        scanRoutes();
       })
       .catch(function (e) { el("stamp").textContent = ""; fail("Could not load trips: " + e.message); });
   }

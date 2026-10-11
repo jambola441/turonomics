@@ -32,10 +32,38 @@ class Distance:
     owed_cents: int
     # Distance lines on Turo's invoices for this rental.
     invoiced_cents: int
+    # The tracker's miles over the rental (Bouncie's odometer), a check on
+    # Turo's figure. Nothing is billed on it.
+    tracker_mi: float | None = None
 
     @property
     def unbilled_cents(self) -> int:
         return max(self.owed_cents - self.invoiced_cents, 0)
+
+    @property
+    def tracker_over_mi(self) -> float | None:
+        if self.tracker_mi is None or self.included_mi is None:
+            return None
+        return round(max(self.tracker_mi - self.included_mi, 0.0), 1)
+
+    @property
+    def disagrees(self) -> bool:
+        """Whether Turo's miles and the tracker's are far enough apart to look
+        at: both known, and apart by DISAGREE_MI and DISAGREE_SHARE of Turo's.
+
+        Some gap is normal. The odometer readings on Turo are typed by the host
+        from photos at hand-over; the tracker's span runs from the first drive
+        in the rental to the last, and a delivery drive by the host can fall
+        inside it.
+        """
+        if self.tracker_mi is None or self.driven_mi is None:
+            return False
+        gap = abs(self.tracker_mi - self.driven_mi)
+        return gap >= DISAGREE_MI and gap >= DISAGREE_SHARE * max(self.driven_mi, 1.0)
+
+
+DISAGREE_MI = 25.0
+DISAGREE_SHARE = 0.10
 
 
 def _scalar(value: Any) -> float | None:
@@ -75,24 +103,37 @@ def distance_lines_cents(lines: Iterable[Any]) -> int:
     return total
 
 
-def summarise(detail: Mapping[str, Any] | None, invoiced_cents: int = 0) -> Distance | None:
+def summarise(
+    detail: Mapping[str, Any] | None,
+    invoiced_cents: int = 0,
+    tracker_mi: float | None = None,
+) -> Distance | None:
     """Turo's distance figures for a rental, or None if it has none to give.
 
-    None for a rental with no odometer reading at either end: Turo has not
-    worked anything out, and "0 over" would claim it had.
+    None when neither Turo nor the tracker has a figure. With only the
+    tracker's, Turo's side is empty and nothing is owed: what can be billed is
+    what Turo worked out, and "0 over" from Turo would claim it had.
     """
-    if not isinstance(detail, Mapping):
-        return None
-    odometer = detail.get("odometerDetail")
-    if not isinstance(odometer, Mapping):
-        return None
+    detail = detail if isinstance(detail, Mapping) else {}
+    found = detail.get("odometerDetail")
+    odometer: Mapping[str, Any] = found if isinstance(found, Mapping) else {}
     driven = _scalar(odometer.get("distanceDriven"))
-    if driven is None:
-        return None
     booking = detail.get("booking")
     included = _scalar(odometer.get("distanceLimit"))
     if included is None and isinstance(booking, Mapping):
         included = _scalar(booking.get("distanceLimit"))
+    if driven is None:
+        if tracker_mi is None:
+            return None
+        return Distance(
+            included_mi=included,
+            driven_mi=None,
+            over_mi=0.0,
+            rate_cents=_rate_cents(detail.get("distanceOverageFee")),
+            owed_cents=0,
+            invoiced_cents=invoiced_cents,
+            tracker_mi=tracker_mi,
+        )
     over = _scalar(odometer.get("excessDistance")) or 0.0
     rate = _rate_cents(odometer.get("distanceOverageFee") or detail.get("distanceOverageFee"))
     owed = 0
@@ -105,4 +146,5 @@ def summarise(detail: Mapping[str, Any] | None, invoiced_cents: int = 0) -> Dist
         rate_cents=rate,
         owed_cents=owed,
         invoiced_cents=invoiced_cents,
+        tracker_mi=tracker_mi,
     )

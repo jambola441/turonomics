@@ -235,7 +235,8 @@ TURO_TRIP = {"id": "11111111-1111-1111-1111-111111111111", "vehicle_nickname": "
              "ends_at": "2026-07-12T18:00:00Z", "source": "email",
              "turo_trip_id": "58626257", "state": "completed",
              "earnings_cents": None, "toll_count": 2,
-             "distance_over_mi": 156, "distance_unbilled_cents": 5460}
+             "distance_over_mi": 156, "distance_unbilled_cents": 5460,
+             "tracker_miles": 845, "distance_disagrees": True}
 
 
 def _trip_view(trip_id: str) -> dict | None:
@@ -256,7 +257,8 @@ def _trip_view(trip_id: str) -> dict | None:
             "turo_detail": {"statusCode": "COMPLETED", "protectionLevel": "PREMIUM"},
             "distance": {"included_mi": 600, "driven_mi": 756, "over_mi": 156,
                          "rate_cents": 35, "owed_cents": 5460, "invoiced_cents": 0,
-                         "unbilled_cents": 5460},
+                         "unbilled_cents": 5460, "tracker_mi": 845, "tracker_over_mi": 245,
+                         "disagrees": True},
             "tolls": [
                 {"id": "t1", "occurred_at": "2026-07-10T15:15:00Z", "plaza": "BWB",
                  "amount_cents": 679, "filed_at": NOW.isoformat(), "recovered_at": None},
@@ -433,6 +435,7 @@ def _ledger_payload() -> dict[str, object]:
             "turo_unknown_cents": 777,
             "state": "partly billed",
             "note": "11.00 arrived after the first invoice",
+            "distance_unbilled_cents": 5460,
         },
         {
             "trip_id": "22222222-2222-2222-2222-222222222222",
@@ -483,6 +486,7 @@ def _ledger_payload() -> dict[str, object]:
         "collectable_cents": 1100,
         "awaiting_cents": 679,
         "lost_cents": 0,
+        "distance_collectable_cents": 5460,
     }
 
 

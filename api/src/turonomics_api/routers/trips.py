@@ -14,7 +14,7 @@ a parallel notion of a rental that each of them would have to learn about.
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException
@@ -34,7 +34,7 @@ from turonomics_api.db.models import (
 )
 from turonomics_api.ingest.distance import Distance, distance_lines_cents, summarise
 from turonomics_api.ingest.tolls import rematch_unattributed
-from turonomics_api.ingest.trip_map import place, trip_route
+from turonomics_api.ingest.trip_map import Route, place, rental_miles, trip_route
 from turonomics_api.ingest.turo_extras import photo_groups, thread
 from turonomics_api.ingest.turo_receipt import receipt_summary
 from turonomics_api.routers.tolls import require_token
@@ -86,6 +86,10 @@ class TripRow(BaseModel):
     # Turo's rate has not been invoiced. Zero where Turo has no reading.
     distance_over_mi: float = 0
     distance_unbilled_cents: int = 0
+    # The tracker's miles over the rental, once its route has been read, and
+    # whether they disagree with Turo's enough to look at.
+    tracker_miles: float | None = None
+    distance_disagrees: bool = False
 
 
 class TripsResponse(BaseModel):
@@ -129,7 +133,7 @@ def _distance(session: Session, trip: Trip) -> Distance | None:
         select(ReimbursementInvoice.lines).where(ReimbursementInvoice.trip_id == trip.id)
     ).all()
     invoiced = sum(distance_lines_cents(entry or []) for entry in lines)
-    return summarise(trip.turo_detail, invoiced)
+    return summarise(trip.turo_detail, invoiced, trip.tracker_miles)
 
 
 def _row(session: Session, trip: Trip) -> TripRow:
@@ -153,6 +157,8 @@ def _row(session: Session, trip: Trip) -> TripRow:
         toll_count=int(count),
         distance_over_mi=distance.over_mi if distance else 0,
         distance_unbilled_cents=distance.unbilled_cents if distance else 0,
+        tracker_miles=trip.tracker_miles,
+        distance_disagrees=distance.disagrees if distance else False,
     )
 
 
@@ -322,6 +328,9 @@ class ViewDistance(BaseModel):
     owed_cents: int
     invoiced_cents: int
     unbilled_cents: int
+    tracker_mi: float | None = None
+    tracker_over_mi: float | None = None
+    disagrees: bool = False
 
 
 class TripView(BaseModel):
@@ -358,6 +367,20 @@ class TripView(BaseModel):
 _TURO = "https://turo.com/us/en"
 
 
+def _keep_tracker_miles(session: Session, trip: Trip, route: Route) -> None:
+    """Store the tracker's miles for a finished rental, read off the route the
+    map has just fetched, so the list can show them without asking Bouncie."""
+    now = datetime.now(UTC)
+    if trip.ends_at > now:
+        return
+    miles = rental_miles(route, starts=trip.starts_at, ends=trip.ends_at)
+    if miles is None or miles == trip.tracker_miles:
+        return
+    trip.tracker_miles = miles
+    trip.tracker_miles_at = now
+    session.commit()
+
+
 def _view_distance(found: Distance | None) -> ViewDistance | None:
     if found is None:
         return None
@@ -369,6 +392,9 @@ def _view_distance(found: Distance | None) -> ViewDistance | None:
         owed_cents=found.owed_cents,
         invoiced_cents=found.invoiced_cents,
         unbilled_cents=found.unbilled_cents,
+        tracker_mi=found.tracker_mi,
+        tracker_over_mi=found.tracker_over_mi,
+        disagrees=found.disagrees,
     )
 
 
@@ -636,6 +662,7 @@ def trip_map(
     if trip is None:
         raise HTTPException(status_code=404, detail="no such rental")
     route = trip_route(session, trip)
+    _keep_tracker_miles(session, trip, route)
 
     tolls = session.scalars(
         select(Toll).where(Toll.trip_id == trip.id).order_by(Toll.occurred_at)

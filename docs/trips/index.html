@@ -76,6 +76,9 @@
          color:var(--dim)}
   .state.tobill{color:var(--amber)}
   .amt{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:2px}
+  .amt-k{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+         color:var(--dim);margin-top:1px}
+  .tofile{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--amber);margin-top:8px}
 
   .view{border-top:1px solid var(--border);padding:4px 12px 14px}
   .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
@@ -270,6 +273,12 @@
   try { state.flags = JSON.parse(localStorage.getItem(FLAGS_KEY) || "{}") || {}; }
   catch (e) { state.flags = {}; }
 
+  // Rentals whose map has been read for the tracker's miles, so one with no
+  // tracker is not asked about on every load.
+  var MILES_KEY = "turonomics.trips.miles.v1";
+  try { state.milesRead = JSON.parse(localStorage.getItem(MILES_KEY) || "{}") || {}; }
+  catch (e) { state.milesRead = {}; }
+
   function oddCount(trip) {
     var seen = state.flags[trip.id];
     return seen && seen.n === trip.toll_count ? seen.odd : null;
@@ -308,7 +317,11 @@
     if (!token()) return;
     var now = Date.now();
     var queue = state.trips.filter(function (t) {
-      return t.toll_count > 0 && new Date(t.ends_at).getTime() < now && oddCount(t) === null;
+      if (new Date(t.ends_at).getTime() >= now) return false;
+      // Its plazas, or its miles: reading the map is what stores the
+      // tracker's miles, once, for a finished Turo rental.
+      return (t.toll_count > 0 && oddCount(t) === null) ||
+        (!off(t) && t.tracker_miles == null && !state.milesRead[t.id]);
     });
     var stopped = false;
     function next() {
@@ -319,7 +332,13 @@
           if (r.status === 401) { stopped = true; return null; }
           return r.ok ? r.json() : null;
         })
-        .then(function (m) { noteFlags(trip, m); })
+        .then(function (m) {
+          noteFlags(trip, m);
+          if (m) {
+            state.milesRead[trip.id] = 1;
+            try { localStorage.setItem(MILES_KEY, JSON.stringify(state.milesRead)); } catch (e) { /* private */ }
+          }
+        })
         .catch(function () { /* the next load tries again */ })
         .then(next);
     }
@@ -348,6 +367,27 @@
     shown.forEach(function (trip) { renderTrip(trip, list); });
   }
 
+  // What is left to ask for on a rental, tolls | distance, each only while it
+  // can still be asked for. Distance uses the tolls' 90 days, assumed.
+  function toFileParts(row, fileable) {
+    var open = row.days_left == null || row.days_left >= 0;
+    return {
+      tolls: fileable && open ? row.unfiled_cents || 0 : 0,
+      distance: row.days_left != null && row.days_left >= 0 ? row.distance_unbilled_cents || 0 : 0
+    };
+  }
+  function renderToFile(into, row, fileable) {
+    var p = toFileParts(row, fileable);
+    if (!p.tolls && !p.distance) {
+      if (row.unfiled_cents) add(into, "div", "amt", money(row.unfiled_cents));
+      return;
+    }
+    add(into, "div", "amt", [p.tolls ? money(p.tolls) : null, p.distance ? money(p.distance) : null]
+      .filter(Boolean).join(" | "));
+    add(into, "div", "amt-k", [p.tolls ? "tolls" : null, p.distance ? "distance" : null]
+      .filter(Boolean).join(" | "));
+  }
+
   function renderTrip(trip, into) {
     var card = add(into, "div", "trip");
     card.id = "trip-" + trip.id;
@@ -358,6 +398,8 @@
     add(who, "span", "badge" + (off(trip) ? " off" : ""), off(trip) ? "off-platform" : "Turo");
     var odd = oddCount(trip);
     if (odd) add(who, "span", "badge odd", flagText(odd));
+    // Turo's miles and the tracker's far enough apart to look at.
+    if (trip.distance_disagrees) add(who, "span", "badge miles", "miles differ");
     // Miles over the limit that Turo was never asked to charge for.
     if (trip.distance_unbilled_cents) {
       add(who, "span", "badge miles", trip.distance_over_mi + " mi over · " +
@@ -370,11 +412,12 @@
     var side = add(head, "div", "side");
     var row = state.ledger[trip.id];
     if (row) {
-      var tobill = row.state === "to bill" || row.state === "partly billed" ||
+      var fileable = row.state === "to bill" || row.state === "partly billed";
+      var tobill = fileable ||
         row.state === "short" || row.state.indexOf("check ") === 0 ||
         row.state === "no statement yet";
       add(side, "div", "state" + (tobill ? " tobill" : ""), row.state);
-      if (row.unfiled_cents) add(side, "div", "amt", money(row.unfiled_cents));
+      renderToFile(side, row, fileable);
     } else if (trip.earnings_cents) {
       add(side, "div", "amt", money(trip.earnings_cents));
     }
@@ -505,13 +548,18 @@
            owed && (L.state === "to bill" || L.state === "partly billed") ? "warn" : null);
     }
     if (D) {
-      if (D.over_mi > 0) {
+      if (D.driven_mi == null) {
+        tile("Distance", D.tracker_mi + " mi", "tracker only — Turo has no odometer reading",
+             D.tracker_over_mi ? "warn" : null);
+      } else if (D.over_mi > 0) {
         tile("Distance", D.over_mi + " mi over",
              D.unbilled_cents ? money(D.unbilled_cents) + " not invoiced" : "invoiced",
-             D.unbilled_cents ? "warn" : null);
+             D.unbilled_cents || D.disagrees ? "warn" : null);
       } else {
         tile("Distance", D.driven_mi + " mi",
-             D.included_mi != null ? "of " + D.included_mi + " included" : "unlimited");
+             D.disagrees ? "tracker says " + D.tracker_mi + " mi" :
+             D.included_mi != null ? "of " + D.included_mi + " included" : "unlimited",
+             D.disagrees ? "warn" : null);
       }
     }
     if (view.receipt && view.receipt.total_earned) {
@@ -542,6 +590,15 @@
       }
       if (L.note) add(box, "div", "note", L.note);
     }
+    if (L && (L.distance_unbilled_cents || L.unfiled_cents)) {
+      var parts = toFileParts(L, L.state === "to bill" || L.state === "partly billed");
+      if (parts.tolls || parts.distance) {
+        add(box, "div", "tofile", "To file: " +
+            [parts.tolls ? money(parts.tolls) + " tolls" : null,
+             parts.distance ? money(parts.distance) + " distance" : null]
+              .filter(Boolean).join(" | "));
+      }
+    }
     if (view.fileable && L && L.unfiled_cents) {
       var file = add(box, "button", "btn go", "File " + money(L.unfiled_cents) + " on Turo");
       file.type = "button";
@@ -569,19 +626,11 @@
       add(box, "div", "quiet", "No crossings on the imported statements.");
     }
 
-    // Additional distance, only when there is any: Turo's own count of miles
-    // over, at its rate, against what its invoices asked for.
-    if (D && D.over_mi > 0) {
+    // Distance, when there is something to say: miles over, Turo and the
+    // tracker apart, or only the tracker's figure to go on.
+    if (D && (D.over_mi > 0 || D.disagrees || D.driven_mi == null)) {
       section(box, "Distance");
-      add(box, "div", "line", D.driven_mi + " mi driven of " + D.included_mi + " included — " +
-          D.over_mi + " mi over at " + money(D.rate_cents) + "/mi = " + money(D.owed_cents));
-      add(box, "div", "line dim", D.invoiced_cents
-        ? "Invoiced for distance: " + money(D.invoiced_cents)
-        : "Not invoiced for distance");
-      if (D.unbilled_cents) {
-        add(box, "div", "note", money(D.unbilled_cents) +
-            " of additional distance has not been invoiced. File it from Turo's invoice page.");
-      }
+      renderDistance(box, D);
     }
 
     section(box, "Turo invoices");
@@ -700,6 +749,43 @@
   }
 
   function section(box, title) { return add(box, "h2", null, title); }
+
+  // Turo's miles, which are what gets filed, beside the tracker's, which are
+  // only a check: a gap worth a look is said, never silently resolved.
+  function renderDistance(box, D) {
+    if (D.driven_mi == null) {
+      add(box, "div", "line", "Tracker (Bouncie): " + D.tracker_mi + " mi" +
+          (D.included_mi != null ? " of " + D.included_mi + " included" +
+            (D.tracker_over_mi ? " — " + D.tracker_over_mi + " mi over" : "") : ""));
+      add(box, "div", "note", "Turo has no odometer reading for this trip, so nothing can be " +
+          "filed for distance. Enter the check-in and check-out odometer on Turo to bill it.");
+      return;
+    }
+    add(box, "div", "line", "Turo: " + D.driven_mi + " mi driven of " + D.included_mi + " included" +
+        (D.over_mi > 0 ? " — " + D.over_mi + " mi over at " + money(D.rate_cents) + "/mi = " +
+          money(D.owed_cents) : ""));
+    if (D.tracker_mi != null) {
+      add(box, "div", "line dim", "Tracker (Bouncie): " + D.tracker_mi + " mi" +
+          (D.tracker_over_mi ? " — " + D.tracker_over_mi + " mi over" : ""));
+    } else {
+      add(box, "div", "line dim", "Tracker: not read yet — opening the route reads it.");
+    }
+    if (D.disagrees) {
+      add(box, "div", "note", "Turo and the tracker differ by " +
+          Math.round(Math.abs(D.tracker_mi - D.driven_mi)) + " mi. Filing uses Turo's figure; " +
+          "check the odometer photos on Turo if it looks wrong.");
+    }
+    if (D.over_mi > 0) {
+      add(box, "div", "line dim", D.invoiced_cents
+        ? "Invoiced for distance: " + money(D.invoiced_cents)
+        : "Not invoiced for distance");
+      if (D.unbilled_cents) {
+        add(box, "div", "note", money(D.unbilled_cents) +
+            " of additional distance has not been invoiced. Filing it from here is not built " +
+            "yet — file it from Turo's invoice page.");
+      }
+    }
+  }
 
   // Turo's statuses are screaming snake case; said as words, the known ones
   // with what they mean for the money.

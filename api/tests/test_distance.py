@@ -72,7 +72,7 @@ def test_under_the_limit_owes_nothing() -> None:
 def test_no_odometer_reading_is_no_answer_rather_than_zero() -> None:
     detail = _detail()
     detail["odometerDetail"]["distanceDriven"] = None
-    assert summarise(detail) is None
+    assert summarise(detail) is None, "and no tracker either"
     assert summarise({}) is None
     assert summarise(None) is None
 
@@ -83,6 +83,40 @@ def test_unlimited_has_no_limit() -> None:
     detail["booking"]["distanceLimit"] = _mi(None, unlimited=True)
     found = summarise(detail)
     assert found is not None and found.included_mi is None and found.owed_cents == 0
+
+
+def test_the_trackers_miles_are_a_check_and_never_billed() -> None:
+    close = summarise(_detail(), tracker_mi=230)
+    assert close is not None and not close.disagrees and close.owed_cents == 770
+    far = summarise(_detail(), tracker_mi=300)
+    assert far is not None and far.disagrees
+    assert far.tracker_over_mi == 100 and far.owed_cents == 770, "billing stays Turo's"
+
+
+def test_a_small_trip_needs_a_real_gap_to_disagree() -> None:
+    """10% of 40 miles is 4: an absolute floor stops every short trip flagging."""
+    found = summarise(_detail(limit=200, driven=40, over=0), tracker_mi=52)
+    assert found is not None and not found.disagrees
+    found = summarise(_detail(limit=200, driven=40, over=0), tracker_mi=70)
+    assert found is not None and found.disagrees
+
+
+def test_a_long_trip_needs_a_real_share_to_disagree() -> None:
+    """50 miles on a 1,000-mile trip is 5%: hand-typed odometers and a host's
+    delivery drive account for that much."""
+    found = summarise(_detail(limit=1200, driven=1000, over=0), tracker_mi=1050)
+    assert found is not None and not found.disagrees
+    found = summarise(_detail(limit=1200, driven=1000, over=0), tracker_mi=1150)
+    assert found is not None and found.disagrees
+
+
+def test_with_only_the_trackers_miles_nothing_is_owed() -> None:
+    detail = _detail()
+    detail["odometerDetail"]["distanceDriven"] = None
+    found = summarise(detail, tracker_mi=260)
+    assert found is not None
+    assert found.driven_mi is None and found.owed_cents == 0 and found.tracker_over_mi == 60
+    assert not found.disagrees, "nothing of Turo's to disagree with"
 
 
 def test_distance_lines_are_found_by_label() -> None:
@@ -133,3 +167,27 @@ def test_the_list_and_view_say_what_distance_was_never_invoiced(
     row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
                if r["id"] == str(trip.id))
     assert row["distance_unbilled_cents"] == 0, "invoiced now"
+
+
+@requires_db
+def test_the_ledger_carries_distance_beside_the_tolls(api_client, monkeypatch, session) -> None:
+    """A rental with no crossings at all still has distance to file, and the
+    total counts only rentals still inside the window."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    car = Vehicle(nickname="Jerry", make="Toyota", model="Corolla", year=2024, plate="LZA7293")
+    session.add(car)
+    session.flush()
+    now = datetime.now(UTC)
+    for res, ended in (("70000001", now - td(days=10)), ("70000002", now - td(days=200))):
+        session.add(Trip(
+            vehicle_id=car.id, turo_trip_id=res, guest_name="Liam",
+            starts_at=ended - td(days=3), ends_at=ended, state=TripState.completed,
+            source=TripSource.email, turo_detail=_detail(over=124, rate=0.37),
+        ))
+    session.commit()
+
+    body = api_client.get("/api/invoices/ledger").json()
+    rows = {r["turo_trip_id"]: r for r in body["rows"]}
+    assert rows["70000001"]["distance_unbilled_cents"] == 4588
+    assert rows["70000002"]["distance_unbilled_cents"] == 4588
+    assert body["distance_collectable_cents"] == 4588, "the closed one is not collectable"

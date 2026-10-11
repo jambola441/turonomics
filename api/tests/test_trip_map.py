@@ -25,6 +25,7 @@ from turonomics_api.ingest.trip_map import (
     decode_polyline,
     parse_drive,
     place,
+    rental_miles,
     shape,
 )
 
@@ -263,3 +264,70 @@ def test_the_logged_layout_carries_no_values() -> None:
     assert "transactionId: str(6)" in said and "distance: float" in said
     assert "coordinates: [40 × [2 × float]]" in said
     assert "40.6782" not in said and "abc123" not in said
+
+
+# ---------------------------------------------------------------------------
+# The tracker's miles over a rental
+# ---------------------------------------------------------------------------
+
+
+def _drive(start: datetime, minutes: int, odo: tuple[float, float] | None, dist: float | None):
+    return Drive(
+        starts_at=start, ends_at=start + td(minutes=minutes), points=LINE,
+        distance_mi=dist,
+        start_odometer=odo[0] if odo else None, end_odometer=odo[1] if odo else None,
+    )
+
+
+def test_a_drive_keeps_bouncies_distance_and_odometer() -> None:
+    drive = parse_drive({
+        "startTime": "2026-07-10T14:00:00.000Z", "endTime": "2026-07-10T14:30:00.000Z",
+        "gps": {"type": "LineString", "coordinates": [[-73.9655, 40.6782], [-74.0447, 40.6066]]},
+        "distance": 12.4, "startOdometer": 46684.2, "endOdometer": 46696.6,
+    })
+    assert drive is not None
+    assert (drive.distance_mi, drive.start_odometer, drive.end_odometer) == (12.4, 46684.2, 46696.6)
+
+
+def test_rental_miles_is_the_odometer_span_of_the_rentals_drives() -> None:
+    starts, ends = T0, T0 + td(days=2)
+    route = Route(source="bouncie", drives=[
+        _drive(starts - td(minutes=20), 15, (1000.0, 1004.0), 4.0),   # the host, before
+        _drive(starts + td(hours=1), 60, (1004.0, 1040.0), 36.0),
+        _drive(starts + td(days=1), 90, (1050.0, 1110.5), 60.5),
+        _drive(ends + td(minutes=10), 15, (1110.5, 1113.0), 2.5),     # the host, after
+    ])
+    assert rental_miles(route, starts=starts, ends=ends) == 106.5, "1110.5 - 1004.0"
+
+
+def test_without_an_odometer_the_drives_distances_are_summed() -> None:
+    route = Route(source="bouncie", drives=[
+        _drive(T0 + td(hours=1), 60, None, 36.0), _drive(T0 + td(hours=5), 60, None, 10.5),
+    ])
+    assert rental_miles(route, starts=T0, ends=T0 + td(days=1)) == 46.5
+
+
+def test_no_answer_without_bouncies_drives() -> None:
+    assert rental_miles(Route(source="telemetry", drives=[_drive(T0, 5, (1.0, 2.0), 1.0)]),
+                        starts=T0, ends=T0 + td(days=1)) is None
+    assert rental_miles(Route(source="bouncie"), starts=T0, ends=T0 + td(days=1)) is None
+    gap = Route(source="bouncie", drives=[_drive(T0 + td(hours=1), 5, None, None)])
+    assert rental_miles(gap, starts=T0, ends=T0 + td(days=1)) is None
+
+
+@requires_db
+def test_reading_a_finished_rentals_map_keeps_the_trackers_miles(
+    api_client, monkeypatch, session, rental
+) -> None:
+    route = Route(source="bouncie", drives=[
+        _drive(rental.starts_at + td(minutes=5), 60, (2000.0, 2030.0), 30.0),
+        _drive(rental.starts_at + td(hours=2), 60, (2030.0, 2061.5), 31.5),
+    ])
+    monkeypatch.setattr("turonomics_api.routers.trips.trip_route", lambda *_a, **_k: route)
+    session.commit()
+    assert api_client.get(f"/api/trips/{rental.id}/map").status_code == 200
+    session.refresh(rental)
+    assert rental.tracker_miles == 61.5 and rental.tracker_miles_at is not None
+    row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
+               if r["id"] == str(rental.id))
+    assert row["tracker_miles"] == 61.5

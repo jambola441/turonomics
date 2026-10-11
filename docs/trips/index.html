@@ -70,6 +70,7 @@
          color:var(--muted);vertical-align:2px}
   .badge.off{color:var(--blue);border-color:var(--blue)}
   .badge.odd{color:var(--red);border-color:var(--red);font-weight:700}
+  .badge.miles{color:var(--amber);border-color:var(--amber)}
   .side{text-align:right;flex-shrink:0}
   .state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
          color:var(--dim)}
@@ -113,6 +114,24 @@
   .ext.on{color:var(--green)}
   .ext.on::before{background:var(--green)}
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px}
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:12px}
+  .tile{background:var(--surface2);border:1px solid var(--line);border-radius:var(--u-radius-md);
+        padding:9px 10px;min-width:0}
+  .tile .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+           color:var(--dim)}
+  .tile .v{font-family:var(--mono);font-size:17px;font-weight:600;margin-top:3px}
+  .tile .n{font-size:11px;color:var(--muted);margin-top:2px}
+  .tile.warn .v{color:var(--amber)}
+  .line{font-size:13px;line-height:1.5}
+  .line.dim{color:var(--muted);font-size:12px}
+  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+        border:1px solid var(--border);border-radius:999px;padding:1px 6px;margin-right:4px}
+  .chip.ok{color:var(--green);border-color:var(--u-ok-line)}
+  .chip.wait{color:var(--amber)}
+  .inv .sub a{color:var(--blue)}
+  details.fold summary{cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+       text-transform:uppercase;color:var(--dim);margin:18px 0 8px}
+  details.fold .thread{margin-top:6px}
 </style>
 </head>
 <body>
@@ -339,10 +358,15 @@
     add(who, "span", "badge" + (off(trip) ? " off" : ""), off(trip) ? "off-platform" : "Turo");
     var odd = oddCount(trip);
     if (odd) add(who, "span", "badge odd", flagText(odd));
+    // Miles over the limit that Turo was never asked to charge for.
+    if (trip.distance_unbilled_cents) {
+      add(who, "span", "badge miles", trip.distance_over_mi + " mi over · " +
+          money(trip.distance_unbilled_cents));
+    }
     add(body, "div", "meta",
         when(trip.starts_at) + " → " + when(trip.ends_at) +
         (trip.turo_trip_id ? " · " + trip.turo_trip_id : "") +
-        " · " + trip.toll_count + (trip.toll_count === 1 ? " crossing" : " crossings"));
+        (trip.toll_count ? " · " + trip.toll_count + (trip.toll_count === 1 ? " crossing" : " crossings") : ""));
     var side = add(head, "div", "side");
     var row = state.ledger[trip.id];
     if (row) {
@@ -464,87 +488,70 @@
       h.href = view.invoice_hub_url; h.target = "_blank"; h.rel = "noopener";
     }
 
-    // Money first: it is what this page is mostly opened to check.
+    // The answers first, one tile each: the tolls, the miles, the money, the
+    // clock. Everything under them is the working.
     var L = view.ledger;
-    add(box, "h2", null, "Money");
+    var D = view.distance;
+    var tiles = add(box, "div", "tiles");
+    function tile(label, value, sub, tone) {
+      var t = add(tiles, "div", "tile" + (tone ? " " + tone : ""));
+      add(t, "div", "k", label);
+      add(t, "div", "v", value);
+      if (sub) add(t, "div", "n", sub);
+    }
     if (L && L.state) {
-      var dl = add(box, "dl", "facts");
-      [["State", L.state],
-       ["Tolls", money(L.tolls_cents)],
-       ["To bill", money(L.unfiled_cents)],
-       ["Asked", money(L.filed_cents)],
-       ["Settled", money(L.recovered_cents)],
-       ["Turo charged", money(L.charged_cents)],
-       ["Turo: tolls", money(L.turo_tolls_cents)],
-       ["Turo: tickets", money(L.turo_tickets_cents)],
-       ["Turo: distance", money(L.turo_distance_cents)],
-       ["Turo: other", money(L.turo_other_cents) +
-         (L.turo_unknown_cents ? " · +" + money(L.turo_unknown_cents) + " not broken down" : "")],
-       ["Days left to file", L.days_left == null ? "—" : L.days_left < 0 ? "closed" : String(L.days_left)]
-      ].forEach(function (pair) { add(dl, "dt", null, pair[0]); add(dl, "dd", null, pair[1]); });
+      var owed = L.unfiled_cents || 0;
+      tile("Tolls", owed ? money(owed) : money(L.tolls_cents || 0), L.state,
+           owed && (L.state === "to bill" || L.state === "partly billed") ? "warn" : null);
+    }
+    if (D) {
+      if (D.over_mi > 0) {
+        tile("Distance", D.over_mi + " mi over",
+             D.unbilled_cents ? money(D.unbilled_cents) + " not invoiced" : "invoiced",
+             D.unbilled_cents ? "warn" : null);
+      } else {
+        tile("Distance", D.driven_mi + " mi",
+             D.included_mi != null ? "of " + D.included_mi + " included" : "unlimited");
+      }
+    }
+    if (view.receipt && view.receipt.total_earned) {
+      tile("Earned", view.receipt.total_earned, "Turo's receipt");
+    } else if (trip.earnings_cents) {
+      tile("Earned", money(trip.earnings_cents), null);
+    }
+    if (L && L.days_left != null) {
+      tile("File by", L.days_left < 0 ? "closed" : L.days_left + " days", "Turo's 90-day window");
+    }
+
+    // Tolls: the figures that are not zero, what to do, and the crossings.
+    section(box, "Tolls");
+    if (L && L.state) {
+      var parts = [["tolls", L.tolls_cents], ["to bill", L.unfiled_cents], ["asked", L.filed_cents],
+                   ["settled", L.recovered_cents]]
+        .filter(function (p) { return p[1]; })
+        .map(function (p) { return p[0] + " " + money(p[1]); });
+      add(box, "div", "line", parts.join(" · ") || "no crossings");
+      var kinds = [["tolls", L.turo_tolls_cents], ["tickets", L.turo_tickets_cents],
+                   ["distance", L.turo_distance_cents], ["other", L.turo_other_cents]]
+        .filter(function (p) { return p[1]; })
+        .map(function (p) { return p[0] + " " + money(p[1]); });
+      if (L.charged_cents || kinds.length || L.turo_unknown_cents) {
+        add(box, "div", "line dim", "Turo charged " + money(L.charged_cents) +
+            (kinds.length ? ": " + kinds.join(" · ") : "") +
+            (L.turo_unknown_cents ? " · +" + money(L.turo_unknown_cents) + " not broken down" : ""));
+      }
       if (L.note) add(box, "div", "note", L.note);
-    } else {
-      add(box, "div", "quiet", trip.earnings_cents
-        ? "Earned " + money(trip.earnings_cents) + "." : "Nothing on the ledger.");
     }
     if (view.fileable && L && L.unfiled_cents) {
       var file = add(box, "button", "btn go", "File " + money(L.unfiled_cents) + " on Turo");
       file.type = "button";
-      file.style.marginTop = "10px";
+      file.style.marginTop = "8px";
       file.addEventListener("click", function () { queueFiling(trip, L); });
       add(box, "div", "ext ext-file", "");
       showExtension();
     } else if (view.held_because && L && L.unfiled_cents) {
       add(box, "div", "note", "Not offered for filing: " + view.held_because);
     }
-
-    add(box, "h2", null, "Turo");
-    if (view.turo_facts && view.turo_facts.length) {
-      var facts = add(box, "dl", "facts");
-      view.turo_facts.forEach(function (f) { add(facts, "dt", null, f.label); add(facts, "dd", null, f.value); });
-      if (view.turo_synced_at) add(box, "div", "quiet", "As of the pull on " + when(view.turo_synced_at, true) + ".");
-    } else {
-      add(box, "div", "quiet", off(trip)
-        ? "Arranged outside Turo, so Turo has nothing on it."
-        : "Not pulled from Turo yet — press Pull from Turo on the invoices page.");
-    }
-
-    add(box, "h2", null, "Route");
-    renderRoute(trip, box);
-
-    add(box, "h2", null, "Invoices");
-    if (view.invoices && view.invoices.length) {
-      view.invoices.forEach(function (inv) {
-        var card = add(box, "div", "inv");
-        var top = add(card, "div", "top");
-        add(top, "div", null, (inv.lines.map(function (l) { return l.label + " " + l.value; }).join(" · ")) ||
-            "not broken down");
-        add(top, "div", "num", money(inv.total_cents));
-        add(card, "div", "sub",
-            inv.state + (inv.turo_status ? " · Turo: " + inv.turo_status : "") +
-            (inv.charged_at ? " · first seen charged " + when(inv.charged_at) : "") +
-            (inv.toll_cents != null ? " · tolls " + money(inv.toll_cents) : ""));
-        if (inv.url) {
-          var link = add(card, "a", null, "Open on Turo");
-          link.href = inv.url; link.target = "_blank"; link.rel = "noopener";
-          link.style.fontSize = "12px";
-        }
-      });
-    } else {
-      add(box, "div", "quiet", "None.");
-    }
-
-    // What Turo's receipt says reached the host. Absent until a pull has read
-    // it, which is not the same as a trip that earned nothing.
-    add(box, "h2", null, "Receipt");
-    if (view.receipt) {
-      var rc = view.receipt;
-      renderReceipt(rc, add(box, "div", "inv"));
-    } else {
-      add(box, "div", "quiet", "Not read yet. Pull from Turo reads it.");
-    }
-
-    add(box, "h2", null, "Crossings");
     if (view.tolls && view.tolls.length) {
       var wrap = add(box, "div", "scroll");
       var table = add(wrap, "table");
@@ -559,12 +566,84 @@
         add(tr, "td", "quiet", t.recovered_at ? "settled" : t.filed_at ? "asked " + when(t.filed_at) : "to bill");
       });
     } else {
-      add(box, "div", "quiet", "None on the imported statements.");
+      add(box, "div", "quiet", "No crossings on the imported statements.");
+    }
+
+    // Additional distance, only when there is any: Turo's own count of miles
+    // over, at its rate, against what its invoices asked for.
+    if (D && D.over_mi > 0) {
+      section(box, "Distance");
+      add(box, "div", "line", D.driven_mi + " mi driven of " + D.included_mi + " included — " +
+          D.over_mi + " mi over at " + money(D.rate_cents) + "/mi = " + money(D.owed_cents));
+      add(box, "div", "line dim", D.invoiced_cents
+        ? "Invoiced for distance: " + money(D.invoiced_cents)
+        : "Not invoiced for distance");
+      if (D.unbilled_cents) {
+        add(box, "div", "note", money(D.unbilled_cents) +
+            " of additional distance has not been invoiced. File it from Turo's invoice page.");
+      }
+    }
+
+    section(box, "Turo invoices");
+    if (view.invoices && view.invoices.length) {
+      view.invoices.forEach(function (inv) {
+        var row = add(box, "div", "inv");
+        var top = add(row, "div", "top");
+        add(top, "div", null, (inv.lines.map(function (l) { return l.label + " " + l.value; }).join(" · ")) ||
+            "not broken down");
+        add(top, "div", "num", money(inv.total_cents));
+        var sub = add(row, "div", "sub");
+        add(sub, "span", "chip " + (inv.state === "charged" ? "ok" : "wait"), inv.state);
+        sub.appendChild(document.createTextNode(
+            (inv.turo_status ? " Turo: " + statusWord(inv.turo_status) : "") +
+            (inv.charged_at ? " · first seen charged " + when(inv.charged_at) : "")));
+        if (inv.url) {
+          var link = add(sub, "a", null, "open");
+          link.href = inv.url; link.target = "_blank"; link.rel = "noopener";
+          link.style.marginLeft = "8px";
+        }
+      });
+    } else {
+      add(box, "div", "quiet", "None.");
+    }
+
+    // What Turo's receipt says reached the host. Absent until a pull has read
+    // it, which is not the same as a trip that earned nothing.
+    section(box, "Receipt");
+    if (view.receipt) {
+      renderReceipt(view.receipt, add(box, "div", "inv"));
+    } else {
+      add(box, "div", "quiet", "Not read yet. Pull from Turo reads it.");
+    }
+
+    section(box, "Route");
+    renderRoute(trip, box);
+
+    // Turo's reservation: the handful of facts a person looks for, and the
+    // rest folded away with the raw detail.
+    section(box, "Trip");
+    if (view.turo_facts && view.turo_facts.length) {
+      var KEY = { "Status": 1, "Trip price": 1, "Booked": 1, "Protection": 1, "Pickup": 1,
+                  "Plate on Turo": 1, "Odometer at check-in": 1, "Odometer at check-out": 1 };
+      var facts = add(box, "dl", "facts");
+      view.turo_facts.filter(function (f) { return KEY[f.label]; })
+        .forEach(function (f) { add(facts, "dt", null, f.label); add(facts, "dd", null, f.value); });
+      var more = add(box, "details", "raw");
+      add(more, "summary", null, "More from Turo" +
+          (view.turo_synced_at ? " · as of " + when(view.turo_synced_at, true) : ""));
+      var rest = add(more, "dl", "facts");
+      view.turo_facts.filter(function (f) { return !KEY[f.label]; })
+        .forEach(function (f) { add(rest, "dt", null, f.label); add(rest, "dd", null, f.value); });
+      if (view.turo_detail) add(more, "pre", null, JSON.stringify(view.turo_detail, null, 2));
+    } else {
+      add(box, "div", "quiet", off(trip)
+        ? "Arranged outside Turo, so Turo has nothing on it."
+        : "Not pulled from Turo yet — press Pull from Turo on the invoices page.");
     }
 
     // Photos are counted rather than shown: Turo's list gives each one's id,
     // not an image address.
-    add(box, "h2", null, "Photos");
+    section(box, "Photos");
     if (view.photos == null) {
       add(box, "div", "quiet", off(trip) ? "Arranged outside Turo." :
           "Not read from Turo yet — the next pull reads them.");
@@ -579,19 +658,21 @@
         add(pd, "dt", null, STEP[g.step] || g.step);
         add(pd, "dd", null, g.count + (g.count === 1 ? " photo" : " photos") +
             (g.by ? " by the " + g.by.toLowerCase() : "") +
-            (g.first ? " · " + when(g.first, true) +
-              (g.last && g.last !== g.first ? " – " + when(g.last, true) : "") : ""));
+            (g.first ? " · " + when(g.first, true) : ""));
       });
     }
 
-    add(box, "h2", null, "Messages");
+    // The thread folded, with its length on the fold: it is the longest part
+    // of the page and the least often wanted.
     if (view.messages == null) {
+      section(box, "Messages");
       add(box, "div", "quiet", off(trip) ? "Arranged outside Turo." :
           "Not read from Turo yet — the next pull reads them.");
-    } else if (!view.messages.length) {
-      add(box, "div", "quiet", "No messages.");
     } else {
-      var log = add(box, "div", "thread");
+      var md = add(box, "details", "fold");
+      add(md, "summary", null, "Messages (" + view.messages.length + ")");
+      if (!view.messages.length) add(md, "div", "quiet", "No messages.");
+      var log = add(md, "div", "thread");
       view.messages.forEach(function (m) {
         var item = add(log, "div", "msg" + (m.role === "HOST" ? " host" : ""));
         add(item, "div", "msg-who", (m.name || (m.role === "HOST" ? "Host" : "Guest")) +
@@ -602,17 +683,12 @@
     }
 
     if (view.commands && view.commands.length) {
-      add(box, "h2", null, "From this site");
+      var cd = add(box, "details", "fold");
+      add(cd, "summary", null, "From this site (" + view.commands.length + ")");
       view.commands.forEach(function (c) {
-        add(box, "div", "quiet", when(c.requested_at, true) + " · " + c.kind + " · " + c.state +
+        add(cd, "div", "quiet", when(c.requested_at, true) + " · " + c.kind + " · " + c.state +
             (c.result ? " — " + c.result : ""));
       });
-    }
-
-    if (view.turo_detail) {
-      var raw = add(box, "details", "raw");
-      add(raw, "summary", null, "Everything Turo said about this reservation");
-      add(raw, "pre", null, JSON.stringify(view.turo_detail, null, 2));
     }
 
     if (off(trip)) {
@@ -621,6 +697,19 @@
       drop.style.marginTop = "14px";
       drop.addEventListener("click", function () { dropRental(trip); });
     }
+  }
+
+  function section(box, title) { return add(box, "h2", null, title); }
+
+  // Turo's statuses are screaming snake case; said as words, the known ones
+  // with what they mean for the money.
+  function statusWord(s) {
+    var KNOWN = {
+      RESOLVED_AUTOMATICALLY_OWNER_FAVOR: "resolved for you",
+      RESOLVED_BY_ADMIN_OWNER_FAVOR: "resolved for you by Turo",
+      ACCEPTED: "accepted"
+    };
+    return KNOWN[s] || String(s).toLowerCase().replace(/_/g, " ");
   }
 
   // Where the car went over the rental, and where on that route each toll

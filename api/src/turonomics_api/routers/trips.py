@@ -32,6 +32,7 @@ from turonomics_api.db.models import (
     TripState,
     Vehicle,
 )
+from turonomics_api.ingest.distance import Distance, distance_lines_cents, summarise
 from turonomics_api.ingest.tolls import rematch_unattributed
 from turonomics_api.ingest.trip_map import place, trip_route
 from turonomics_api.ingest.turo_extras import photo_groups, thread
@@ -81,6 +82,10 @@ class TripRow(BaseModel):
     # How many crossings this rental is currently carrying, so a window typed
     # slightly wrong is visible as a rental that caught nothing.
     toll_count: int = 0
+    # Miles over the trip's limit by Turo's own count, and what of that at
+    # Turo's rate has not been invoiced. Zero where Turo has no reading.
+    distance_over_mi: float = 0
+    distance_unbilled_cents: int = 0
 
 
 class TripsResponse(BaseModel):
@@ -119,6 +124,14 @@ def _vehicle_for(session: Session, name: str) -> Vehicle:
     return found
 
 
+def _distance(session: Session, trip: Trip) -> Distance | None:
+    lines = session.scalars(
+        select(ReimbursementInvoice.lines).where(ReimbursementInvoice.trip_id == trip.id)
+    ).all()
+    invoiced = sum(distance_lines_cents(entry or []) for entry in lines)
+    return summarise(trip.turo_detail, invoiced)
+
+
 def _row(session: Session, trip: Trip) -> TripRow:
     count = (
         session.scalar(
@@ -126,6 +139,7 @@ def _row(session: Session, trip: Trip) -> TripRow:
         )
         or 0
     )
+    distance = _distance(session, trip)
     return TripRow(
         id=trip.id,
         vehicle_nickname=trip.vehicle.nickname if trip.vehicle else None,
@@ -137,6 +151,8 @@ def _row(session: Session, trip: Trip) -> TripRow:
         state=str(trip.state),
         earnings_cents=trip.earnings_cents,
         toll_count=int(count),
+        distance_over_mi=distance.over_mi if distance else 0,
+        distance_unbilled_cents=distance.unbilled_cents if distance else 0,
     )
 
 
@@ -298,6 +314,16 @@ class ViewReceipt(BaseModel):
     synced_at: datetime | None
 
 
+class ViewDistance(BaseModel):
+    included_mi: float | None
+    driven_mi: float | None
+    over_mi: float
+    rate_cents: int | None
+    owed_cents: int
+    invoiced_cents: int
+    unbilled_cents: int
+
+
 class TripView(BaseModel):
     trip: TripRow
     turo_trip_id: str | None
@@ -325,9 +351,25 @@ class TripView(BaseModel):
     extras_synced_at: datetime | None = None
     # What reached the host, from Turo's receipt — None until a pull has read it.
     receipt: ViewReceipt | None = None
+    # Turo's distance figures — None until the odometer is in at both ends.
+    distance: ViewDistance | None = None
 
 
 _TURO = "https://turo.com/us/en"
+
+
+def _view_distance(found: Distance | None) -> ViewDistance | None:
+    if found is None:
+        return None
+    return ViewDistance(
+        included_mi=found.included_mi,
+        driven_mi=found.driven_mi,
+        over_mi=found.over_mi,
+        rate_cents=found.rate_cents,
+        owed_cents=found.owed_cents,
+        invoiced_cents=found.invoiced_cents,
+        unbilled_cents=found.unbilled_cents,
+    )
 
 
 def _receipt_view(trip: Trip) -> ViewReceipt | None:
@@ -539,6 +581,7 @@ def view_trip(
         ],
         extras_synced_at=trip.extras_synced_at,
         receipt=_receipt_view(trip),
+        distance=_view_distance(_distance(session, trip)),
     )
 
 

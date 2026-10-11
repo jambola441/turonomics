@@ -1,0 +1,135 @@
+"""Additional distance, read off Turo's reservation detail.
+
+The shape is the one stored for 61705384 on the live account (a 22-mile
+overage at $0.35 a mile, invoiced); the other figures here are invented.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from datetime import timedelta as td
+from typing import Any
+
+from turonomics_api.db.models import (
+    ReimbursementInvoice,
+    Trip,
+    TripSource,
+    TripState,
+    Vehicle,
+)
+from turonomics_api.ingest.distance import distance_lines_cents, summarise
+
+from .conftest import requires_db
+
+
+def _mi(n: float | None, unlimited: bool = False) -> dict[str, Any]:
+    return {"unit": "MI", "scalar": n, "unlimited": unlimited}
+
+
+def _detail(*, limit=200, driven=222, over=22, rate=0.35, per=1) -> dict[str, Any]:
+    return {
+        "booking": {"distanceLimit": _mi(limit)},
+        "distanceOverageFee": {"money": {"amount": rate, "currencyCode": "USD"},
+                               "distance": _mi(per)},
+        "odometerDetail": {
+            "distanceLimit": _mi(limit),
+            "distanceDriven": _mi(driven),
+            "excessDistance": _mi(over),
+            "distanceOverageFee": {"money": {"amount": rate, "currencyCode": "USD"},
+                                   "distance": _mi(per)},
+            "checkInOdometerReading": _mi(46684),
+            "checkOutOdometerReading": _mi(46906),
+        },
+    }
+
+
+def test_an_overage_is_miles_over_at_turos_rate() -> None:
+    found = summarise(_detail())
+    assert found is not None
+    assert (found.included_mi, found.driven_mi, found.over_mi) == (200, 222, 22)
+    assert found.rate_cents == 35
+    assert found.owed_cents == 770
+    assert found.unbilled_cents == 770, "nothing invoiced yet"
+
+
+def test_what_was_invoiced_for_distance_is_taken_off() -> None:
+    assert summarise(_detail(), invoiced_cents=770).unbilled_cents == 0  # type: ignore[union-attr]
+    assert summarise(_detail(), invoiced_cents=500).unbilled_cents == 270  # type: ignore[union-attr]
+    assert summarise(_detail(), invoiced_cents=900).unbilled_cents == 0  # type: ignore[union-attr]
+
+
+def test_a_rate_per_several_miles_is_per_mile() -> None:
+    found = summarise(_detail(over=10, rate=2.0, per=4))
+    assert found is not None and found.rate_cents == 50 and found.owed_cents == 500
+
+
+def test_under_the_limit_owes_nothing() -> None:
+    found = summarise(_detail(driven=150, over=0))
+    assert found is not None and found.owed_cents == 0 and found.unbilled_cents == 0
+
+
+def test_no_odometer_reading_is_no_answer_rather_than_zero() -> None:
+    detail = _detail()
+    detail["odometerDetail"]["distanceDriven"] = None
+    assert summarise(detail) is None
+    assert summarise({}) is None
+    assert summarise(None) is None
+
+
+def test_unlimited_has_no_limit() -> None:
+    detail = _detail(over=0)
+    detail["odometerDetail"]["distanceLimit"] = _mi(None, unlimited=True)
+    detail["booking"]["distanceLimit"] = _mi(None, unlimited=True)
+    found = summarise(detail)
+    assert found is not None and found.included_mi is None and found.owed_cents == 0
+
+
+def test_distance_lines_are_found_by_label() -> None:
+    lines = [["22 mi additional distance", 770], ["Tolls", 3007], ["Additional mileage", 100],
+             ["Cleaning", 4000], "junk", ["Tolls", "x"]]
+    assert distance_lines_cents(lines) == 870
+
+
+# ---------------------------------------------------------------------------
+# On the trips list and the trip view
+# ---------------------------------------------------------------------------
+
+@requires_db
+def test_the_list_and_view_say_what_distance_was_never_invoiced(
+    api_client, monkeypatch, session
+) -> None:
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    car = Vehicle(nickname="Jimmy", make="Toyota", model="Corolla", year=2024, plate="LWH4685")
+    session.add(car)
+    session.flush()
+    ends = datetime(2026, 9, 30, 18, 0, tzinfo=UTC)
+    trip = Trip(
+        vehicle_id=car.id, turo_trip_id="61705384", guest_name="Alexandria",
+        starts_at=ends - td(days=2), ends_at=ends, state=TripState.completed,
+        source=TripSource.email, turo_detail=_detail(over=22, rate=0.35),
+    )
+    session.add(trip)
+    session.flush()
+    session.add(ReimbursementInvoice(
+        fingerprint=f"inv:{uuid.uuid4()}", reservation_id="61705384", state="charged",
+        total_cents=500, lines=[["Tolls", 500]], toll_cents=500, trip_id=trip.id,
+        first_seen_at=ends, last_seen_at=ends, charged_at=ends,
+    ))
+    session.commit()
+
+    row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
+               if r["id"] == str(trip.id))
+    assert (row["distance_over_mi"], row["distance_unbilled_cents"]) == (22, 770)
+    view = api_client.get(f"/api/trips/{trip.id}/view").json()
+    assert view["distance"]["owed_cents"] == 770 and view["distance"]["invoiced_cents"] == 0
+
+    session.add(ReimbursementInvoice(
+        fingerprint=f"inv:{uuid.uuid4()}", reservation_id="61705384", state="charged",
+        total_cents=770, lines=[["22 mi additional distance", 770]], toll_cents=None,
+        trip_id=trip.id, first_seen_at=ends, last_seen_at=ends, charged_at=ends,
+    ))
+    session.commit()
+    row = next(r for r in api_client.get("/api/trips?manual_only=false").json()["trips"]
+               if r["id"] == str(trip.id))
+    assert row["distance_unbilled_cents"] == 0, "invoiced now"

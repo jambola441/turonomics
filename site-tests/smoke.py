@@ -559,13 +559,29 @@ def main() -> int:
             check("search finds a rental by its reservation",
                   page.locator(".trip").count() == 1)
             page.fill("#q", "")
+            check("a rental that went over its miles uninvoiced says so on the list",
+                  "156 mi over" in page.locator(
+                      "#trip-11111111-1111-1111-1111-111111111111 .badge.miles").inner_text().lower())
+            check("and a rental with no crossings does not say '0 crossings'",
+                  "0 crossings" not in page.locator("#list").inner_text())
             page.locator("#trip-11111111-1111-1111-1111-111111111111 .trip-head").click()
             page.wait_for_timeout(700)
+            check("the messages are folded until asked for",
+                  page.locator(".view details.fold", has_text="Messages (2)").count() == 1
+                  and "Welcome! Keys" not in page.locator(
+                      "#trip-11111111-1111-1111-1111-111111111111 .view").inner_text())
+            page.locator(".view details.fold summary", has_text="Messages").click()
             view = page.locator("#trip-11111111-1111-1111-1111-111111111111 .view").inner_text()
+            tiles = page.locator("#trip-11111111-1111-1111-1111-111111111111 .tiles").inner_text()
+            check("the view opens on its answers: tolls, distance, earnings, the window",
+                  "$11.00" in tiles and "156 mi over" in tiles
+                  and "$54.60 not invoiced" in tiles and "$191.25" in tiles and "4 days" in tiles)
+            check("and says what additional distance is owed and how it was worked out",
+                  "756 mi driven of 600 included" in view and "$0.35/mi = $54.60" in view)
             check("opening a rental shows Turo's side",
-                  "$212.50" in view and "156 mi" in view)
+                  "$212.50" in view and "COMPLETED" in view)
             check("and its invoices with Turo's status",
-                  "Tickets $50.00" in view and "Turo: ACCEPTED" in view)
+                  "Tickets $50.00" in view and "Turo: accepted" in view)
             check("and its crossings with what became of each",
                   "BWB" in view and "asked" in view and "to bill" in view)
             check("an invoice's date says when it was first seen charged, not that it was charged then",

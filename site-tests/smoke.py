@@ -99,6 +99,29 @@ def main() -> int:
                 if not condition:
                     failures.append(name)
 
+            # The token is asked for in the shell's settings panel, never with
+            # window.prompt: a browser that blocks prompts used to show only
+            # "prompt() is not supported". True if the panel was there to fill.
+            def give_token(token: str = stub_api.TOLLS_TOKEN) -> bool:
+                panel = page.locator("#tn-settings[open]")
+                try:
+                    panel.wait_for(timeout=3000)
+                except Exception:
+                    return False
+                page.fill("#tn-token", token)
+                page.click("#tn-save")
+                page.wait_for_timeout(600)
+                return True
+
+            def nav_ok(current: str) -> bool:
+                links = page.locator(".tn-nav a")
+                here = page.locator('.tn-nav a[aria-current="page"]')
+                return links.count() == 4 and (
+                    here.count() == 1 and here.inner_text().lower() == current
+                    if current else here.count() == 0)
+
+            check("the fleet page has the same nav as the others", nav_ok("fleet"))
+
             check("the error banner is not showing", page.locator("#err").is_hidden())
             check("every vehicle has a chip", page.locator(".chip").count() == 3)
             check("the selected car has a name", page.locator(".name").count() >= 1)
@@ -182,9 +205,12 @@ def main() -> int:
             # the test for cancelling a delete passed a page that had deleted.
             confirm_answers: list[bool] = []
 
+            prompts: list[str] = []
+
             def dialog(d) -> None:
                 if d.type == "prompt":
-                    d.accept(stub_api.TOLLS_TOKEN)   # the tolls token
+                    prompts.append(d.message)
+                    d.dismiss()
                 elif confirm_answers.pop(0) if confirm_answers else False:
                     d.accept()
                 else:
@@ -193,9 +219,19 @@ def main() -> int:
             page.on("dialog", dialog)
 
             page.goto(f"{SITE}/tolls/?api={API}", wait_until="domcontentloaded")
+            check("the token is asked for in the settings panel", give_token())
             page.wait_for_timeout(700)
 
             check("the tolls error banner is not showing", page.locator("#err").is_hidden())
+            check("the tolls page has the shared nav", nav_ok("tolls"))
+            open_count = sum(1 for t in tolls if not t["recovered_at"])
+            check("it opens on the open crossings, the work",
+                  page.locator(".toll").count() == open_count < len(tolls))
+            page.locator("#f-loose").click()
+            check("'no rental' shows the crossings nobody can be billed for",
+                  page.locator(".toll").count() == sum(
+                      1 for t in tolls if not t["trip_id"] and not t["outside_label"]))
+            page.locator("#f-all").click()
             check("every crossing is listed", page.locator(".toll").count() == len(tolls))
             check("the charged total is the sum of the cents",
                   page.locator("#s-total").text_content() == _money(total))
@@ -371,7 +407,6 @@ def main() -> int:
             # And a rejected token must be forgotten, or the page asks nobody
             # and fails the same way forever.
             page.evaluate("localStorage.setItem('turonomics.tolls.token', 'wrong')")
-            page.once("dialog", lambda d: d.dismiss())
             page.locator("#rematch").click()
             page.wait_for_timeout(600)
             check("a rejected token is shown as rejected",
@@ -381,15 +416,44 @@ def main() -> int:
 
             check("no uncaught errors on the tolls page", not errors)
 
+            # One rental's crossings, linked from its trip, and one crossing,
+            # linked by its id even when the default view would hide it.
+            on_file = json.loads(urllib.request.urlopen(urllib.request.Request(
+                f"{API}/api/tolls", headers={"Authorization": f"Bearer {stub_api.TOLLS_TOKEN}"}
+            )).read())["tolls"]
+            rental = next(t["trip_id"] for t in on_file if t["trip_id"])
+            page.goto(f"{SITE}/tolls/?api={API}&trip={rental}", wait_until="domcontentloaded")
+            give_token()
+            page.wait_for_timeout(700)
+            check("a rental's crossings open from a link to them",
+                  page.locator(".toll").count() == sum(1 for t in on_file if t["trip_id"] == rental)
+                  and page.locator("#scope").is_visible()
+                  and "show every crossing" in page.locator("#scope").inner_text())
+            settled = next(t["id"] for t in on_file if t["recovered_at"])
+            page.goto(f"{SITE}/tolls/?api={API}#toll-{settled}", wait_until="domcontentloaded")
+            page.wait_for_timeout(700)
+            check("a crossing opens from a link to it, billed back or not",
+                  page.locator(f"#toll-{settled}.linked").count() == 1)
+            check("no page asked for the token with a browser prompt", not prompts)
+
             # ---- the invoices page ----------------------------------------
             # The view that turns the ledger into money: what to bill whom, and
             # how long is left to ask. The grouping is the point, so that is
             # what gets checked.
             invoices = stub_api.INVOICES
             page.goto(f"{SITE}/invoices/?api={API}", wait_until="domcontentloaded")
+            give_token()
             page.wait_for_timeout(700)
 
             check("the invoices error banner is not showing", page.locator("#err").is_hidden())
+            check("the invoices page has the shared nav", nav_ok("invoices"))
+            check("a guest name in one case is shown in title case",
+                  "Austin" in (page.locator("#groups").text_content() or "")
+                  and "AUSTIN" not in (page.locator("#groups").text_content() or ""))
+            first_top = page.evaluate(
+                "() => { const f = document.querySelector('.inv'); return f ? f.getBoundingClientRect().top : 9999; }")
+            check(f"the first rental to file is near the top on a phone (at {first_top:.0f}px)",
+                  first_top < 400)
             check("every rental to bill is listed",
                   page.locator(".inv").count() == len(invoices))
             check("the total to bill is the sum of the invoices",
@@ -497,16 +561,21 @@ def main() -> int:
             page.wait_for_timeout(400)
             check("cancelling the confirmation queues nothing",
                   page.locator("#remoteLog li").count() == 0)
+            check("the extension's buttons stay on screen",
+                  page.locator("#pullTuro").is_visible() and page.locator("#readEzpass").is_visible())
             confirm_answers.append(True)
             file_buttons.first.click()
             page.wait_for_timeout(700)
-            log = page.locator("#remoteLog").inner_text().lower()
+            log = (page.locator("#remoteLog").text_content() or "").lower()
             check("filing queues a command and shows it waiting",
                   "queued" in log and "file alice" in log)
+            check("the log is folded to its newest line",
+                  page.locator("#remoteLogWrap").get_attribute("open") is None
+                  and "file alice" in page.locator("#remoteLast").inner_text().lower())
             page.locator("#pullTuro").click()
             page.wait_for_timeout(700)
             check("pull from turo queues one too",
-                  "pull from turo" in page.locator("#remoteLog").inner_text().lower())
+                  "pull from turo" in (page.locator("#remoteLog").text_content() or "").lower())
 
             check("a charge that is plainly not tolls is said as that, not as a warning",
                   "turo charged $50.00 here for other things: tickets $50.00 — none of it tolls"
@@ -528,12 +597,53 @@ def main() -> int:
                   page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
             check("an invoice filed but unpaid is distinguished from one paid",
                   "filed and unpaid" in text)
-            look = page.locator("#look")
-            check("and the total needing a look is called out",
-                  look.is_visible()
-                  and _money(sum(i["total_cents"] for i in invoices
-                                 if i["charged_but_different"]))
-                      in (look.text_content() or ""))
+            # Turo's charge on a rental that does not square with its
+            # crossings: the warning is on the card, with a way to say it has
+            # been looked at, and the rental keeps its place.
+            card = page.locator("#rental-ffff0000-0000-0000-0000-000000000005")
+            check("the warning sits on the rental it concerns",
+                  "check before asking again" in card.inner_text())
+            card.locator("button", has_text="Mark Turo's charge checked").click()
+            page.wait_for_timeout(700)
+            card = page.locator("#rental-ffff0000-0000-0000-0000-000000000005")
+            check("marking it checked folds the warning, and keeps the rental",
+                  card.count() == 1 and "check before asking again" not in card.inner_text()
+                  and "checked" in card.inner_text().lower()
+                  and card.locator("button", has_text="Undo checked").count() == 1)
+            card.locator("button", has_text="Undo checked").click()
+            page.wait_for_timeout(700)
+
+            # Past the window, folded: kept for the total, out of the way.
+            check("rentals past the window are folded away",
+                  page.locator("details.archive").count() == 1
+                  and page.locator("details.archive").get_attribute("open") is None)
+            # The card's File button follows the ledger's word on that rental.
+            # The stub's ledger and its invoices are separate fixtures, so one
+            # ledger row is pointed at a card's rental for this check.
+            ledger_rows = json.loads(urllib.request.urlopen(urllib.request.Request(
+                f"{API}/api/invoices/ledger",
+                headers={"Authorization": f"Bearer {stub_api.TOLLS_TOKEN}"})).read())
+            fileable = next(r for r in ledger_rows["rows"] if r["state"] == "partly billed")
+            fileable["trip_id"] = "ffff0000-0000-0000-0000-000000000005"
+            page.route("**/api/invoices/ledger", lambda route: route.fulfill(
+                status=200, content_type="application/json", body=json.dumps(ledger_rows)))
+            page.reload(wait_until="domcontentloaded")
+            page.wait_for_timeout(900)
+            katherine = page.locator("#rental-ffff0000-0000-0000-0000-000000000005")
+            check("a rental to file can be filed from its card",
+                  katherine.locator(".quick .btn.go", has_text="File $11.00 on Turo").count() == 1)
+            check("and only a rental the ledger says can be filed",
+                  page.locator(".quick .btn.go").count() == 1)
+            page.unroute("**/api/invoices/ledger")
+
+            # A link to one rental opens it, in the archive too.
+            page.goto(f"{SITE}/invoices/?api={API}#ffff0000-0000-0000-0000-000000000004",
+                      wait_until="domcontentloaded")
+            page.wait_for_timeout(900)
+            linked = page.locator("#rental-ffff0000-0000-0000-0000-000000000004")
+            check("a rental opens from a link to it",
+                  linked.count() == 1 and linked.locator(".line").count() >= 1
+                  and linked.is_visible())
 
             check("no uncaught errors on the invoices page", not errors)
 
@@ -567,6 +677,12 @@ def main() -> int:
             check("search finds a rental by its reservation",
                   page.locator(".trip").count() == 1)
             page.fill("#q", "")
+            check("the trips page has the shared nav", nav_ok("trips"))
+            check("trips are grouped, the work first and finished ones folded",
+                  "needs filing" in trips_text
+                  and page.locator("details.finished").count() <= 1)
+            check("a rental to file is not folded away",
+                  page.locator("#trip-11111111-1111-1111-1111-111111111111").is_visible())
             check("a rental that went over its miles uninvoiced says so on the list",
                   page.locator("#trip-11111111-1111-1111-1111-111111111111 .badge.miles",
                                has_text="mi over").count() == 1)
@@ -603,6 +719,11 @@ def main() -> int:
                   "BWB" in view and "asked" in view and "to bill" in view)
             check("an invoice's date says when it was first seen charged, not that it was charged then",
                   "first seen charged" in view)
+            tolls_link = page.locator(".view a", has_text="Its crossings on Tolls")
+            check("and a link to its crossings on the tolls page",
+                  tolls_link.count() == 1
+                  and "trip=11111111-1111-1111-1111-111111111111"
+                      in (tolls_link.get_attribute("href") or ""))
             check("and a link to the reservation on Turo",
                   page.locator(".view a", has_text="Reservation on Turo").count() == 1)
             check("and everything Turo said, folded away",
@@ -665,6 +786,18 @@ def main() -> int:
             check("an off-platform rental can be added here",
                   page.locator("#a-save").count() == 1 and page.locator("#a-car option").count() > 0)
             check("no uncaught errors on the trips page", not errors)
+
+            # The front door is the work, and the old matcher has a page of its own.
+            page.goto(f"{SITE}/?api={API}", wait_until="domcontentloaded")
+            page.wait_for_timeout(900)
+            check("the site's front door opens Invoices, keeping ?api",
+                  "/invoices/" in page.url and f"api={API}" in page.url)
+            page.goto(f"{SITE}/match/?api={API}", wait_until="domcontentloaded")
+            page.wait_for_timeout(500)
+            check("the two-file matcher has its own page with the nav",
+                  page.locator(".tn-nav a").count() == 4
+                  and page.locator("#api-url").count() == 1)
+            check("no uncaught errors on the matcher or the front door", not errors)
 
             if errors:
                 print("\nconsole/page errors:")

@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="../fleet/icons/icon-180.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="../uniform.css">
+<link rel="stylesheet" href="../shell.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -18,108 +19,118 @@
     padding-bottom:calc(32px + env(safe-area-inset-bottom,0px));
   }
   main{max-width:820px;margin:0 auto;padding:0 16px}
-  header{padding:16px 0 14px;border-bottom:1px solid var(--border);margin-bottom:16px}
+  header{padding:14px 0 12px;border-bottom:1px solid var(--border);margin-bottom:12px}
   .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
-  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .nav{display:flex;gap:7px}
-  .nav a{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-       color:var(--muted);text-decoration:none;border:1px solid var(--border);
-       border-radius:var(--u-radius-md);padding:7px 10px}
-  .nav a:hover{border-color:var(--border2);color:var(--text)}
 
-  .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:18px}
-  .stat{display:flex;flex-direction:column;gap:5px;padding:12px;background:var(--surface2);
-        border:1px solid var(--border);border-radius:var(--u-radius-lg);min-width:0}
-  .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
-           text-transform:uppercase;color:var(--dim)}
-  .stat .v{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em}
-  .stat .n{font-size:11px;color:var(--dim);line-height:1.35}
-  .stat.urgent .v{color:var(--amber)}
-  .ledger{margin-top:26px;border-top:1px solid var(--line);padding-top:14px}
-  .ledger>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:4px 0}
-  .ledger-totals{display:flex;flex-wrap:wrap;gap:14px;margin:10px 0 14px;
-    font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .ledger-totals b{font-weight:600;color:var(--ink)}
-  .lrows{display:flex;flex-direction:column}
-  .lrow{display:flex;gap:12px;justify-content:space-between;padding:10px 2px;
-    border-bottom:1px solid var(--line)}
-  .lmain{min-width:0;flex:1}
-  .lname{font-size:13px;font-weight:600}
-  .lrow .who{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
-  .lfig{font-family:var(--mono);font-size:11.5px;margin-top:4px}
-  .lturo{font-family:var(--mono);font-size:10.5px;color:var(--muted);margin-top:2px}
-  .lturo .unread{color:var(--amber)}
-  .lside{text-align:right;flex-shrink:0;max-width:45%}
-  .lrow .btn{font-size:11px;padding:3px 9px;margin-top:5px}
-  .lrow .trip-link{font-size:10.5px;color:var(--blue);text-decoration:none;font-weight:400}
-  .lquiet>summary{cursor:pointer;font-size:12px;color:var(--dim);padding:10px 0}
-  .ledger-state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
-    text-transform:uppercase;white-space:nowrap}
-  .ledger-state.tobill{color:var(--amber)}
-  .dist.gone{color:var(--dim)}
-  .dist{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:4px;text-transform:none;letter-spacing:0}
-  .ledger-state.expired{color:var(--dim)}
-  .ledger-note{font-size:11px;color:var(--amber);margin-top:3px}
-  .ledger-cover{font-size:12px;color:var(--muted);margin:0 0 10px}
-  .remote{margin:0 0 18px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
-  .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px}
-  .remote-status{font-size:12.5px;color:var(--muted)}
-  .remote-buttons{display:flex;gap:8px;flex-wrap:wrap}
+  /* The totals, as one line under the purpose rather than three tiles above
+     the work: they say how much, the list says what to do. */
+  .totals{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:var(--tn-small);color:var(--dim)}
+  .totals b{font-family:var(--mono);font-weight:600;color:var(--text);font-size:14px}
+  .totals .urgent b{color:var(--amber)}
+  .totals .gone b{color:var(--red)}
+  .stamp{font-size:var(--tn-small);color:var(--dim);margin-top:4px}
+
+  /* The extension: one line and two buttons. Its log folds to the newest
+     entry, so a failed run from last week is not the first thing read. */
+  .remote{margin:0 0 14px;padding:10px 12px;border:1px solid var(--line);border-radius:var(--u-radius-md)}
+  .remote-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 10px}
+  .remote-status{font-size:var(--tn-small);color:var(--muted);flex:1 1 220px;line-height:1.4}
   .remote-status.on{color:var(--green)}
-  .remote-log{list-style:none;margin:10px 0 0;padding:0;font-size:12px}
+  .remote-buttons{display:flex;gap:8px;flex-wrap:wrap}
+  .remote-log-wrap{margin-top:8px;font-size:var(--tn-small)}
+  .remote-log-wrap>summary{cursor:pointer;color:var(--muted);line-height:1.45;list-style-position:inside}
+  .remote-log{list-style:none;margin:6px 0 0;padding:0}
   .remote-log li{padding:5px 0;border-top:1px solid var(--line);line-height:1.45}
-  .remote-log .st{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;
-                  text-transform:uppercase;margin-right:6px;color:var(--dim)}
-  .remote-log .st.running,.remote-log .st.queued{color:var(--amber)}
-  .remote-log .st.done{color:var(--green)}
-  .remote-log .st.failed,.remote-log .st.abandoned{color:var(--red)}
-  .stat.gone .v{color:var(--red)}
+  .st{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.06em;
+      text-transform:uppercase;margin-right:6px;color:var(--dim)}
+  .st.running,.st.queued{color:var(--amber)}
+  .st.done{color:var(--green)}
+  .st.failed,.st.abandoned{color:var(--red)}
 
-  h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
-     color:var(--muted);font-weight:600;margin:22px 0 9px}
+  h2{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.12em;text-transform:uppercase;
+     color:var(--muted);font-weight:600;margin:20px 0 8px}
   h2.urgent{color:var(--amber)}
-  h2.gone{color:var(--red)}
-  .lede{font-size:12.5px;color:var(--dim);line-height:1.5;margin:-4px 0 10px}
+  .lede{font-size:13px;color:var(--dim);line-height:1.5;margin:-2px 0 10px}
 
   .inv{border:1px solid var(--border2);border-radius:var(--u-radius-lg);background:var(--surface);
-       margin-bottom:8px;overflow:hidden}
-  .inv.gone{opacity:.6}
-  .inv-head{display:flex;align-items:center;gap:11px;padding:12px 13px;cursor:pointer}
+       margin-bottom:8px;overflow:hidden;scroll-margin-top:12px}
+  .inv:target,.inv.linked{border-color:var(--u-link)}
+  .inv-head{display:flex;align-items:flex-start;gap:11px;padding:12px 13px;cursor:pointer;
+            width:100%;background:none;border:0;font:inherit;color:inherit;text-align:left}
   .inv-head:hover{background:var(--surface2)}
   .inv-body{flex:1;min-width:0}
-  .inv .who{font-size:15px;font-weight:600;letter-spacing:-.005em}
-  .inv .meta{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
-  .inv .clock{font-family:var(--mono);font-size:11px;margin-top:3px}
+  .inv .who{font-size:var(--tn-title);font-weight:600;letter-spacing:-.005em}
+  .inv .meta{font-size:var(--tn-small);color:var(--muted);margin-top:3px}
+  .inv .clock{font-size:var(--tn-small);margin-top:3px;font-weight:600}
   .inv .clock.soon{color:var(--amber)}
   .inv .clock.gone{color:var(--red)}
   .inv .clock.off{color:var(--blue)}
   /* Already asked for. Amber when the amounts disagree, because that is a
      judgement call; blue when an invoice is merely filed and unpaid. */
-  .inv .asked{font-family:var(--mono);font-size:10.5px;margin-top:3px;color:var(--blue)}
+  .inv .asked{font-size:var(--tn-small);margin-top:4px;color:var(--blue);line-height:1.45}
   .inv .asked.odd{color:var(--amber)}
-  .note{font-size:12.5px;color:var(--amber);line-height:1.5;margin:-6px 0 14px}
-  .inv .amt{font-family:var(--mono);font-size:16px;font-weight:600;flex-shrink:0}
+  .inv .asked.seen{color:var(--dim)}
+  .inv .side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
+  .inv .amt{font-family:var(--mono);font-size:16px;font-weight:600}
+  /* Says the card opens, which a bordered box alone did not. */
+  .inv .more{font-size:12px;color:var(--u-link)}
+  .inv .more::after{content:" ▾"}
+  .inv.open .more::after{content:" ▴"}
+  .quick{display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:0 13px 12px}
 
   .lines{border-top:1px solid var(--border);padding:4px 13px 10px}
-  .line{display:flex;align-items:baseline;gap:10px;padding:6px 0;font-size:12.5px}
+  .line{display:flex;align-items:baseline;gap:10px;padding:7px 0;font-size:13.5px}
   .line + .line{border-top:1px solid var(--border)}
-  .line .when{font-family:var(--mono);font-size:10.5px;color:var(--dim);flex-shrink:0;
-       min-width:104px}
+  .line .when{font-size:var(--tn-small);color:var(--dim);flex-shrink:0;min-width:112px}
   .line .where{flex:1;min-width:0}
-  .line .late{font-family:var(--mono);font-size:10px;color:var(--amber)}
-  .line .cost{font-family:var(--mono);font-size:12px;flex-shrink:0}
+  .line .late{font-size:12px;color:var(--amber)}
+  .line .cost{font-family:var(--mono);font-size:13px;flex-shrink:0}
   .acts{display:flex;gap:8px;flex-wrap:wrap;padding:10px 13px 12px;border-top:1px solid var(--border)}
-  .btn{font:inherit;font-size:12.5px;font-weight:600;color:var(--text);background:var(--surface2);
+  .btn{font:inherit;font-size:13px;font-weight:600;color:var(--text);background:var(--surface2);
        border:1px solid var(--border2);border-radius:var(--u-radius-md);padding:9px 13px;cursor:pointer;
        min-height:40px;text-decoration:none;display:inline-flex;align-items:center}
   .btn:hover{border-color:var(--muted)}
+  .btn:disabled{opacity:.5;cursor:default}
   .btn.go{color:var(--green);border-color:var(--u-ok-line)}
   .btn.go:hover{background:var(--u-ok-bg)}
+  .btn.small{min-height:34px;padding:6px 11px;font-size:12.5px}
 
-  .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px;line-height:1.55}
+  /* What can no longer be filed, folded: kept so the totals add up, not
+     because there is anything to do about it. */
+  details.archive{margin-top:20px;border-top:1px solid var(--line);padding-top:10px}
+  details.archive>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:6px 0;line-height:1.45}
+  details.archive .inv{opacity:.7}
+
+  .ledger{margin-top:20px;border-top:1px solid var(--line);padding-top:10px}
+  .ledger>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:6px 0}
+  .ledger-totals{display:flex;flex-wrap:wrap;gap:6px 14px;margin:10px 0 14px;
+    font-family:var(--mono);font-size:12px;color:var(--dim)}
+  .ledger-cover{font-size:13px;color:var(--muted);margin:0 0 10px}
+  .lrows{display:flex;flex-direction:column}
+  .lrow{display:flex;gap:12px;justify-content:space-between;padding:10px 2px;
+    border-bottom:1px solid var(--line)}
+  .lmain{min-width:0;flex:1}
+  .lname{font-size:14px;font-weight:600}
+  .lrow .who{font-size:var(--tn-small);color:var(--dim);margin-top:2px}
+  .lfig{font-family:var(--mono);font-size:12.5px;margin-top:4px}
+  .lturo{font-family:var(--mono);font-size:12px;color:var(--muted);margin-top:2px}
+  .lturo .unread{color:var(--amber)}
+  .lside{text-align:right;flex-shrink:0;max-width:45%}
+  .lrow .btn{font-size:12px;padding:4px 10px;margin-top:5px;min-height:32px}
+  .lrow .trip-link{font-size:12px;color:var(--blue);text-decoration:none;font-weight:400}
+  .lquiet>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:10px 0}
+  .ledger-state{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.06em;
+    text-transform:uppercase;white-space:nowrap}
+  .ledger-state.tobill{color:var(--amber)}
+  .ledger-state.expired{color:var(--dim)}
+  .dist{font-family:var(--mono);font-size:12px;color:var(--amber);margin-top:4px}
+  .dist.gone{color:var(--dim)}
+  .ledger-note{font-size:12.5px;color:var(--amber);margin-top:3px;line-height:1.45}
+
+  .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:14px;line-height:1.55}
   .err{padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);border:1px solid var(--u-err-line);
-       color:var(--red);font-size:13px;line-height:1.45;margin-bottom:14px}
+       color:var(--red);font-size:13.5px;line-height:1.45;margin-bottom:14px}
 </style>
 </head>
 <body>
@@ -127,36 +138,34 @@
   <header>
     <div class="row">
       <h1>Invoices<span class="u-dot">.</span></h1>
-      <div class="nav"><a href="../trips/">Trips</a><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
+      <nav data-tn-nav="invoices"></nav>
+    </div>
+    <p class="tn-purpose">What to ask Turo for, soonest deadline first.</p>
+    <div class="totals">
+      <span>to bill <b id="s-total">—</b></span>
+      <span class="urgent">due within 3 weeks <b id="s-urgent">—</b></span>
+      <span class="gone">past the window <b id="s-gone">—</b></span>
     </div>
     <div class="stamp" id="stamp">loading…</div>
   </header>
 
   <div class="err" id="err" hidden></div>
 
-  <div class="stats">
-    <div class="stat"><div class="k">to bill</div><div class="v" id="s-total">—</div>
-      <div class="n">across all rentals</div></div>
-    <div class="stat urgent"><div class="k">due soon</div><div class="v" id="s-urgent">—</div>
-      <div class="n" id="s-urgent-note">within 3 weeks</div></div>
-    <div class="stat gone"><div class="k">past the window</div><div class="v" id="s-gone">—</div>
-      <div class="n">cannot be filed</div></div>
-  </div>
-
-  <div class="note" id="look" hidden></div>
-
   <!-- The site cannot talk to Turo; the extension in the operator's own
        browser can. A button here queues a command and the extension runs it
        within a few seconds, if Chrome is open somewhere with it installed. -->
-  <section class="remote" id="remote" hidden>
+  <section class="remote" id="remote">
     <div class="remote-head">
       <span class="remote-status" id="remoteStatus">looking for the extension…</span>
       <span class="remote-buttons">
-        <button class="btn" id="pullTuro" type="button">Pull from Turo</button>
-        <button class="btn" id="readEzpass" type="button">Read E-ZPass</button>
+        <button class="btn small" id="pullTuro" type="button">Pull from Turo</button>
+        <button class="btn small" id="readEzpass" type="button">Read E-ZPass</button>
       </span>
     </div>
-    <ol class="remote-log" id="remoteLog"></ol>
+    <details class="remote-log-wrap" id="remoteLogWrap" hidden>
+      <summary id="remoteLast"></summary>
+      <ol class="remote-log" id="remoteLog"></ol>
+    </details>
   </section>
 
   <div id="groups"></div>
@@ -176,23 +185,19 @@
   </details>
 </main>
 
+<script src="../shell.js"></script>
 <script>
 (function () {
   "use strict";
 
-  var API = (function () {
-    var override = new URLSearchParams(location.search).get("api");
-    if (override) return override.replace(/\/$/, "");
-    var meta = document.querySelector('meta[name="turonomics-api"]');
-    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
-  })();
+  var API = TN.API;
+  var name = TN.personName;
 
   // Anything inside this is the work for this week rather than this month. The
   // API decides the same number for its own total; this is only for grouping.
   var URGENT_DAYS = 21;
 
-  var state = { data: null, busy: false, open: {} };
-  var TOKEN_KEY = "turonomics.tolls.token";
+  var state = { data: null, busy: false, open: {}, ledger: {}, ext: null };
 
   function el(id) { return document.getElementById(id); }
   function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
@@ -220,44 +225,11 @@
     ));
   }
 
-  function token() {
-    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
-  }
-  function rememberToken(v) {
-    try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); }
-    catch (e) { /* private window */ }
-  }
-  function ensureToken() {
-    if (!state.data || !state.data.token_required || token()) return true;
-    var entered = window.prompt("This API needs the tolls token (TOLLS_TOKEN) to make changes.");
-    if (!entered) return false;
-    rememberToken(entered.trim());
-    return true;
-  }
-  function authHeaders() {
-    var v = token();
-    return v ? { Authorization: "Bearer " + v } : {};
-  }
-  // A read that needs the token: tried with the saved one, and once more after
-  // asking if the API refuses it. The lists name guests and what they owe.
-  function readAuthed(path) {
-    var go = function () { return fetch(API + path, { headers: authHeaders() }); };
-    return go().then(function (r) {
-      if (r.status !== 401) return r;
-      rememberToken("");
-      var entered = window.prompt("This page needs the tolls token (TOLLS_TOKEN).");
-      if (!entered) throw new Error("the token is needed to see this");
-      rememberToken(entered.trim());
-      return go();
-    }).then(function (r) {
-      if (r.status === 401) { rememberToken(""); throw new Error("the token was rejected"); }
-      return r;
-    });
-  }
-
+  // A rejected token is a wrong token. Forgetting it means the next attempt
+  // asks again rather than failing the same way forever.
   function handleStatus(r) {
     if (r.status === 401) {
-      rememberToken("");
+      TN.rememberToken("");
       throw new Error("the token was rejected — it will be asked for again");
     }
     return r;
@@ -306,26 +278,23 @@
       link.target = "_blank";
       link.rel = "noreferrer";
     }
+    var trip = add(acts, "a", "btn", "The whole trip");
+    trip.href = TN.withApi("../trips/") + "#" + invoice.trip_id;
     var done = add(acts, "button", "btn go",
                    "Mark " + money(invoice.total_cents) + " billed back");
-    done.addEventListener("click", function (ev) {
-      ev.stopPropagation();
-      markBilled(invoice);
-    });
+    done.type = "button";
+    done.addEventListener("click", function () { markBilled(invoice); });
   }
 
-  function renderInvoice(invoice, into) {
-    var card = add(into, "div", "inv" + (invoice.expired ? " gone" : ""));
-    var head = add(card, "div", "inv-head");
-    var body = add(head, "div", "inv-body");
-    add(body, "div", "who",
-        (invoice.guest_name || "No name") + " — " + (invoice.vehicle_nickname || "?"));
-    add(body, "div", "meta",
-        invoice.lines.length + (invoice.lines.length === 1 ? " crossing · " : " crossings · ") +
-        when(invoice.starts_at) + " → " + when(invoice.ends_at));
-    var clock = clockNote(invoice);
-    if (clock) add(body, "div", "clock " + clock.kind, clock.text);
+  // The ledger's word on whether this rental can be filed from here now.
+  function fileable(invoice) {
+    var row = state.ledger[invoice.trip_id];
+    return !!(row && invoice.turo_trip_id &&
+              (row.state === "to bill" || row.state === "partly billed") &&
+              row.days_left != null && row.days_left >= 0) ? row : null;
+  }
 
+  function renderAsked(invoice, body) {
     // What Turo has already been asked for on this rental. Shown because
     // invoicing money the guest has paid is a dispute, not income.
     if (invoice.charged_but_different) {
@@ -339,9 +308,15 @@
               " of tolls is missing"
             : "")
         : "some of it has not been broken down yet — pull from Turo to read it";
-      add(body, "div", "asked odd",
-          "Turo already charged " + money(invoice.charged_cents) + " here — " + why +
-          ", so check before asking again");
+      if (invoice.checked_at) {
+        add(body, "div", "asked seen",
+            "Turo charged " + money(invoice.charged_cents) + " here — checked " +
+            when(invoice.checked_at) + " (" + why + ")");
+      } else {
+        add(body, "div", "asked odd",
+            "Turo already charged " + money(invoice.charged_cents) + " here — " + why +
+            ", so check before asking again");
+      }
       if (invoice.charged_lines && invoice.charged_lines.length) {
         add(body, "div", "asked", "charges: " + invoice.charged_lines.join(" · "));
       }
@@ -357,13 +332,61 @@
       add(body, "div", "asked",
           "an invoice for " + money(invoice.pending_cents) + " is filed and unpaid");
     }
-    add(head, "div", "amt", money(invoice.total_cents));
+  }
+
+  function renderInvoice(invoice, into) {
+    var open = !!state.open[invoice.trip_id];
+    var card = add(into, "div", "inv" + (open ? " open" : "") +
+                   (state.linked === invoice.trip_id ? " linked" : ""));
+    card.id = "rental-" + invoice.trip_id;
+    var head = add(card, "button", "inv-head");
+    head.type = "button";
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    var body = add(head, "div", "inv-body");
+    add(body, "div", "who",
+        (name(invoice.guest_name) || "No name") + " — " + (invoice.vehicle_nickname || "?"));
+    add(body, "div", "meta",
+        when(invoice.starts_at) + " → " + when(invoice.ends_at) + " · " +
+        invoice.lines.length + (invoice.lines.length === 1 ? " crossing" : " crossings"));
+    var clock = clockNote(invoice);
+    if (clock) add(body, "div", "clock " + clock.kind, clock.text);
+    renderAsked(invoice, body);
+    var side = add(head, "div", "side");
+    add(side, "div", "amt", money(invoice.total_cents));
+    add(side, "div", "more", open ? "hide" : "crossings");
+
+    // The two things to do with a rental, on its face rather than behind a
+    // click: file it, and say Turo's charge has been looked at.
+    var quick = document.createElement("div");
+    quick.className = "quick";
+    var row = fileable(invoice);
+    if (row) {
+      var file = add(quick, "button", "btn go small", "File " + money(row.unfiled_cents) + " on Turo");
+      file.type = "button";
+      if (state.ext && !state.ext.listening && !state.ext.extension_seen_at) {
+        file.disabled = true;
+        add(quick, "span", "tn-why-off", "needs the extension installed");
+      }
+      file.addEventListener("click", function () { queueFiling(row, invoice); });
+    }
+    if (invoice.charged_but_different && !invoice.expired) {
+      var check = add(quick, "button", "btn small",
+                      invoice.checked_at ? "Undo checked" : "Mark Turo's charge checked");
+      check.type = "button";
+      check.addEventListener("click", function () { markChecked(invoice); });
+    }
+    if (quick.firstChild) card.appendChild(quick);
 
     // Collapsed by default: the list is for deciding what to do next, and the
     // lines are for when one has been picked.
-    if (state.open[invoice.trip_id]) renderLines(invoice, card);
+    if (open) renderLines(invoice, card);
     head.addEventListener("click", function () {
       state.open[invoice.trip_id] = !state.open[invoice.trip_id];
+      // The address names the rental, so it can be sent or bookmarked.
+      try {
+        history.replaceState(null, "", state.open[invoice.trip_id]
+          ? "#" + invoice.trip_id : location.pathname + location.search);
+      } catch (e) { /* file:// */ }
       render();
     });
   }
@@ -381,20 +404,6 @@
     el("s-total").textContent = money(data.billable_cents);
     el("s-urgent").textContent = money(data.urgent_cents);
     el("s-gone").textContent = money(data.expired_cents);
-    el("s-urgent-note").textContent = "within 3 weeks of the " +
-      data.window_days + "-day deadline";
-
-    // Charged invoices whose totals matched nothing on file. Not written off,
-    // because an invoice covers cleaning and fuel as readily as tolls.
-    var look = el("look");
-    if (data.needs_a_look_cents) {
-      look.textContent = money(data.needs_a_look_cents) +
-        " of crossings sit on rentals Turo has already charged for a different amount. " +
-        "Those could be paid already — worth checking before billing again.";
-      look.hidden = false;
-    } else {
-      look.hidden = true;
-    }
 
     var groups = el("groups");
     clear(groups);
@@ -420,28 +429,53 @@
     group("Off-platform", "",
           "Arranged outside Turo, so there is nothing to file and no deadline — " +
           "these have to be invoiced directly.", off, groups);
-    group("Past the window", "gone",
-          "Turo will no longer accept these. Kept visible so the total is honest, " +
-          "not because there is anything left to do about them.", expired, groups);
+    if (expired.length) {
+      var archive = add(groups, "details", "archive");
+      // Open when a link points into it, so the linked rental is visible, and
+      // kept as it was left across the redraws the extension's polling makes.
+      archive.open = !!state.archiveOpen ||
+        expired.some(function (i) { return state.linked === i.trip_id; });
+      archive.addEventListener("toggle", function () { state.archiveOpen = archive.open; });
+      add(archive, "summary", null, "Past the window — " + expired.length +
+          (expired.length === 1 ? " rental, " : " rentals, ") +
+          money(data.expired_cents) + ". Turo no longer takes these; kept so the total is honest.");
+      expired.forEach(function (invoice) { renderInvoice(invoice, archive); });
+    }
+  }
+
+  function post(path) {
+    return TN.needToken(state.data && state.data.token_required).then(function (ok) {
+      if (!ok) throw new Error("the token is needed for this");
+      return fetch(API + path, { method: "POST", headers: TN.authHeaders() });
+    }).then(handleStatus).then(function (r) {
+      if (!r.ok) throw new Error("the API said " + r.status);
+      return r.json();
+    });
   }
 
   function markBilled(invoice) {
-    if (state.busy || !ensureToken()) return;
+    if (state.busy) return;
     if (!window.confirm(
       "Mark " + money(invoice.total_cents) + " from " +
-      (invoice.guest_name || "this rental") + " as billed back?\n\n" +
+      (name(invoice.guest_name) || "this rental") + " as billed back?\n\n" +
       "This records that you filed it. It does not file anything itself."
     )) return;
     state.busy = true;
-    fetch(API + "/api/invoices/" + invoice.trip_id + "/recovered",
-          { method: "POST", headers: authHeaders() })
-      .then(handleStatus)
-      .then(function (r) {
-        if (!r.ok) throw new Error("the API said " + r.status);
-        return r.json();
-      })
+    post("/api/invoices/" + invoice.trip_id + "/recovered")
       .then(function () { return load(); })
       .catch(function (e) { fail("Could not mark that invoice: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  // Says Turo's charge on this rental has been looked at. The API keeps it
+  // with the charge it covered, so a new charge from Turo brings the warning
+  // back by itself.
+  function markChecked(invoice) {
+    if (state.busy) return;
+    state.busy = true;
+    post("/api/invoices/" + invoice.trip_id + "/checked" + (invoice.checked_at ? "?undo=true" : ""))
+      .then(function () { return load(); })
+      .catch(function (e) { fail("Could not mark it checked: " + e.message); })
       .then(function () { state.busy = false; });
   }
 
@@ -455,7 +489,9 @@
     body.textContent = "";
     quiet.textContent = "";
     var quietCount = 0;
+    state.ledger = {};
     (data.rows || []).forEach(function (row) {
+      state.ledger[row.trip_id] = row;
       // Folded: covered by a statement, no crossings, nothing from Turo. A
       // rental outside every statement stays in view, since importing another
       // date range is something to do about it.
@@ -464,94 +500,62 @@
       if (empty) quietCount++;
       var item = document.createElement("div");
       item.className = "lrow";
-      var main = document.createElement("div");
-      main.className = "lmain";
-      var name = document.createElement("div");
-      name.className = "lname";
-      name.textContent = (row.vehicle_nickname || "—") + " · " + (row.guest_name || "—");
+      var main = add(item, "div", "lmain");
+      var title = add(main, "div", "lname",
+                      (row.vehicle_nickname || "—") + " · " + (name(row.guest_name) || "—"));
       // Everything about the rental — Turo's side, invoices, crossings — is
       // one click away on the trips page.
       var link = document.createElement("a");
-      link.href = "../trips/#" + row.trip_id;
+      link.href = TN.withApi("../trips/") + "#" + row.trip_id;
       link.className = "trip-link";
       link.textContent = "trip ›";
-      name.appendChild(document.createTextNode(" "));
-      name.appendChild(link);
-      main.appendChild(name);
-      var meta = document.createElement("div");
-      meta.className = "who";
-      meta.textContent = String(row.ends_at).slice(0, 10) +
-        (row.turo_trip_id ? " · " + row.turo_trip_id : " · off-platform") +
+      title.appendChild(document.createTextNode(" "));
+      title.appendChild(link);
+      add(main, "div", "who", "ended " + when(row.ends_at) +
+        (row.turo_trip_id ? "" : " · off-platform") +
         (row.days_left == null ? "" : row.days_left < 0 ? " · window closed" :
-          " · " + row.days_left + " days left");
-      main.appendChild(meta);
+          " · " + row.days_left + " days left"));
       var ours = [["tolls", row.tolls_cents], ["to bill", row.unfiled_cents],
                   ["asked", row.filed_cents], ["settled", row.recovered_cents]]
         .filter(function (p) { return p[1]; })
         .map(function (p) { return p[0] + " " + money(p[1]); });
-      var fig = document.createElement("div");
-      fig.className = "lfig";
-      fig.textContent = ours.length ? ours.join(" · ") : "no crossings";
-      main.appendChild(fig);
+      add(main, "div", "lfig", ours.length ? ours.join(" · ") : "no crossings");
       var kinds = [["tolls", row.turo_tolls_cents], ["tickets", row.turo_tickets_cents],
                    ["distance", row.turo_distance_cents], ["other", row.turo_other_cents]]
         .filter(function (p) { return p[1]; })
         .map(function (p) { return p[0] + " " + money(p[1]); });
       if (row.charged_cents || kinds.length || row.turo_unknown_cents) {
-        var turo = document.createElement("div");
-        turo.className = "lturo";
         // What Turo invoiced, by kind, and how much of it has been charged:
         // an invoice can be asked for and not yet paid.
-        turo.textContent = "Turo invoiced " +
+        var turo = add(main, "div", "lturo", "Turo invoiced " +
           (kinds.length ? kinds.join(" · ") : money(row.asked_cents)) +
-          " · charged " + money(row.charged_cents);
+          " · charged " + money(row.charged_cents));
         if (row.turo_unknown_cents) {
           // Money Turo invoiced that nobody has broken down yet: amber,
           // because it is the part that may be these tolls.
-          var unread = document.createElement("span");
-          unread.className = "unread";
-          unread.textContent = " · +" + money(row.turo_unknown_cents) + " not broken down";
-          turo.appendChild(unread);
+          add(turo, "span", "unread", " · +" + money(row.turo_unknown_cents) + " not broken down");
         }
-        main.appendChild(turo);
       }
-      if (row.note) {
-        var note = document.createElement("div");
-        note.className = "ledger-note";
-        note.textContent = row.note;
-        main.appendChild(note);
-      }
-      item.appendChild(main);
-      var side = document.createElement("div");
-      side.className = "lside";
-      var state = document.createElement("div");
-      state.className = "ledger-state " +
+      if (row.note) add(main, "div", "ledger-note", row.note);
+      var side = add(item, "div", "lside");
+      add(side, "div", "ledger-state " +
         (row.state === "to bill" || row.state === "partly billed" ||
          row.state === "short" || row.state.indexOf("check ") === 0 ||
          row.state === "no statement yet" ? "tobill" :
-         row.state === "expired" ? "expired" : "");
-      state.textContent = row.state;
-      side.appendChild(state);
+         row.state === "expired" ? "expired" : ""), row.state);
       if (row.turo_trip_id && (row.state === "to bill" || row.state === "partly billed") &&
           row.days_left != null && row.days_left >= 0) {
-        var file = document.createElement("button");
+        var file = add(side, "button", "btn go", "File " + money(row.unfiled_cents));
         file.type = "button";
-        file.className = "btn go";
-        file.textContent = "File " + money(row.unfiled_cents);
         file.addEventListener("click", function () { queueFiling(row); });
-        side.appendChild(file);
       }
       // Additional distance beside the tolls, tolls | distance, while the
       // window is open. Filed on Turo for now: the site cannot file it yet.
       if (row.distance_unbilled_cents && row.days_left != null) {
-        var dist = document.createElement("div");
         var closed = row.days_left < 0;
-        dist.className = "dist" + (closed ? " gone" : "");
-        dist.textContent = "| " + money(row.distance_unbilled_cents) + " distance" +
-          (closed ? " expired" : "");
-        side.appendChild(dist);
+        add(side, "div", "dist" + (closed ? " gone" : ""),
+            "| " + money(row.distance_unbilled_cents) + " distance" + (closed ? " expired" : ""));
       }
-      item.appendChild(side);
       (empty ? quiet : body).appendChild(item);
     });
     el("ledgerQuietWrap").hidden = !quietCount;
@@ -571,6 +575,8 @@
         when(data.statements_to) + ". Rentals outside that read “no statement yet”."
       : "No E-ZPass statement imported yet.";
     el("ledgerWrap").hidden = !(data.rows || []).length;
+    // The cards' File buttons come from the ledger's word.
+    render();
   }
 
   // -------------------------------------------------------------------------
@@ -584,38 +590,47 @@
     if (s < 90) return s + "s ago";
     var m = Math.round(s / 60);
     if (m < 90) return m + " min ago";
-    return Math.round(m / 60) + " h ago";
+    var h = Math.round(m / 60);
+    return h < 48 ? h + " h ago" : Math.round(h / 24) + " days ago";
+  }
+
+  function commandText(c) {
+    return (c.kind === "pull" ? "Pull from Turo" :
+      c.kind === "tolls" ? "Read E-ZPass" :
+      "File " + (name(c.guest_name) || "rental") + (c.turo_trip_id ? " · " + c.turo_trip_id : "")) +
+      (c.result ? " — " + c.result : "");
   }
 
   function renderCommands(data) {
-    el("remote").hidden = false;
+    state.ext = data;
     var status = el("remoteStatus");
+    var never = !data.listening && !data.extension_seen_at;
     if (data.listening) {
       status.className = "remote-status on";
       status.textContent = "Extension listening" +
         (data.extension_version ? " (v" + data.extension_version + ")" : "") +
-        " — buttons here run in your browser within a few seconds.";
+        " — these run within seconds.";
     } else {
       status.className = "remote-status";
       status.textContent = data.extension_seen_at
-        ? "Extension last seen " + ago(data.extension_seen_at) +
-          " — open Chrome where it is installed, and anything queued will run then."
-        : "No extension has checked in yet — install 1.10.0 or later.";
+        ? "Extension asleep, seen " + ago(data.extension_seen_at) +
+          " — queued until Chrome wakes it."
+        : "No extension has checked in yet — install it in Chrome to use these.";
     }
+    // Kept on screen whatever the extension is doing, and disabled only when
+    // there is no extension at all, so it is clear what they are for.
+    el("pullTuro").disabled = never;
+    el("readEzpass").disabled = never;
+
     var log = el("remoteLog");
     log.textContent = "";
     var pending = false;
     var finished = false;
-    (data.commands || []).slice(0, 6).forEach(function (c) {
+    var shown = (data.commands || []).slice(0, 6);
+    shown.forEach(function (c) {
       var li = document.createElement("li");
-      var st = document.createElement("span");
-      st.className = "st " + c.state;
-      st.textContent = c.state;
-      li.appendChild(st);
-      var what = c.kind === "pull" ? "Pull from Turo" :
-        c.kind === "tolls" ? "Read E-ZPass" :
-        "File " + (c.guest_name || "rental") + (c.turo_trip_id ? " · " + c.turo_trip_id : "");
-      li.appendChild(document.createTextNode(what + (c.result ? " — " + c.result : "")));
+      add(li, "span", "st " + c.state, c.state);
+      li.appendChild(document.createTextNode(commandText(c)));
       log.appendChild(li);
       if (c.state === "queued" || c.state === "running") pending = true;
       // A command seen pending and now finished means the money moved; the
@@ -623,7 +638,19 @@
       if (remote.active[c.id] && c.state !== "queued" && c.state !== "running") finished = true;
       remote.active[c.id] = c.state === "queued" || c.state === "running";
     });
+    // The newest entry on the fold, with when; the rest under it.
+    var wrap = el("remoteLogWrap");
+    wrap.hidden = !shown.length;
+    var last = el("remoteLast");
+    last.textContent = "";
+    if (shown.length) {
+      add(last, "span", "st " + shown[0].state, shown[0].state);
+      last.appendChild(document.createTextNode(commandText(shown[0]) +
+        (shown[0].requested_at ? " · " + ago(shown[0].requested_at) : "") +
+        (shown.length > 1 ? " · " + (shown.length - 1) + " earlier" : "")));
+    }
     if (finished) load();
+    render();
     schedule(pending ? 4000 : 30000);
   }
 
@@ -635,32 +662,40 @@
   function loadCommands() {
     return fetch(API + "/api/commands")
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) { if (data) renderCommands(data); else schedule(30000); })
-      .catch(function () { schedule(30000); });
+      .then(function (data) {
+        if (data) renderCommands(data);
+        else { el("remoteStatus").textContent = "Could not ask the API about the extension."; schedule(30000); }
+      })
+      .catch(function () {
+        el("remoteStatus").textContent = "Could not ask the API about the extension.";
+        schedule(30000);
+      });
   }
 
   function queue(body) {
-    if (!ensureToken()) return Promise.resolve();
-    return fetch(API + "/api/commands", {
-      method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
-      body: JSON.stringify(body)
-    })
-      .then(handleStatus)
-      .then(function (r) {
-        return r.json().catch(function () { return {}; }).then(function (b) {
-          // 409 is the ledger refusing, and its reason is the useful part.
-          if (!r.ok) throw new Error(b.detail || ("the API said " + r.status));
-          return b;
-        });
+    return TN.needToken(state.data && state.data.token_required).then(function (ok) {
+      if (!ok) return null;
+      return fetch(API + "/api/commands", {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, TN.authHeaders()),
+        body: JSON.stringify(body)
       })
-      .then(function () { return loadCommands(); })
-      .catch(function (e) { fail("Could not queue that: " + e.message); });
+        .then(handleStatus)
+        .then(function (r) {
+          return r.json().catch(function () { return {}; }).then(function (b) {
+            // 409 is the ledger refusing, and its reason is the useful part.
+            if (!r.ok) throw new Error(b.detail || ("the API said " + r.status));
+            return b;
+          });
+        })
+        .then(function () { return loadCommands(); });
+    }).catch(function (e) { fail("Could not queue that: " + e.message); });
   }
 
-  function queueFiling(row) {
+  function queueFiling(row, invoice) {
+    var guest = name(row.guest_name || (invoice && invoice.guest_name));
     if (!window.confirm(
-      "File " + money(row.unfiled_cents) + " of tolls to " + (row.guest_name || "this guest") +
+      "File " + money(row.unfiled_cents) + " of tolls to " + (guest || "this guest") +
       " on Turo?\n\nYour browser's extension files it, with the evidence sheet attached."
     )) return;
     queue({ kind: "file", trip_id: row.trip_id });
@@ -675,7 +710,7 @@
   // token (worth one more try once the list has settled on a new one) from
   // an outage (not).
   function loadLedger() {
-    return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
+    return fetch(API + "/api/invoices/ledger", { headers: TN.authHeaders() })
       .then(function (r) {
         if (!r.ok) return r.status;
         return r.json().then(function (data) { renderLedger(data); return r.status; });
@@ -688,6 +723,20 @@
       });
   }
 
+  // A link to one rental — #<trip id>, from the trips page or pasted — opens
+  // it and brings it into view, in the archive too.
+  function openFromHash() {
+    var wanted = location.hash.replace(/^#/, "");
+    if (!wanted || !state.data) return;
+    var found = (state.data.invoices || []).some(function (i) { return i.trip_id === wanted; });
+    if (!found) return;
+    state.linked = wanted;
+    state.open[wanted] = true;
+    render();
+    var card = el("rental-" + wanted);
+    if (card && card.scrollIntoView) card.scrollIntoView({ block: "start" });
+  }
+
   function load() {
     if (!remote.polling) loadCommands();
     // Both reads go out at once when a token is already saved: each is a
@@ -696,8 +745,8 @@
     // and the ledger follows with whatever it settled on. A saved token the
     // API refuses gets the same treatment: the ledger is tried once more
     // after the list has replaced it.
-    var ledger = token() ? loadLedger() : Promise.resolve(401);
-    return readAuthed("/api/invoices")
+    var ledger = TN.token() ? loadLedger() : Promise.resolve(401);
+    return TN.authed("/api/invoices", null, "This page names guests, so it needs the tolls token.")
       .then(function (r) {
         ledger.then(function (status) { if (status === 401) loadLedger(); });
         if (!r.ok) throw new Error("the API said " + r.status);
@@ -716,7 +765,9 @@
       });
   }
 
-  load();
+  window.addEventListener("hashchange", openFromHash);
+  window.addEventListener("tn-token-saved", function () { load(); });
+  load().then(openFromHash);
 })();
 </script>
 </body>

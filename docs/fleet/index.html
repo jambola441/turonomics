@@ -18,6 +18,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="vendor/leaflet.css">
 <link rel="stylesheet" href="../uniform.css">
+<link rel="stylesheet" href="../shell.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   html,body{height:100%}
@@ -30,9 +31,10 @@
   header{padding:var(--u-space-4) 20px var(--u-space-3);border-bottom:1px solid var(--border);flex-shrink:0}
   .row{display:flex;align-items:center;justify-content:space-between;gap:var(--u-space-3);flex-wrap:wrap}
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
-  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
+  .stamp{font-size:var(--tn-small);color:var(--dim)}
+  header .tn-nav{margin-top:var(--u-space-2)}
   .legend{display:flex;gap:var(--u-space-2) var(--u-space-4);flex-wrap:wrap;margin-top:var(--u-space-3)}
-  .legend div{display:flex;align-items:center;gap:6px;font-size:11.5px;color:var(--muted)}
+  .legend div{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:var(--u-map)}
   .leaflet-container{background:var(--u-map);font-family:inherit}
@@ -89,7 +91,7 @@
   .stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:var(--u-space-2)}
   .stat{display:flex;flex-direction:column;gap:4px;padding:10px 11px;background:var(--surface2);
         border:1px solid var(--border);border-radius:var(--u-radius-md);min-width:0}
-  .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
+  .stat .k{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;text-transform:uppercase;color:var(--dim)}
   .stat .v{font-family:var(--mono);font-size:15px;font-weight:600;letter-spacing:-.01em}
   .note{font-size:12.5px;line-height:1.45;padding:10px 12px;border-radius:var(--u-radius-md)}
   .ask{display:flex;flex-direction:column;gap:9px;padding:14px;border-radius:var(--u-radius-lg);
@@ -168,6 +170,10 @@
         <div class="stamp" id="stamp">loading…</div>
       </div>
     </div>
+    <!-- The same nav as the other pages, so the run sheet is not a dead end.
+         It stays its own installable app (the manifest and service worker
+         are for street-cleaning alerts on the phone), but not a separate site. -->
+    <nav data-tn-nav="fleet"></nav>
     <div class="legend">
       <div><span class="dot" style="background:var(--red)"></span>Move soon</div>
       <div><span class="dot" style="background:var(--amber)"></span>Needs prep</div>
@@ -186,6 +192,7 @@
   </div>
 
 <script src="vendor/leaflet.js"></script>
+<script src="../shell.js"></script>
 <script>
 (function () {
   "use strict";
@@ -891,6 +898,12 @@
     if (typeof L === "undefined") throw new Error("map library unavailable");
     map = L.map("map", { zoomControl: false, attributionControl: true })
            .setView([40.6795, -73.9705], 15);
+    // The map's box settles after Leaflet first measures it (the header's
+    // fonts, the sheet below filling in), and a stale size drew a small square
+    // of tiles until something else made it look again.
+    if (typeof ResizeObserver === "function") {
+      new ResizeObserver(function () { map.invalidateSize(); }).observe(document.getElementById("map"));
+    }
     L.control.zoom({ position: "bottomright" }).addTo(map);
     // The basemap is chosen by the API, not hard-coded here: Thunderforest
     // when a key is configured, OpenStreetMap otherwise. The key is public by

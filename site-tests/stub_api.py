@@ -385,7 +385,7 @@ INVOICES = [
              charged_cents=5555, charged_but_different=True,
              charged_tolls_cents=1555,
              charged_lines=["7 tolls $15.55", "22 mi additional distance $40.00"]),
-    _invoice(trip_id="ffff0000-0000-0000-0000-000000000006", guest_name="Austin",
+    _invoice(trip_id="ffff0000-0000-0000-0000-000000000006", guest_name="AUSTIN",
              days_left=33, file_by=_iso(days=33), total_cents=4071, pending_cents=4071),
     # Turo charged this rental for something plainly not tolls. It is said as
     # that, not as a warning: the tolls are still owed and nothing is unclear.
@@ -501,7 +501,7 @@ def _invoices_payload() -> dict:
         "expired_cents": sum(i["total_cents"] for i in INVOICES if i["expired"]),
         "off_platform_cents": sum(i["total_cents"] for i in INVOICES if i["off_platform"]),
         "needs_a_look_cents": sum(i["total_cents"] for i in INVOICES
-                                  if i["charged_but_different"]),
+                                  if i["charged_but_different"] and not i.get("checked_at")),
         "token_required": True,
     }
 
@@ -628,6 +628,17 @@ class Handler(BaseHTTPRequestHandler):
             }
             COMMANDS.append(command)
             self._send(command)
+            return
+        if path.startswith("/api/invoices/") and path.endswith("/checked"):
+            trip_id = path.split("/")[-2]
+            undo = "undo=true" in query
+            for invoice in INVOICES:
+                if invoice["trip_id"] == trip_id:
+                    invoice["checked_at"] = None if undo else NOW.isoformat()
+                    self._send({"trip_id": trip_id, "checked_at": invoice["checked_at"],
+                                "checked_cents": invoice["charged_cents"]})
+                    return
+            self._send({})
             return
         if path.startswith("/api/invoices/") and path.endswith("/recovered"):
             trip_id = path.split("/")[-2]

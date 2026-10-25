@@ -5,7 +5,7 @@
  *
  * Turo:    find the turo.com tab → SCRAPE_TRIPS → DOWNLOAD_CSV, and a file
  *          lands in Downloads.
- * E-ZPass: find the e-zpassny.com tab → SCRAPE_TOLLS → SEND_TOLLS, and the
+ * E-ZPass: SEND_TOLLS from any page; the worker reads E-ZPass's API and the
  *          statement goes straight to the API. No file in between, because the
  *          point of it is not having to remember to do this by hand.
  */
@@ -138,13 +138,9 @@ function showReport(report: string | undefined, open = true): void {
   tollsReportWrap.open = open;
 }
 
-/** The page report, if there is one, then the run log. */
+/** The run log. */
 function fullReport(result: SendTollsResult): string | undefined {
-  const parts = [
-    result.report,
-    result.log?.length ? "=== run log ===\n" + result.log.join("\n") : undefined,
-  ].filter(Boolean);
-  return parts.length ? parts.join("\n\n") : undefined;
+  return result.log?.length ? "=== run log ===\n" + result.log.join("\n") : undefined;
 }
 
 const copyLogBtn = document.getElementById("copyLogBtn") as HTMLButtonElement;
@@ -153,13 +149,6 @@ copyLogBtn.addEventListener("click", () => {
     copyLogBtn.textContent = "Copied";
   });
 });
-
-async function getActiveEzPassTab(): Promise<chrome.tabs.Tab | null> {
-  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
-  const tab = tabs[0];
-  if (!tab?.url?.includes("e-zpassny.com")) return null;
-  return tab;
-}
 
 function send<T extends MessageType>(target: number | null, message: MessageType): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -186,42 +175,20 @@ function describeImport(result: SendTollsResult): { text: string; isError: boole
   }
   if (!result.result) {
     return {
-      text: "Nothing on this page looked like account activity. Open the activity page and try again.",
+      text: "Nothing came back from E-ZPass. Check you're logged in at e-zpassny.com and try again.",
       isError: true,
     };
   }
   const { rows, imported, already_known, matched, unmatched, unknown_tags } = result.result;
   if (rows > 0 && imported === 0 && already_known === 0) {
-    // Read rows, stored none. Almost always the sign convention: a download
-    // writes charges negative and the API skips positive rows as payments.
-    return {
-      text:
-        `Read ${rows} rows and kept none. ` +
-        (result.amountsLookPositive
-          ? "This page shows charges as positive, which the API reads as payments."
-          : "Nothing in the file parsed as a toll charge."),
-      isError: true,
-    };
+    // Read rows, stored none: the API skips positive rows as payments, so
+    // the site has changed how it signs a toll.
+    return { text: `Read ${rows} rows and kept none. Nothing in them parsed as a toll charge.`, isError: true };
   }
   const parts: string[] = [];
   if (result.windows?.length) {
     const first = result.windows[result.windows.length - 1];
-    parts.push(`${result.windows.length} date ranges since ${first.from}`);
-  }
-  if (result.pagesRead && result.pagesRead > 1) {
-    parts.push(`${result.pagesRead} pages`);
-  }
-  // "stopped at 40 pages" means rows may be missing, which has to reach the
-  // operator rather than looking like a clean read.
-  // A window whose rows are not in its dates means the filter did nothing, and
-  // every row then reads as already known — the read looks complete and is not.
-  for (const w of result.windows ?? []) {
-    if (w.outside) parts.push(`⚠ ${w.from} to ${w.to}: ${w.outside} rows outside it (saw ${w.span})`);
-  }
-  const ranges = result.windows ?? [{ from: "", to: "", pagingStopped: result.pagingStopped }];
-  for (const w of ranges) {
-    if (!/stopped at|incomplete/.test(w.pagingStopped ?? "")) continue;
-    parts.push(`⚠ ${w.from ? `${w.from} to ${w.to}: ` : ""}${w.pagingStopped}`);
+    parts.push(`${result.windows.length} date range${result.windows.length === 1 ? "" : "s"} since ${first.from}`);
   }
   parts.push(`${rows} rows read`, `${imported} new`);
   if (already_known) parts.push(`${already_known} already on file`);
@@ -238,20 +205,12 @@ tollsBtn.addEventListener("click", async () => {
   tollsResultEl.classList.add("hidden");
   showReport(undefined);
   tollsBtn.disabled = true;
-  showStatus("Looking for an E-ZPass tab...");
 
   try {
-    const tab = await getActiveEzPassTab();
-    if (!tab?.id) {
-      showStatus("No active E-ZPass tab. Log in and open Account Activity first.", true);
-      return;
-    }
-
-    // The worker reads every page of the statement and posts it. Driven from
-    // there rather than from a content script, because a "next" link that
-    // navigates would tear a content script down mid-loop.
-    showStatus("Reading the statement three months at a time — this can take a minute...");
-    const sent = await send(null, { type: "SEND_TOLLS", tabId: tab.id });
+    // From any page: the worker calls E-ZPass's own API from an open
+    // e-zpassny.com tab or a hidden one, so only being logged in matters.
+    showStatus("Reading E-ZPass three months at a time...");
+    const sent = await send(null, { type: "SEND_TOLLS" });
     if (sent.type === "SEND_TOLLS_ERROR") throw new Error(sent.error);
     if (sent.type !== "SEND_TOLLS_RESULT") throw new Error("Unexpected response from the worker.");
 

@@ -41,8 +41,8 @@ router = APIRouter(prefix="/api/commands", tags=["commands"])
 
 DbSession = Annotated[Session, Depends(get_session)]
 
-# "tolls" reads E-ZPass in the computer's Chrome, from a tab already open on
-# it: the phone has no E-ZPass session and the site has no E-ZPass password.
+# "tolls" reads E-ZPass in the computer's Chrome, wherever it is logged in to
+# E-ZPass: the phone has no E-ZPass session and the site has no E-ZPass password.
 KINDS = frozenset({"pull", "file", "tolls"})
 QUEUED, RUNNING, DONE, FAILED, ABANDONED = "queued", "running", "done", "failed", "abandoned"
 

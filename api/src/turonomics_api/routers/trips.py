@@ -20,7 +20,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import (
@@ -137,22 +137,64 @@ def _vehicle_for(session: Session, name: str) -> Vehicle:
     return found
 
 
-def _distance(session: Session, trip: Trip) -> Distance | None:
-    lines = session.scalars(
-        select(ReimbursementInvoice.lines).where(ReimbursementInvoice.trip_id == trip.id)
-    ).all()
+# One reimbursement's line items, as the model stores them.
+Lines = list[list[object]]
+
+
+def _invoiced_lines(session: Session, trip_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Lines]]:
+    """The line items of every reimbursement against these rentals, in one query."""
+    if not trip_ids:
+        return {}
+    out: dict[uuid.UUID, list[Lines]] = {}
+    for trip_id, lines in session.execute(
+        select(ReimbursementInvoice.trip_id, ReimbursementInvoice.lines).where(
+            ReimbursementInvoice.trip_id.in_(trip_ids)
+        )
+    ):
+        if trip_id is not None:
+            out.setdefault(trip_id, []).append(lines or [])
+    return out
+
+
+def _toll_counts(session: Session, trip_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """How many crossings landed on each of these rentals, in one query."""
+    if not trip_ids:
+        return {}
+    return {
+        trip_id: int(count)
+        for trip_id, count in session.execute(
+            select(Toll.trip_id, func.count())
+            .where(Toll.trip_id.in_(trip_ids))
+            .group_by(Toll.trip_id)
+        )
+        if trip_id is not None
+    }
+
+
+def _distance(trip: Trip, lines: list[Lines]) -> Distance | None:
     invoiced = sum(distance_lines_cents(entry or []) for entry in lines)
     return summarise(trip.turo_detail, invoiced, trip.tracker_miles)
 
 
-def _row(session: Session, trip: Trip) -> TripRow:
+def _row(
+    session: Session,
+    trip: Trip,
+    *,
+    toll_count: int | None = None,
+    lines: list[Lines] | None = None,
+) -> TripRow:
+    """One rental's row.
+
+    The list passes what it looked up for every rental at once; a single
+    rental's caller leaves the two out and they are looked up here. Two
+    hundred rows at two queries each was the trips page's load time.
+    """
     count = (
-        session.scalar(
-            select(func.count()).select_from(Toll).where(Toll.trip_id == trip.id)
-        )
-        or 0
+        _toll_counts(session, [trip.id]).get(trip.id, 0) if toll_count is None else toll_count
     )
-    distance = _distance(session, trip)
+    if lines is None:
+        lines = _invoiced_lines(session, [trip.id]).get(trip.id) or []
+    distance = _distance(trip, lines)
     return TripRow(
         id=trip.id,
         vehicle_nickname=trip.vehicle.nickname if trip.vehicle else None,
@@ -189,10 +231,24 @@ def list_trips(
     this list is for is seeing and correcting what was typed in by hand.
     """
     require_token(authorization)
-    query = select(Trip).order_by(Trip.starts_at.desc()).limit(200)
+    query = (
+        select(Trip)
+        .order_by(Trip.starts_at.desc())
+        .limit(200)
+        .options(selectinload(Trip.vehicle))
+    )
     if manual_only:
         query = query.where(Trip.source == TripSource.manual)
-    return TripsResponse(trips=[_row(session, t) for t in session.scalars(query)])
+    trips = session.scalars(query).all()
+    ids = [t.id for t in trips]
+    counts = _toll_counts(session, ids)
+    lines = _invoiced_lines(session, ids)
+    return TripsResponse(
+        trips=[
+            _row(session, t, toll_count=counts.get(t.id, 0), lines=lines.get(t.id) or [])
+            for t in trips
+        ]
+    )
 
 
 @router.post("", response_model=CreateResponse)
@@ -630,7 +686,9 @@ def view_trip(
         ],
         extras_synced_at=trip.extras_synced_at,
         receipt=_receipt_view(trip),
-        distance=_view_distance(_distance(session, trip)),
+        distance=_view_distance(
+            _distance(trip, _invoiced_lines(session, [trip.id]).get(trip.id) or [])
+        ),
     )
 
 

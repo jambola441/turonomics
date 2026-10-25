@@ -671,24 +671,35 @@
   // extension reads the same windows a Send tolls click would.
   el("readEzpass").addEventListener("click", function () { queue({ kind: "tolls" }); });
 
+  // Resolves to the status the API gave, so the caller can tell a refused
+  // token (worth one more try once the list has settled on a new one) from
+  // an outage (not).
   function loadLedger() {
     return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
-      .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (data) { if (data) renderLedger(data); })
+      .then(function (r) {
+        if (!r.ok) return r.status;
+        return r.json().then(function (data) { renderLedger(data); return r.status; });
+      })
       .catch(function () {
         // The ledger is a second look at the same money, not the page's job.
         // A page that fails to load entirely because the extra view is down
         // would be worse than one without it.
+        return 0;
       });
   }
 
   function load() {
     if (!remote.polling) loadCommands();
-    // The list first, since it is what asks for the token; the ledger after,
-    // with whatever the list settled on.
+    // Both reads go out at once when a token is already saved: each is a
+    // slow query on the API's side, and one after the other was most of
+    // the wait. Without a token the list goes first, since it is what asks,
+    // and the ledger follows with whatever it settled on. A saved token the
+    // API refuses gets the same treatment: the ledger is tried once more
+    // after the list has replaced it.
+    var ledger = token() ? loadLedger() : Promise.resolve(401);
     return readAuthed("/api/invoices")
       .then(function (r) {
-        loadLedger();
+        ledger.then(function (status) { if (status === 401) loadLedger(); });
         if (!r.ok) throw new Error("the API said " + r.status);
         return r.json();
       })

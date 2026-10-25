@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from turonomics_api.db.models import Toll, Trip, TripSource
 from turonomics_api.settings import toll_filing_window_days
@@ -93,10 +93,14 @@ def build_invoices(
     # read as the thing doing that work and was doing none; mutating it away
     # changed no test. What holds the line is the test asserting an
     # unattributed crossing produces no invoice.
+    # The trip and its car come along in two further queries, not one per
+    # rental: `toll.trip` below is otherwise a lazy load for every rental on
+    # the account, and this runs on every page that shows money.
     query = (
         select(Toll)
         .join(Trip, Toll.trip_id == Trip.id)
         .order_by(Toll.occurred_at.asc())
+        .options(selectinload(Toll.trip).selectinload(Trip.vehicle))
     )
     if not include_recovered:
         query = query.where(Toll.recovered_at.is_(None))

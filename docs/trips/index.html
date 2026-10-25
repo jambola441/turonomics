@@ -999,22 +999,33 @@
   // Loading
   // -------------------------------------------------------------------------
 
+  // The ledger, or null when the API refused the token: the one case worth
+  // another try, once the list has settled on a new one.
+  function readLedger() {
+    return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
+      .then(function (r) { return r.status === 401 ? null : json(r); })
+      .catch(function () { return { rows: [] }; });
+  }
+
   function load() {
-    // Both behind the token: they name guests. The list asks for it once if
-    // it is missing; the ledger then goes with whatever the list settled on.
-    return authed("/api/trips?manual_only=false").then(json).then(function (trips) {
-      return fetch(API + "/api/invoices/ledger", { headers: authHeaders() })
-        .then(json).catch(function () { return { rows: [] }; })
-        .then(function (ledger) { return [trips, ledger]; });
-    })
-      .then(function (both) {
-        state.trips = both[0].trips || [];
-        state.ledger = {};
-        (both[1].rows || []).forEach(function (r) { state.ledger[r.trip_id] = r; });
+    // Both behind the token: they name guests. With one saved, both reads go
+    // out together and the list is drawn as soon as it lands — each is a slow
+    // query, and one after the other was most of the wait. Without one, the
+    // list asks first, and the ledger goes with whatever it settled on.
+    var ledger = token() ? readLedger() : Promise.resolve(null);
+    return authed("/api/trips?manual_only=false").then(json)
+      .then(function (data) {
+        state.trips = data.trips || [];
         stampTrips();
         el("err").hidden = true;
         render();
         scanRoutes();
+        return ledger.then(function (found) { return found || readLedger(); });
+      })
+      .then(function (found) {
+        state.ledger = {};
+        ((found && found.rows) || []).forEach(function (r) { state.ledger[r.trip_id] = r; });
+        render();
       })
       .catch(function (e) { el("stamp").textContent = ""; fail("Could not load trips: " + e.message); });
   }

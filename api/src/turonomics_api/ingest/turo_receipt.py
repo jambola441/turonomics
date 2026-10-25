@@ -32,7 +32,7 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, undefer
 
 from turonomics_api.db.models import ReimbursementInvoice, Trip, TripState
 from turonomics_api.gmail.parse import INVOICE_CHARGED, names_tolls
@@ -326,6 +326,9 @@ def resettle_receipts(session: Session, *, now: datetime) -> ReceiptResult:
             ReimbursementInvoice.state != INVOICE_CHARGED,
         )
         .distinct()
+        # The receipt is deferred on the model; this is the one place that
+        # reads it for many rentals at once, so ask for it up front.
+        .options(undefer(Trip.turo_receipt))
     ):
         settle_by_receipt(session, trip, now=now, result=result)
     return result

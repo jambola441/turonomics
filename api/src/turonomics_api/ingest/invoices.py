@@ -95,12 +95,25 @@ def build_invoices(
     # unattributed crossing produces no invoice.
     # The trip and its car come along in two further queries, not one per
     # rental: `toll.trip` below is otherwise a lazy load for every rental on
-    # the account, and this runs on every page that shows money.
+    # the account, and this runs on every page that shows money. Only the
+    # columns an invoice is built from: Turo's reservation detail is the
+    # heaviest thing on a trip row and nothing here reads it.
     query = (
         select(Toll)
         .join(Trip, Toll.trip_id == Trip.id)
         .order_by(Toll.occurred_at.asc())
-        .options(selectinload(Toll.trip).selectinload(Trip.vehicle))
+        .options(
+            selectinload(Toll.trip)
+            .load_only(
+                Trip.guest_name,
+                Trip.starts_at,
+                Trip.ends_at,
+                Trip.source,
+                Trip.turo_trip_id,
+                Trip.vehicle_id,
+            )
+            .selectinload(Trip.vehicle)
+        )
     )
     if not include_recovered:
         query = query.where(Toll.recovered_at.is_(None))

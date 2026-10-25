@@ -667,8 +667,8 @@
   }
 
   el("pullTuro").addEventListener("click", function () { queue({ kind: "pull" }); });
-  // Runs in the computer's Chrome, on an E-ZPass tab left open and logged in:
-  // the extension reads the same windows a Send tolls click would.
+  // Runs in the computer's Chrome, wherever it is logged in to E-ZPass: the
+  // extension reads the same windows a Send tolls click would.
   el("readEzpass").addEventListener("click", function () { queue({ kind: "tolls" }); });
 
   function loadLedger() {

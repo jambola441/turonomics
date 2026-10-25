@@ -5,52 +5,27 @@
  * - Receive trip data from the popup (which relays it from the content script)
  * - Assemble a CSV string
  * - Trigger a file download via chrome.downloads
- * - Turn a scraped E-ZPass page into a statement and post it to the API
+ * - Read E-ZPass through the site's own API and post the statement to ours
  *
- * The E-ZPass half lives here rather than in the content script because the
+ * The E-ZPass half lives here rather than in a content script because the
  * logic has to be testable, and a content script cannot import a module. The
- * content script reads the DOM; this decides what the DOM meant.
+ * decisions are in `tolls.ts`; this makes the calls.
  */
 
 import {
-  chooseStatement,
-  dateCoverage,
-  describeForm,
+  apiRowsToCsv,
+  nextStartIndex,
+  readTransactionAnswer,
+  transactionRequest,
   BLOCK_PAUSE_MS,
-  describePager,
-  describeSubmitCandidates,
-  currentPageNumber,
   HISTORY_MONTHS,
-  nextIsDisabled,
   looksBlocked,
   PACE_MS,
   runGate,
   WINDOW_PACE_MS,
-  windowApplied,
-  parsePagerRange,
-  type PagerRange,
-  describeShape,
   describeTollsCommand,
-  formatForField,
-  maskValue,
-  mergeActivityPages,
-  pageChanged,
-  pickDateFields,
-  pickPageSize,
   quarterRanges,
-  sameDate,
-  rankNextControls,
-  rankSubmitControls,
-  shouldStopPaging,
   sumImportResults,
-  tableSignature,
-  usableRows,
-  type ControlDescriptor,
-  type DateRange,
-  type InputDescriptor,
-  type PageSizeOption,
-  type ScrapedPage,
-  type ScrapedTable,
   type WindowReport,
 } from "./tolls.js";
 import {
@@ -264,351 +239,6 @@ async function postStatement(csv: string): Promise<ImportResult> {
     throw new Error(detail);
   }
   return body as ImportResult;
-}
-
-async function sendTolls(page: ScrapedPage): Promise<SendTollsResult> {
-  const paging = { pagesRead: page.pagesRead, pagingStopped: page.pagingStopped };
-  const choice = chooseStatement(page);
-  if (!choice.csv) {
-    // Nothing matched. The masked report describes the page's shape without
-    // carrying tag numbers or amounts out of it, so it can be pasted into a
-    // bug report.
-    return { ...paging, result: null, source: "none", rowCount: 0, report: describeShape(page) };
-  }
-  LOG(`sending ${choice.rowCount} row(s) from the ${choice.source}`);
-  try {
-    const result = await postStatement(choice.csv);
-    return {
-      ...paging,
-      result,
-      source: choice.source,
-      rowCount: choice.rowCount,
-      amountsLookPositive: choice.amountsLookPositive,
-    };
-  } catch (error) {
-    return {
-      ...paging,
-      result: null,
-      source: choice.source,
-      rowCount: choice.rowCount,
-      problem: error instanceof Error ? error.message : String(error),
-      report: describeShape(page),
-      amountsLookPositive: choice.amountsLookPositive,
-    };
-  }
-}
-
-
-// ---------------------------------------------------------------------------
-// Reading the E-ZPass statement, all of it
-// ---------------------------------------------------------------------------
-// Driven from here rather than from a content script, because a "next" link
-// that navigates tears a content script down half way through the loop. The
-// worker survives that; it re-injects and carries on.
-//
-// The three functions below are serialised and run inside the page, so they
-// are self-contained by necessity: no imports, no closure over anything here.
-// They do the least possible — read the DOM, click a thing, set a select — and
-// every decision is made back in `tolls.ts`, where it can be tested.
-
-interface PageDescriptor {
-  url: string;
-  tables: ScrapedTable[];
-  downloadLinks: string[];
-  nextControls: ControlDescriptor[];
-  pageSizes: PageSizeOption[];
-  /** The pager's "1–10 of 96", verbatim, or "" when the page has none. */
-  pagerText: string;
-}
-
-function readPageInPage(): PageDescriptor {
-  const text = (node: Element | null): string =>
-    (node?.textContent ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-
-  const tables: ScrapedTable[] = [];
-  document.querySelectorAll("table").forEach((element) => {
-    const table = element as HTMLTableElement;
-    const rows = Array.from(table.rows);
-    if (!rows.length) return;
-    let headerIndex = rows.findIndex((row) => row.querySelector("th"));
-    if (headerIndex < 0) headerIndex = 0;
-    const headers = Array.from(rows[headerIndex].cells).map((cell) => text(cell));
-    if (headers.length < 2) return;
-    tables.push({
-      headers,
-      rows: rows.slice(headerIndex + 1).map((row) => Array.from(row.cells).map((c) => text(c))),
-    });
-  });
-
-  const hint = /\.csv|\.xlsx?|csv|excel|export|download/i;
-  const downloadLinks = [
-    ...new Set(
-      Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
-        .filter((a) => {
-          const href = a.getAttribute("href") ?? "";
-          if (!href || href.startsWith("#") || href.startsWith("javascript:")) return false;
-          return hint.test(href) || hint.test(text(a));
-        })
-        .map((a) => a.href)
-    ),
-  ].sort((a, b) => Number(/\.csv/i.test(b)) - Number(/\.csv/i.test(a)));
-
-  // Anything clickable that might advance a page. Ranked back in the worker.
-  const nextControls: ControlDescriptor[] = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "a[href], button, [role='button'], [class*='pag'] *[onclick]"
-    )
-  ).map((node) => ({
-    text: text(node),
-    rel: node.getAttribute("rel") ?? undefined,
-    ariaLabel: node.getAttribute("aria-label") ?? undefined,
-    disabled:
-      (node as HTMLButtonElement).disabled === true ||
-      node.getAttribute("aria-disabled") === "true",
-    className: node.className ? String(node.className) : undefined,
-  }));
-
-  // A select whose options are all numbers (or "All") is a rows-per-page
-  // control. Taking the largest turns a twelve-page statement into one.
-  let pageSizes: PageSizeOption[] = [];
-  document.querySelectorAll("select").forEach((element) => {
-    const select = element as HTMLSelectElement;
-    const options = Array.from(select.options).map((o) => ({
-      value: o.value,
-      label: text(o),
-    }));
-    if (!options.length || pageSizes.length) return;
-    const looksLikeSize = options.every((o) => /^\s*(?:all|show all|\d+[^\d]*)\s*$/i.test(o.label));
-    if (looksLikeSize) pageSizes = options;
-  });
-
-  // MUI prints "1–10 of 96" in its own element; match on the whole text so a
-  // sentence that merely contains such a phrase is not taken for it.
-  let pagerText = "";
-  for (const node of Array.from(document.querySelectorAll("p, span, div"))) {
-    if (node.children.length > 0) continue;
-    const content = text(node);
-    if (/^\d[\d,]*\s*[\u2013\u2014-]\s*\d[\d,]*\s+of\s+\d[\d,]*$/i.test(content)) {
-      pagerText = content;
-      break;
-    }
-  }
-
-  return { url: location.href, tables, downloadLinks, nextControls, pageSizes, pagerText };
-}
-
-function clickControlInPage(index: number): boolean {
-  const nodes = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "a[href], button, [role='button'], [class*='pag'] *[onclick]"
-    )
-  );
-  const node = nodes[index];
-  if (!node) return false;
-  node.click();
-  return true;
-}
-
-function setPageSizeInPage(value: string): boolean {
-  const selects = Array.from(document.querySelectorAll("select")) as HTMLSelectElement[];
-  for (const select of selects) {
-    if (Array.from(select.options).some((o) => o.value === value)) {
-      select.value = value;
-      // Both, because some pages listen for one and some for the other.
-      select.dispatchEvent(new Event("input", { bubbles: true }));
-      select.dispatchEvent(new Event("change", { bubbles: true }));
-      return true;
-    }
-  }
-  return false;
-}
-
-interface FormDescriptor {
-  inputs: InputDescriptor[];
-  controls: ControlDescriptor[];
-}
-
-// The selector for anything that might run a search. Duplicated in the click
-// function below, because both are serialised into the page and cannot share it.
-function readFormInPage(): FormDescriptor {
-  const text = (node: Element | null): string =>
-    (node?.textContent ?? "").replace(/\u00a0/g, " ").replace(/\s+/g, " ").trim();
-
-  const inputs: InputDescriptor[] = Array.from(document.querySelectorAll("input")).map(
-    (input, index) => {
-      const id = input.id;
-      const label =
-        (id ? text(document.querySelector(`label[for="${CSS.escape(id)}"]`)) : "") ||
-        text(input.closest("label"));
-      return {
-        index,
-        type: (input.getAttribute("type") ?? "text").toLowerCase(),
-        hint: [input.name, id, label, input.placeholder, input.getAttribute("aria-label")]
-          .filter(Boolean)
-          .join(" "),
-        placeholder: input.placeholder || undefined,
-      };
-    }
-  );
-
-  const controls: ControlDescriptor[] = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
-    )
-  ).map((node) => ({
-    text: (node as HTMLInputElement).value && node.tagName === "INPUT"
-      ? (node as HTMLInputElement).value
-      : text(node),
-    ariaLabel: node.getAttribute("aria-label") ?? undefined,
-    disabled:
-      (node as HTMLButtonElement).disabled === true ||
-      node.getAttribute("aria-disabled") === "true",
-    className: node.className ? String(node.className) : undefined,
-  }));
-
-  return { inputs, controls };
-}
-
-function fillDatesInPage(fromIndex: number, toIndex: number, fromValue: string, toValue: string): boolean {
-  const inputs = Array.from(document.querySelectorAll("input"));
-  const set = (index: number, value: string): boolean => {
-    const input = inputs[index];
-    if (!input) return false;
-    // No focus() and no real blur(): the masked date field treats a value set
-    // while focused as keystrokes and wipes it (the end date read back empty
-    // and invalid). Setting it unfocused and dispatching events is what worked.
-    // The native setter, so a framework that wraps `value` still sees a change.
-    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-    if (setter) setter.call(input, value);
-    else input.value = value;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-    input.dispatchEvent(new Event("blur", { bubbles: true }));
-    return true;
-  };
-  return set(fromIndex, fromValue) && set(toIndex, toValue);
-}
-
-/**
- * MUI's rows-per-page control is a div, not a <select>: it opens a listbox on
- * mousedown. These four do the least possible and every decision stays in
- * `pickPageSize`.
- */
-function findRowsPerPageInPage(): { index: number; current: string } | null {
-  const nodes = Array.from(
-    document.querySelectorAll<HTMLElement>("[role='combobox'], [aria-haspopup='listbox']")
-  );
-  const labelled = nodes.findIndex((node) => {
-    const scope = node.closest("[class*='Pagination'], [class*='pagination']") ?? node.parentElement;
-    return /rows per page/i.test(scope?.textContent ?? "");
-  });
-  // A control showing nothing but a number is the next best thing; one that
-  // merely contains a digit (a year picker) is not.
-  const index =
-    labelled >= 0
-      ? labelled
-      : nodes.findIndex((node) => /^\s*\d+\s*$/.test(node.textContent ?? ""));
-  if (index < 0) return null;
-  return { index, current: (nodes[index].textContent ?? "").replace(/\s+/g, " ").trim() };
-}
-
-function openRowsPerPageInPage(index: number): boolean {
-  const node = Array.from(
-    document.querySelectorAll<HTMLElement>("[role='combobox'], [aria-haspopup='listbox']")
-  )[index];
-  if (!node) return false;
-  node.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
-  return true;
-}
-
-function readListboxInPage(): { value: string; label: string }[] {
-  return Array.from(document.querySelectorAll<HTMLElement>("[role='listbox'] [role='option']")).map(
-    (node, i) => ({ value: String(i), label: (node.textContent ?? "").replace(/\s+/g, " ").trim() })
-  );
-}
-
-function chooseListboxOptionInPage(index: number): boolean {
-  const node = Array.from(
-    document.querySelectorAll<HTMLElement>("[role='listbox'] [role='option']")
-  )[index];
-  if (!node) return false;
-  node.click();
-  return true;
-}
-
-interface FieldState {
-  value: string;
-  invalid: boolean;
-}
-
-function readValuesInPage(indices: number[]): FieldState[] {
-  const inputs = Array.from(document.querySelectorAll("input"));
-  return indices.map((i) => ({
-    value: inputs[i]?.value ?? "<missing>",
-    // MUI marks a date it will not accept (out of range, unparseable) here.
-    invalid: inputs[i]?.getAttribute("aria-invalid") === "true",
-  }));
-}
-
-/** Enter in a field is how most forms are submitted without their button. */
-function pressEnterInPage(index: number): boolean {
-  const input = document.querySelectorAll("input")[index] as HTMLInputElement | undefined;
-  if (!input) return false;
-  input.focus();
-  for (const type of ["keydown", "keypress", "keyup"]) {
-    input.dispatchEvent(
-      new KeyboardEvent(type, { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true })
-    );
-  }
-  return true;
-}
-
-function submitFormInPage(index: number): boolean {
-  const input = document.querySelectorAll("input")[index] as HTMLInputElement | undefined;
-  const form = input?.closest("form");
-  if (!form) return false;
-  form.requestSubmit();
-  return true;
-}
-
-/** Validation messages near the form: the page's own account of a refused search. */
-function readFormMessagesInPage(): string[] {
-  const nodes = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "[role='alert'], p.Mui-error, [class*='FormHelperText'], [class*='helperText']"
-    )
-  );
-  const seen = new Set<string>();
-  for (const node of nodes) {
-    const text = (node.textContent ?? "").replace(/\s+/g, " ").trim();
-    if (text && text.length < 160) seen.add(text);
-  }
-  return [...seen].slice(0, 5);
-}
-
-function clickSubmitInPage(index: number): boolean {
-  const nodes = Array.from(
-    document.querySelectorAll<HTMLElement>(
-      "button, input[type='submit'], input[type='button'], [role='button'], a[href]"
-    )
-  );
-  const node = nodes[index];
-  if (!node) return false;
-  node.click();
-  return true;
-}
-
-async function fetchExportInPage(url: string): Promise<string | null> {
-  try {
-    const response = await fetch(url, { credentials: "include" });
-    if (!response.ok) return null;
-    if (/html/i.test(response.headers.get("content-type") ?? "")) return null;
-    const body = await response.text();
-    if (!body.trim() || /^\s*</.test(body)) return null;
-    return body.split(/\r?\n/)[0].includes(",") ? body : null;
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -1393,569 +1023,10 @@ async function inPage<Args extends unknown[], R>(
   throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
-function activityOf(descriptor: PageDescriptor): ScrapedTable | null {
-  return mergeActivityPages(descriptor.tables);
-}
-
-/**
- * Read every page of the statement the tab is showing.
- *
- * A download the site generates still wins outright — it is not paginated and
- * it is the format the parser was written against. Paging is the fallback's
- * fallback.
- */
-async function readStatement(tabId: number): Promise<ScrapedPage> {
-  const descriptor = await inPage(tabId, readPageInPage, []);
-
-  for (const url of descriptor.downloadLinks.slice(0, 3)) {
-    const csv = await inPage(tabId, fetchExportInPage, [url]);
-    if (csv) {
-      LOG("got a CSV from the site; no paging needed");
-      return {
-        url: descriptor.url,
-        tables: descriptor.tables,
-        downloadLinks: descriptor.downloadLinks,
-        downloadedCsv: csv,
-      };
-    }
-  }
-
-  return pageThrough(tabId, descriptor);
-}
-
-/**
- * Page through the statement the tab is showing, from the page it is on.
- *
- * Shared by the one-shot read and by each date window: both end up looking at a
- * table with a "next" under it.
- */
-/**
- * Ask a MUI table for the most rows per page it offers.
- *
- * The default is ten, so a statement of a hundred crossings is ten pages and
- * every page is a chance to stop early. Returns the descriptor to carry on
- * from, which is the old one when nothing could be done.
- */
-async function raiseRowsPerPage(tabId: number, descriptor: PageDescriptor): Promise<PageDescriptor> {
-  const found = await inPage(tabId, findRowsPerPageInPage, []);
-  if (!found) {
-    note("  rows per page: no MUI selector found");
-    return descriptor;
-  }
-  if (!(await inPage(tabId, openRowsPerPageInPage, [found.index]))) {
-    note("  rows per page: could not open the selector");
-    return descriptor;
-  }
-  await sleep(350);
-  const options = await inPage(tabId, readListboxInPage, []);
-  const pick = pickPageSize(options);
-  note(
-    `  rows per page: currently "${found.current}", options [${options.map((o) => o.label).join(", ")}]` +
-      `, choosing ${pick === null ? "nothing" : `"${options[Number(pick)]?.label}"`}`
-  );
-  if (pick === null) return descriptor;
-  const before = tableSignature(activityOf(descriptor));
-  const alreadyThere = options[Number(pick)]?.label === found.current;
-  if (!(await inPage(tabId, chooseListboxOptionInPage, [Number(pick)]))) return descriptor;
-  if (alreadyThere) {
-    // Choosing the value it already has closes the menu and changes nothing, so
-    // there is nothing to wait for. Waiting anyway cost 8s per window.
-    note("  rows per page: already at that, nothing to wait for");
-    return descriptor;
-  }
-  const after = await waitForChange(tabId, before, descriptor, 8000);
-  note(`  rows per page: now ${activityOf(after)?.rows.length ?? 0} rows on the page, pager "${after.pagerText}"`);
-  return after;
-}
-
-async function pageThrough(tabId: number, start: PageDescriptor): Promise<ScrapedPage> {
-  let descriptor = start;
-  // Fewer pages beats cleverer paging.
-  const size = pickPageSize(descriptor.pageSizes);
-  if (size !== null) {
-    const before = tableSignature(activityOf(descriptor));
-    if (await inPage(tabId, setPageSizeInPage, [size])) {
-      descriptor = await waitForChange(tabId, before, descriptor);
-      note(`  page size: asked for value "${size}" of ${descriptor.pageSizes.length} options`);
-    } else {
-      note(`  page size: could not set "${size}"`);
-    }
-  } else {
-    descriptor = await raiseRowsPerPage(tabId, descriptor);
-  }
-
-  const pages: ScrapedTable[] = [];
-  const signatures: string[] = [];
-  let stopped: string | null = null;
-  let lastRange: PagerRange | null = null;
-
-  for (;;) {
-    pages.push(...descriptor.tables);
-    signatures.push(tableSignature(activityOf(descriptor)));
-    const here = activityOf(descriptor);
-    lastRange = parsePagerRange(descriptor.pagerText);
-    note(
-      `  page ${signatures.length}: ${here?.rows.length ?? 0} rows` +
-        (lastRange ? `, pager says ${lastRange.from}-${lastRange.to} of ${lastRange.total}` : ", no pager text") +
-        (here?.rows[0] ? `, first row shaped ${here.rows[0].map(maskValue).join("|")}` : "") +
-        `, next candidates: ${rankNextControls(descriptor.nextControls).length}`
-    );
-
-    stopped = shouldStopPaging(signatures);
-    if (stopped) break;
-
-    // The pager's own count is the authority on the end: a next control going
-    // missing is also what a re-render looks like.
-    if (lastRange && lastRange.to >= lastRange.total) {
-      stopped = "last page";
-      break;
-    }
-
-    let ranked = rankNextControls(descriptor.nextControls);
-    if (!ranked.length && !nextIsDisabled(descriptor.nextControls)) {
-      // No next control at all, and no disabled one saying "this is the end".
-      // That is also what a pager looks like while it re-renders after a page
-      // loads, so look again for a few seconds before believing it. DOM reads
-      // only; nothing is requested from the site.
-      for (let attempt = 0; attempt < 8 && !ranked.length; attempt++) {
-        await sleep(500);
-        descriptor = await inPage(tabId, readPageInPage, []);
-        ranked = rankNextControls(descriptor.nextControls);
-        if (nextIsDisabled(descriptor.nextControls)) break;
-      }
-      note(`  no next control at first; after looking again: ${ranked.length ? "it reappeared" : nextIsDisabled(descriptor.nextControls) ? "it is disabled (the last page)" : "still none"}`);
-    }
-    if (!ranked.length) {
-      if (nextIsDisabled(descriptor.nextControls)) {
-        // The site's own word that this is the end. Nothing to explain.
-        stopped = "last page";
-        break;
-      }
-      stopped = lastRange
-        ? `incomplete: no next control, but the pager says ${lastRange.to} of ${lastRange.total}`
-        : "no next page";
-      note("  no control looked like next, and none is a disabled next; pager controls:");
-      for (const line of describePager(descriptor.nextControls)) note(line);
-      break;
-    }
-
-    const before = signatures[signatures.length - 1];
-    let advanced = false;
-    for (const index of ranked) {
-      await sleep(PACE_MS);
-      if (!(await inPage(tabId, clickControlInPage, [index]))) continue;
-      const clicked = descriptor.nextControls[index];
-      note(`  clicked next candidate ${index}: text "${clicked?.text.slice(0, 30)}" aria "${clicked?.ariaLabel ?? ""}" class "${(clicked?.className ?? "").slice(0, 40)}"`);
-      const after = await waitForChange(tabId, before, descriptor);
-      const landed = tableSignature(activityOf(after));
-      if (pageChanged(landed, before)) {
-        descriptor = after;
-        advanced = true;
-        break;
-      }
-      // That control did nothing, or the page never finished loading. Try the
-      // next candidate rather than concluding the statement ends here.
-      note(`  clicked candidate ${index}: ${landed === "empty" ? "the next page never loaded" : "the table did not change"}`);
-    }
-    if (!advanced) {
-      stopped = lastRange
-        ? `incomplete: clicking next changed nothing at ${lastRange.to} of ${lastRange.total}`
-        : "no next page";
-      await stopIfBlocked(tabId);
-      break;
-    }
-  }
-
-  const merged = mergeActivityPages(pages);
-  note(
-    `  read ${signatures.length} page(s), ${merged?.rows.length ?? 0} rows merged: ${stopped}` +
-      (lastRange ? ` (pager total ${lastRange.total}; refill credits are not shown, so fewer rows than that is expected)` : "")
-  );
-  return {
-    url: descriptor.url,
-    tables: descriptor.tables,
-    downloadLinks: descriptor.downloadLinks,
-    merged: merged ?? undefined,
-    pagesRead: signatures.length,
-    pagingStopped: stopped ?? undefined,
-  };
-}
-
-/**
- * Read the statement three months at a time and post each window as it is read.
- *
- * Posting per window rather than at the end means a run that dies on window
- * three has still delivered one and two, and re-running is harmless because the
- * API fingerprints each crossing. When the page has no date fields or no search
- * button the tool recognises, this falls back to reading what is on screen, as
- * before — a page it cannot drive is no worse off than it was.
- *
- * The site's own CSV download is not used here: its link is built for whatever
- * range the page last showed, and a stale link would deliver the same rows for
- * every window and read as complete.
- */
-async function sendStatement(tabId: number): Promise<SendTollsResult> {
-  startTrace();
-  const stored = await chrome.storage.local.get(["tollsBlockedUntil"]);
-  const refusal = runGate(
-    Date.now(),
-    typeof stored.tollsBlockedUntil === "number" ? stored.tollsBlockedUntil : null
-  );
-  if (refusal) {
-    note(`not starting: ${refusal}. No request was made to E-ZPass.`);
-    return { result: null, source: "none", rowCount: 0, problem: refusal, log: trace };
-  }
-  const tab = await chrome.tabs.get(tabId).catch(() => null);
-  note(
-    `extension ${chrome.runtime.getManifest().version}, page ${(tab?.url ?? "?").replace(/\?.*$/, "")}`
-  );
-  let result: SendTollsResult;
-  try {
-    result = await sendStatementTraced(tabId);
-  } catch (error) {
-    if (error instanceof SiteRefused) {
-      await chrome.storage.local.set({ tollsBlockedUntil: Date.now() + BLOCK_PAUSE_MS });
-      note(`STOPPED: the site looks like it is refusing or down. No more requests for ${BLOCK_PAUSE_MS / 60_000} minutes.`);
-      return {
-        result: null,
-        source: "none",
-        rowCount: 0,
-        problem: `E-ZPass answered with what reads as a block or outage ("${error.message}"). Stopped, and paused for an hour.`,
-        log: trace,
-      };
-    }
-    // Keep the trace: the steps before the throw are the whole diagnosis.
-    const message = error instanceof Error ? error.message : String(error);
-    note(`THREW: ${message}`);
-    return { result: null, source: "none", rowCount: 0, problem: `the run failed: ${message}`, log: trace };
-  }
-  note(
-    result.problem
-      ? `finished with a problem: ${result.problem}`
-      : result.result
-        ? `finished: ${result.result.rows} rows read, ${result.result.imported} new, ${result.result.already_known} known, ${result.result.matched} attributed`
-        : "finished with nothing sent"
-  );
-  return { ...result, log: trace };
-}
-
-async function sendStatementTraced(tabId: number): Promise<SendTollsResult> {
-  const form = await inPage(tabId, readFormInPage, []);
-  const fields = pickDateFields(form.inputs);
-  for (const line of describeForm(form.inputs, form.controls)) note(line);
-  if (!fields || !rankSubmitControls(form.controls).length) {
-    note("falling back: reading what the page shows (no date range driven)");
-    return sendTolls(await readStatement(tabId));
-  }
-
-  const now = new Date();
-  const today = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("-");
-
-  const windows: WindowReport[] = [];
-  const results: ImportResult[] = [];
-  let amountsLookPositive = false;
-  let firstReport: string | undefined;
-  let source: SendTollsResult["source"] = "none";
-  let problem: string | undefined;
-
-  const { tollsMonths } = await settings();
-  const ranges = quarterRanges(today, tollsMonths);
-  note(`today is ${today}; reading ${tollsMonths} month(s) as ${ranges.length} window(s), newest first`);
-  for (const [position, range] of ranges.entries()) {
-    if (position > 0) await sleep(WINDOW_PACE_MS);
-    note(`window ${range.from} to ${range.to}`);
-    const sent = await sendWindow(tabId, range);
-    note(
-      `  window done: ${sent.rowCount} rows` +
-        (sent.result
-          ? `, API: ${sent.result.imported} new, ${sent.result.already_known} known, ${sent.result.matched} attributed`
-          : "") +
-        (sent.problem ? `, PROBLEM: ${sent.problem}` : "")
-    );
-    const report: WindowReport = {
-      ...range,
-      rows: sent.rowCount,
-      pagesRead: sent.pagesRead,
-      pagingStopped: sent.pagingStopped,
-      problem: sent.problem,
-      outside: sent.outside,
-      span: sent.span,
-    };
-    windows.push(report);
-    firstReport ??= sent.report;
-    amountsLookPositive ||= sent.amountsLookPositive === true;
-    if (sent.result) {
-      results.push(sent.result);
-      source = sent.source;
-    }
-    if (sent.problem) {
-      // The same headers would be refused again; stop and say which window.
-      problem = `${range.from} to ${range.to}: ${sent.problem}`;
-      break;
-    }
-  }
-
-  const rowCount = windows.reduce((n, w) => n + w.rows, 0);
-  const pagesRead = windows.reduce((n, w) => n + (w.pagesRead ?? 0), 0);
-  return {
-    windows,
-    pagesRead,
-    result: results.length ? sumImportResults(results) : null,
-    source,
-    rowCount,
-    amountsLookPositive,
-    ...(problem ? { problem } : {}),
-    ...(!results.length && !problem ? { report: firstReport } : {}),
-  };
-}
-
-/** Put one range in the form, run the search, page through it, post it. */
-async function sendWindow(tabId: number, range: DateRange): Promise<SendTollsResult> {
-  // Re-read the form every time: a search that reloads the page can renumber
-  // the inputs, and indices from the last window would then type into the wrong
-  // box.
-  const form = await inPage(tabId, readFormInPage, []);
-  const fields = pickDateFields(form.inputs);
-  const submit = rankSubmitControls(form.controls)[0];
-  if (!fields || submit === undefined) {
-    note("  the date fields or search button are gone from the page");
-    return {
-      result: null,
-      source: "none",
-      rowCount: 0,
-      problem: "the date fields went away after the previous search",
-    };
-  }
-
-  // Not while the last page is still loading: a search typed into a page that
-  // is mid-render lands on nothing, and the late page is then read as ours.
-  const before = await waitForRows(tabId, await inPage(tabId, readPageInPage, []));
-  const fromText = formatForField(range.from, fields.from);
-  const toText = formatForField(range.to, fields.to);
-  const typeDates = async (): Promise<{ ok: boolean; from: FieldState; to: FieldState }> => {
-    const ok = await inPage(tabId, fillDatesInPage, [
-      fields.from.index,
-      fields.to.index,
-      fromText,
-      toText,
-    ]);
-    note(`  typed "${fromText}" into input[${fields.from.index}], "${toText}" into input[${fields.to.index}]: ${ok ? "ok" : "FAILED"}`);
-    // What the fields hold once the page has had a moment to react: a mask or a
-    // date picker can rewrite or reject what was typed.
-    await sleep(400);
-    const [from, to] = await inPage(tabId, readValuesInPage, [[fields.from.index, fields.to.index]]);
-    note(
-      `  fields now read "${from.value}" and "${to.value}"` +
-        (sameDate(from.value, fromText) && sameDate(to.value, toText) ? "" : "  <-- NOT WHAT WAS TYPED") +
-        (from.invalid ? "  <-- THE PAGE MARKS THE START DATE INVALID" : "") +
-        (to.invalid ? "  <-- THE PAGE MARKS THE END DATE INVALID" : "")
-    );
-    return { ok, from, to };
-  };
-  const accepted = (r: { ok: boolean; from: FieldState; to: FieldState }): boolean =>
-    r.ok &&
-    !r.from.invalid &&
-    !r.to.invalid &&
-    sameDate(r.from.value, fromText) &&
-    sameDate(r.to.value, toText);
-
-  let typed = await typeDates();
-  if (!accepted(typed)) {
-    // Once more, then give up. A search submitted with a wiped or invalid date
-    // reads whatever page happens to be up, and it has passed for a result.
-    note("  a date was not accepted; typing them once more");
-    await sleep(PACE_MS);
-    typed = await typeDates();
-  }
-  if (!accepted(typed)) {
-    const which = typed.from.invalid || !typed.from.value ? "start" : "end";
-    note(`  THE PAGE WILL NOT ACCEPT THE ${which.toUpperCase()} DATE. Not searching.`);
-    return {
-      result: null,
-      source: "none",
-      rowCount: 0,
-      problem: `the page would not accept the ${which} date for ${range.from} to ${range.to}`,
-    };
-  }
-
-  // Look for the button NOW, after the dates are in. It was previously chosen
-  // from a read taken before typing and clicked by position seconds later: a
-  // Filter that is disabled until the dates are valid was then skipped for some
-  // other control, and the search never ran.
-  await sleep(PACE_MS);
-  const messages = await inPage(tabId, readFormMessagesInPage, []);
-  if (messages.length) note(`  the page shows: ${messages.map((m) => `"${m}"`).join(" | ")}`);
-
-  const baseline = tableSignature(activityOf(before));
-  // Submitting the form first: in a real run, clicking Filter and pressing Enter
-  // each did nothing, and requestSubmit was the one that ran the search. The
-  // other two stay as fallbacks, in case the page changes.
-  const attempts: { name: string; run: () => Promise<boolean> }[] = [
-    { name: "submitting the form", run: () => inPage(tabId, submitFormInPage, [fields.to.index]) },
-    {
-      name: "the search button",
-      run: async () => {
-        const fresh = await inPage(tabId, readFormInPage, []);
-        for (const line of describeSubmitCandidates(fresh.controls)) note(line);
-        const choice = rankSubmitControls(fresh.controls)[0];
-        if (choice === undefined) {
-          note("  no enabled search button after typing the dates");
-          return false;
-        }
-        note(`  clicking control [${choice}] "${fresh.controls[choice].text.slice(0, 40)}"`);
-        return inPage(tabId, clickSubmitInPage, [choice]);
-      },
-    },
-    { name: "Enter in the end-date field", run: () => inPage(tabId, pressEnterInPage, [fields.to.index]) },
-  ];
-
-  let after = before;
-  let applied = false;
-  for (const [position, attempt] of attempts.entries()) {
-    if (position > 0) await sleep(PACE_MS);
-    const did = await attempt.run();
-    note(`  attempt ${position + 1}, ${attempt.name}: ${did ? "done" : "nothing to do"}`);
-    if (!did) continue;
-    after = await waitForChange(tabId, baseline, after, 8000);
-    const first = dateCoverage(activityOf(after), range);
-    const parsed = parsePagerRange(after.pagerText);
-    note(
-      `  after it: ${activityOf(after)?.rows.length ?? 0} rows dated ${first.first ?? "?"} to ${first.last ?? "?"}` +
-        `, ${first.outside} outside the window, pager "${after.pagerText}"`
-    );
-    // Back on page 1, as well as dated inside the window: a search that never
-    // ran leaves the previous window's last page up, and its dates can overlap
-    // this window's enough to pass on their own.
-    const onPage = currentPageNumber(after.nextControls);
-    if (onPage !== null && onPage !== 1) note(`  still on page ${onPage}, so the search did not run`);
-    if (windowApplied(first) && (!parsed || parsed.from === 1) && (onPage === null || onPage === 1)) {
-      applied = true;
-      break;
-    }
-  }
-  if (!applied) {
-    const shown = await inPage(tabId, readFormMessagesInPage, []);
-    note(`  THE SEARCH NEVER APPLIED. Page messages: ${shown.length ? shown.join(" | ") : "none"}`);
-    return {
-      result: null,
-      source: "none",
-      rowCount: 0,
-      problem:
-        `the search for ${range.from} to ${range.to} never applied (the page still showed other dates)` +
-        (shown.length ? `; the page says: ${shown[0]}` : ""),
-    };
-  }
-
-  const stillThere = pickDateFields((await inPage(tabId, readFormInPage, [])).inputs);
-  note(
-    `  rows before search: ${activityOf(before)?.rows.length ?? 0}, after: ${activityOf(after)?.rows.length ?? 0}` +
-      `, date fields still on page: ${stillThere ? "yes" : "NO"}`
-  );
-  const page = await pageThrough(tabId, after);
-  const table = page.merged;
-  const coverage = dateCoverage(table ?? null, range);
-  note(
-    `  rows dated ${coverage.first ?? "?"} to ${coverage.last ?? "?"}` +
-      `, ${coverage.outside} outside ${range.from}..${range.to}, ${coverage.undated} undated of ${coverage.total}` +
-      (coverage.outside ? "  <-- THE DATE FILTER DID NOT TAKE" : "")
-  );
-  const seen = {
-    outside: coverage.outside,
-    span: `${coverage.first ?? "?"} to ${coverage.last ?? "?"}`,
-  };
-  if (!table || !usableRows(table).length) {
-    // Three months with no crossings is ordinary, not an error.
-    return {
-      result: null,
-      source: "none",
-      rowCount: 0,
-      pagesRead: page.pagesRead,
-      pagingStopped: page.pagingStopped,
-      report: describeShape(page),
-      ...seen,
-    };
-  }
-  return { ...(await sendTolls(page)), ...seen };
-}
-
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /** The site answered with what reads as a block or an outage. Stop, do not retry. */
 class SiteRefused extends Error {}
-
-/**
- * Called wherever the table has gone missing and not come back.
- *
- * A missing table is ambiguous: a slow page, or the site telling us to go away.
- * Reading the page's own words settles which, and when it is the second the
- * right move is to make no further request — not to retry, wait and click again.
- */
-async function stopIfBlocked(tabId: number): Promise<void> {
-  const text = await inPage(tabId, () => document.body?.innerText ?? "", []);
-  const snippet = looksBlocked(text);
-  if (snippet) {
-    note(`  THE PAGE SAYS: "${snippet}"`);
-    throw new SiteRefused(snippet);
-  }
-}
-
-/**
- * Re-read until the table changes to something with rows, or long enough to be
- * sure it will not.
- *
- * An empty table is not a change. E-ZPass swaps the table for nothing while the
- * next page loads, and treating that as "the next page" made paging stop at
- * page one with "the next page was empty" — and the real page two then arrived
- * during the following date window and was counted as its rows.
- */
-async function waitForChange(
-  tabId: number,
-  before: string,
-  fallback: PageDescriptor,
-  maxMs = 15000
-): Promise<PageDescriptor> {
-  const started = Date.now();
-  let sawLoading = false;
-  while (Date.now() - started < maxMs) {
-    await sleep(400);
-    const descriptor = await inPage(tabId, readPageInPage, []);
-    const signature = tableSignature(activityOf(descriptor));
-    fallback = descriptor;
-    if (signature === "empty") sawLoading = true;
-    if (pageChanged(signature, before)) {
-      if (sawLoading) note(`  table was empty while loading; rows back after ${Date.now() - started}ms`);
-      return descriptor;
-    }
-  }
-  note(
-    `  waited ${Math.round((Date.now() - started) / 1000)}s and the table never changed` +
-      (sawLoading ? " (it was empty for part of that)" : "")
-  );
-  if (tableSignature(activityOf(fallback)) === "empty") await stopIfBlocked(tabId);
-  return fallback;
-}
-
-/** Wait for a table with rows to be on the page; used before touching the form. */
-async function waitForRows(tabId: number, current: PageDescriptor, maxMs = 12000): Promise<PageDescriptor> {
-  if (activityOf(current)?.rows.length) return current;
-  const started = Date.now();
-  while (Date.now() - started < maxMs) {
-    await sleep(400);
-    const descriptor = await inPage(tabId, readPageInPage, []);
-    if (activityOf(descriptor)?.rows.length) {
-      note(`  waited ${Date.now() - started}ms for the table to be there before starting`);
-      return descriptor;
-    }
-  }
-  note(`  no table with rows after ${Math.round(maxMs / 1000)}s`);
-  await stopIfBlocked(tabId);
-  note("  nothing on the page reads like a refusal; starting anyway");
-  return current;
-}
 
 // ---------------------------------------------------------------------------
 // Message listener
@@ -1976,7 +1047,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "SEND_TOLLS") {
-    sendStatement(message.tabId)
+    readEzpass()
       .then(
       (result) => sendResponse({ type: "SEND_TOLLS_RESULT", result } satisfies MessageType),
       (error: unknown) =>
@@ -2185,48 +1256,227 @@ function turoSessionInPage(): Promise<number> {
     .catch(() => 0);
 }
 
-/**
- * Read E-ZPass, queued from the site — from the phone, typically.
- *
- * Only on an E-ZPass tab already open in this Chrome. Opening one would land
- * on a login page whenever the session has lapsed, and the extension never
- * holds the E-ZPass password; an open, logged-in tab is the operator having
- * signed in. The run is the same one a Send tolls click makes, gentle pacing
- * and pause-on-refusal included.
- */
+/** Read E-ZPass, queued from the site — from the phone, typically. */
 async function runTollsCommand(): Promise<{ ok: boolean; result: string }> {
-  const open = await chrome.tabs.query({ url: "https://*.e-zpassny.com/*" });
-  const tab = open.find((t) => t.id !== undefined && !t.discarded) ?? open.find((t) => t.id !== undefined);
-  if (tab?.id === undefined) {
-    return {
-      ok: false,
-      result:
-        "no E-ZPass tab is open in Chrome. Open Account Activity on the computer, log in, " +
-        "and leave the tab open; then this works from anywhere.",
-    };
-  }
-  if (tab.discarded || tab.status !== "complete") {
-    // Chrome unloads a tab left alone long enough; reloading brings the page
-    // and its session back, if the session is still good.
-    const id = tab.id;
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(() => {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }, 30_000);
-      const listener = (updated: number, info: chrome.tabs.TabChangeInfo) => {
-        if (updated !== id || info.status !== "complete") return;
-        clearTimeout(timer);
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      };
-      chrome.tabs.onUpdated.addListener(listener);
-      if (tab.discarded) chrome.tabs.reload(id).catch(() => undefined);
-    });
-  }
-  const run = await sendStatement(tab.id);
+  const run = await readEzpass();
   await chrome.storage.local.set({ lastTollsRun: { at: Date.now(), log: run.log ?? [] } });
   return describeTollsCommand(run);
+}
+
+// ---------------------------------------------------------------------------
+// E-ZPass through its API, from any page
+// ---------------------------------------------------------------------------
+// The Monarch way: all that is asked is that the operator be logged in to
+// E-ZPass in this Chrome. The calls are made from inside an e-zpassny.com page
+// (an open one, or a hidden one opened for this), so they carry the session
+// and pass the site's bot protection as the site's own calls do.
+
+const EZPASS_HOME = "https://www.e-zpassny.com/";
+const EZPASS_API = "https://api.e-zpassny.com/api/account/transaction";
+const EZPASS_LOGGED_OUT =
+  "You're not logged in to E-ZPass in this Chrome. Log in at e-zpassny.com (tick \"Keep me Logged In\"), then try again.";
+
+class EzpassLoggedOut extends Error {}
+
+/** What one call made from the page came back with. */
+interface EzpassCall {
+  /** "out": the session route gave no token. "fail": the call itself failed. */
+  outcome: "ok" | "out" | "fail";
+  status: number;
+  body: unknown;
+  /** The first of the answer's text, for a refusal that is not JSON. */
+  text: string;
+}
+
+/**
+ * One transaction call, from inside an e-zpassny.com page.
+ *
+ * The token is asked for afresh each time: it lasts ten minutes or so and the
+ * session route re-issues it, so a long read never runs on a stale one.
+ */
+async function ezpassCallInPage(url: string, request: Record<string, unknown>): Promise<EzpassCall> {
+  try {
+    const session = await fetch("/api/auth/session", { credentials: "include", headers: { Accept: "application/json" } });
+    const auth = (await session.json().catch(() => null)) as { accessToken?: unknown } | null;
+    if (!auth || typeof auth.accessToken !== "string" || !auth.accessToken) {
+      return { outcome: "out", status: session.status, body: null, text: "" };
+    }
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${auth.accessToken}`, "content-type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(request),
+    });
+    const raw = await response.text();
+    let body: unknown = null;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      body = null;
+    }
+    if (response.status === 401) return { outcome: "out", status: 401, body: null, text: "" };
+    return { outcome: response.ok ? "ok" : "fail", status: response.status, body, text: raw.slice(0, 400) };
+  } catch (error) {
+    return { outcome: "fail", status: 0, body: null, text: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/** An e-zpassny.com tab to call from: an open one, or a hidden one closed after. */
+async function withEzpassTab<T>(work: (tabId: number) => Promise<T>): Promise<T> {
+  const open = await chrome.tabs.query({ url: "https://*.e-zpassny.com/*", status: "complete" });
+  const existing = open.find((tab) => tab.id !== undefined && !tab.discarded);
+  let id = existing?.id;
+  let opened = false;
+  if (id === undefined) {
+    const created = await chrome.tabs.create({ url: EZPASS_HOME, active: false });
+    if (created.id === undefined) throw new Error("could not open an E-ZPass tab");
+    id = created.id;
+    opened = true;
+    await waitForLoad(id, "E-ZPass");
+  }
+  try {
+    return await work(id);
+  } finally {
+    if (opened) chrome.tabs.remove(id).catch(() => undefined);
+  }
+}
+
+function waitForLoad(id: number, site: string): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      chrome.tabs.onUpdated.removeListener(listener);
+      reject(new Error(`${site} did not load within 30 seconds`));
+    }, 30_000);
+    const listener = (updated: number, info: chrome.tabs.TabChangeInfo) => {
+      if (updated !== id || info.status !== "complete") return;
+      clearTimeout(timer);
+      chrome.tabs.onUpdated.removeListener(listener);
+      resolve();
+    };
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+/**
+ * Read the E-ZPass statement through the site's API and post it, a window at a
+ * time, newest first. Same pacing and pause-on-refusal as the page-driven read.
+ */
+async function readEzpass(): Promise<SendTollsResult> {
+  startTrace();
+  const stored = await chrome.storage.local.get(["tollsBlockedUntil"]);
+  const refusal = runGate(
+    Date.now(),
+    typeof stored.tollsBlockedUntil === "number" ? stored.tollsBlockedUntil : null
+  );
+  if (refusal) {
+    note(`not starting: ${refusal}. No request was made to E-ZPass.`);
+    return { result: null, source: "none", rowCount: 0, problem: refusal, log: trace };
+  }
+  note(`extension ${chrome.runtime.getManifest().version}, reading through the E-ZPass API`);
+  try {
+    const result = await withEzpassTab((tabId) => readEzpassWindows(tabId));
+    note(
+      result.problem
+        ? `finished with a problem: ${result.problem}`
+        : result.result
+          ? `finished: ${result.result.rows} rows read, ${result.result.imported} new, ${result.result.already_known} known, ${result.result.matched} attributed`
+          : "finished with nothing sent"
+    );
+    return { ...result, log: trace };
+  } catch (error) {
+    if (error instanceof EzpassLoggedOut) {
+      note("logged out: the session route gave no token");
+      return { result: null, source: "none", rowCount: 0, problem: EZPASS_LOGGED_OUT, log: trace };
+    }
+    if (error instanceof SiteRefused) {
+      await chrome.storage.local.set({ tollsBlockedUntil: Date.now() + BLOCK_PAUSE_MS });
+      note(`STOPPED: the site looks like it is refusing or down. No more requests for ${BLOCK_PAUSE_MS / 60_000} minutes.`);
+      return {
+        result: null,
+        source: "none",
+        rowCount: 0,
+        problem: `E-ZPass answered with what reads as a block or outage ("${error.message}"). Stopped, and paused for an hour.`,
+        log: trace,
+      };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    note(`THREW: ${message}`);
+    return { result: null, source: "none", rowCount: 0, problem: `the run failed: ${message}`, log: trace };
+  }
+}
+
+async function readEzpassWindows(tabId: number): Promise<SendTollsResult> {
+  const now = new Date();
+  const today = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, "0"),
+    String(now.getDate()).padStart(2, "0"),
+  ].join("-");
+  const { tollsMonths } = await settings();
+  const ranges = quarterRanges(today, tollsMonths);
+  note(`today is ${today}; reading ${tollsMonths} month(s) as ${ranges.length} window(s), newest first`);
+
+  const windows: WindowReport[] = [];
+  const results: ImportResult[] = [];
+  let problem: string | undefined;
+  let calls = 0;
+  for (const [position, range] of ranges.entries()) {
+    if (position > 0) await sleep(WINDOW_PACE_MS);
+    const rows: Record<string, unknown>[] = [];
+    let start: number | null = 1;
+    let windowCalls = 0;
+    while (start !== null) {
+      if (calls > 0) await sleep(PACE_MS);
+      calls++;
+      windowCalls++;
+      const [injected] = await chrome.scripting.executeScript({
+        target: { tabId },
+        func: ezpassCallInPage,
+        args: [EZPASS_API, transactionRequest(range, start)],
+      });
+      const call = injected?.result as EzpassCall | undefined;
+      if (!call || call.outcome === "out") throw new EzpassLoggedOut();
+      const page = call.outcome === "ok" ? readTransactionAnswer(call.body) : null;
+      if (!page) {
+        const blocked = looksBlocked(call.text) ?? (call.status === 403 || call.status === 429 ? `status ${call.status}` : null);
+        if (blocked) throw new SiteRefused(blocked);
+        const said =
+          call.body && typeof call.body === "object" && "message" in call.body
+            ? String((call.body as { message: unknown }).message)
+            : call.text.replace(/\d/g, "#").slice(0, 160);
+        problem = `${range.from} to ${range.to}: E-ZPass answered ${call.status || "nothing"}${said ? ` (${said})` : ""}`;
+        break;
+      }
+      rows.push(...page.rows);
+      start = nextStartIndex(rows.length, page, windowCalls);
+    }
+    if (problem) break;
+    const { csv, rowCount, skipped } = apiRowsToCsv(rows);
+    note(`window ${range.from} to ${range.to}: ${rows.length} rows, ${rowCount} crossings, ${skipped} payments/credits/other`);
+    const report: WindowReport = { ...range, rows: rowCount };
+    windows.push(report);
+    if (!rowCount) continue;
+    try {
+      const result = await postStatement(csv);
+      note(`  API: ${result.imported} new, ${result.already_known} known, ${result.matched} attributed`);
+      results.push(result);
+    } catch (error) {
+      report.problem = error instanceof Error ? error.message : String(error);
+      problem = `${range.from} to ${range.to}: ${report.problem}`;
+      break;
+    }
+  }
+
+  const rowCount = windows.reduce((n, w) => n + w.rows, 0);
+  const empty: ImportResult = { rows: 0, imported: 0, already_known: 0, matched: 0, unmatched: 0, unknown_tags: [] };
+  return {
+    windows,
+    // A logged-in read that found no crossings is still a read: say so as zero
+    // rows, not as "nothing on the page", which reads as logged out.
+    result: results.length ? sumImportResults(results) : problem ? null : empty,
+    source: "api",
+    rowCount,
+    ...(problem ? { problem } : {}),
+  };
 }
 
 /**
@@ -2241,19 +1491,6 @@ async function turoTabForCommands(): Promise<{ id: number; opened: boolean }> {
 
   const created = await chrome.tabs.create({ url: "https://turo.com/us/en/trips", active: false });
   if (created.id === undefined) throw new Error("could not open a Turo tab");
-  const id = created.id;
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => {
-      chrome.tabs.onUpdated.removeListener(listener);
-      reject(new Error("Turo did not load within 30 seconds"));
-    }, 30_000);
-    const listener = (updated: number, info: chrome.tabs.TabChangeInfo) => {
-      if (updated !== id || info.status !== "complete") return;
-      clearTimeout(timer);
-      chrome.tabs.onUpdated.removeListener(listener);
-      resolve();
-    };
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-  return { id, opened: true };
+  await waitForLoad(created.id, "Turo");
+  return { id: created.id, opened: true };
 }

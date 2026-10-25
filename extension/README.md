@@ -3,12 +3,12 @@
 Two jobs, both of them "read a page I am already logged into and get the data
 out":
 
-1. **Send tolls to Turonomics** — reads an E-ZPass account-activity page and
-   posts the statement to the API, which attributes each crossing to the trip
+1. **Send tolls to Turonomics** — reads your E-ZPass account activity, from
+   any page, and posts the statement to the API, which attributes each crossing to the trip
    and guest who was driving.
 2. **Export Last 90 Days** — writes a CSV of Turo host trips to Downloads.
 
-## Why the tolls are scraped in your browser
+## Why the tolls are read in your browser
 
 `www.e-zpassny.com` is behind Imperva bot protection: an unauthenticated
 request gets a JavaScript challenge instead of HTML. Scraping it from the
@@ -22,67 +22,56 @@ Nothing stores your E-ZPass credentials — this extension never sees them.
 
 ## Sending a statement
 
-1. Log in to E-ZPass and open **Account Activity**.
-2. Click the Turonomics icon → **Send tolls to Turonomics**.
+1. Be logged in to E-ZPass in this Chrome. Tick **Keep me Logged In** on the
+   login form: without it the site logs you out after about ten idle minutes.
+2. From any page, click the Turonomics icon → **Send tolls to Turonomics**
+   (or press **Read E-ZPass** on the site's invoices page, from a phone).
 3. It reports what the API did with it: how many rows it read, how many were
    new, how many it could attribute to a guest, and any transponder that is not
-   bound to a car.
+   bound to a car. Logged out is said in those words.
 
-### Reading 90 days at a time
+### How it reads
 
-When the page has a from/to date pair and a search button the extension
-recognises, it drives them itself: it asks for the history as consecutive windows of 90 days, **newest first**, and for each one fills in the
-dates, runs the search, pages through the results, and posts that window to the
-API before starting the next. Posting per window means a run that dies on the
-third has still delivered the first two. The windows meet exactly — each starts
-the day after the older one ends — so nothing falls between them. A window with
-no crossings is normal and is not an error.
+The Account Activity page fills its table from one JSON call to
+`api.e-zpassny.com`, made with a short-lived token the site's session route
+hands out. The extension makes the same call, from inside an e-zpassny.com page
+— an open tab if there is one, otherwise a hidden one it closes after — so it
+carries your session and meets the bot protection as the site's own calls do.
+No page needs to be open, no form is filled and no pager clicked.
 
-In this mode the site's own CSV download is **not** used: its link is built for
-whatever range the page last showed, and a stale one would return the same rows
-for every window and look complete.
+It reads 90-day windows (the API refuses more than three months), **newest
+first**, and posts each to the API before starting the next, so a run that dies
+on the third has still delivered the first two. The windows meet exactly, so
+nothing falls between them. A window with no crossings is normal.
 
-If the page has no date fields or search button it recognises, it falls back to
-reading what is on screen. In that mode it prefers a CSV the site generates
-(there is usually a download link on that page) and otherwise scrapes the
-activity table, **paging through it itself**. If the page has a rows-per-page
-control it asks for the largest option first, because a page not loaded is a page
-that cannot go wrong, then clicks through what remains and merges the result. It
-stops when a page repeats, when the click changes nothing, or at 40 pages — and
-the last of those is reported as a warning, because rows may be missing.
-
-Re-sending is harmless either way: the API fingerprints each crossing and skips
-the ones it has.
-
-The paging is driven from the service worker rather than a content script, since
-a "next" link that navigates would tear a content script down mid-loop.
+Only **TOLL POSTING** rows are sent. Payments, CBD and dispute credits, parking
+and fees are left out, and so are the account holder's name and address, which
+the site's answer repeats on every row. What is sent is the site's own CSV
+download format, so the parser that reads a hand-uploaded statement reads this
+too. Re-sending is harmless: the API fingerprints each crossing and skips the
+ones it has.
 
 ### Being gentle with E-ZPass
 
-E-ZPass has started answering this with what reads as a bot block or an outage,
-so the send asks for less and stops sooner. It does not try to look less like a
-script; a refusal is a reason to stop.
+E-ZPass once answered page-driving with what read as a bot block or an outage,
+so a send asks for little and stops at the first refusal. It does not try to
+look less like a script; a refusal is a reason to stop.
 
 - **One window by default.** A run reads the last 3 months. Older months are
   already on file after the first read. To backfill, raise **E-ZPass months to
   read** under Settings once, then put it back.
-- **Paced.** 2 seconds before each click that makes the site fetch something and
-  4 seconds between windows.
-- **Stops on a refusal.** If the table goes missing and the page's own words read
-  like a block or an outage ("unusual activity", "temporarily unavailable",
-  "access denied", …) it stops at once, makes no further requests, and pauses
-  for an hour. The log quotes the words around the match, digits masked, because
-  "you look automated" and "we are down" call for different responses.
+- **Paced.** 2 seconds between calls and 4 seconds between windows.
+- **Stops on a refusal.** If the answer reads like a block or an outage
+  ("unusual activity", "temporarily unavailable", "access denied", a 403 or
+  429, …) it stops at once, makes no further requests, and pauses for an hour.
 
 ### The run log
 
 After every send the popup has a **Run log** under the result (closed when it
-went fine, open when it did not) with a **Copy log** button. It records, step by
-step: which fields it took for the date range and which button it would click,
-what it typed into each, whether the table changed after the search, how many
-rows each page had, why paging stopped, and what the API said per window. Tag
-numbers, plates and amounts never go in it — rows appear only as masked shapes
-like `###|aa aaa####|$-#.##` — so it can be pasted as is.
+went fine, open when it did not) with a **Copy log** button. It records each
+window's dates, how many rows came back, how many were crossings, and what the
+API said. Tag numbers, plates and amounts never go in it, so it can be pasted
+as is.
 
 ### Finding the page's own API
 
@@ -100,23 +89,14 @@ which query parameters it used and how each value is *written* (`us-date(##/##/#
 cookies or headers are recorded, and every value is masked, so it is safe to
 paste.
 
-### If it cannot find the activity
-
-The popup shows a **What was on the page** report naming each table's columns
-and masking their values — `###########` where a tag number was. That is safe to
-paste into an issue; it says what the markup looks like without saying what your
-tolls were.
-
-Two specific things it will tell you about:
+### If something goes wrong
 
 - **The API refused the file.** The message lists the column names it found. The
-  parser's aliases are in `api/src/turonomics_api/parsing/ezpass.py`; adding the
-  page's names there is usually the whole fix.
+  parser's aliases are in `api/src/turonomics_api/parsing/ezpass.py`.
 - **Read N rows and kept none.** An E-ZPass download writes charges as negative
-  and the API treats a positive amount as a payment. If the page shows charges
-  as positive, every row looks like a payment. The extension does not flip the
-  signs itself: an activity table mixes tolls with replenishments, and negating
-  everything would turn a payment into a charge and bill it to a guest.
+  and the API treats a positive amount as a payment. The extension keeps the
+  site's sign rather than flipping it, so if this ever appears the site has
+  changed how it reports a toll.
 
 ### Settings
 
@@ -126,19 +106,12 @@ Under **Settings** in the popup:
 - **Tolls token** — `TOLLS_TOKEN` from the API service, if one is set there.
   Leave it blank if not.
 
-## What has not been verified against the real page
+## What has been verified against the real site
 
-The selectors are structural on purpose — "every `<table>`, scored by whether
-its header has a date, an amount and a tag or plate column" — because the
-logged-in activity page is behind a login and a WAF and could not be opened
-while this was written. The scoring, the CSV assembly, the row cleanup and the
-masking are all covered by `npm test`. Which table on the real page wins is not,
-and cannot be until somebody runs it on the real page. The same goes for the date
-fields and search button: they are found by what they are called and what type
-they are, not by selector, and whether that finds the real ones is only known by
-running it. If it does not, it reads the page as shown rather than guessing. The first run is
-therefore the test: if it picks the wrong table or the API rejects the columns,
-the report in the popup says so and names what it saw.
+The API's route, request body, three-month limit, field names and activity
+categories were read off the logged-in site in October 2026. The conversion to
+CSV, the crossing filter and the paging are covered by `npm test`, including a
+check that the header is the one the API parser's contract file uses.
 
 ## Turo trip export
 
@@ -166,15 +139,14 @@ npm run lint         # eslint
 npm test             # compile, then node --test over dist/
 ```
 
-`src/tolls.ts` holds everything the E-ZPass side decides, and nothing that
-touches the DOM: which table is the statement, which control advances a page,
-which page size to ask for, when paging has finished, how to merge the pages,
-and the date windows with the fields and button that drive them. The functions injected into the page live in `src/background.ts` and do
-the least possible — read the DOM, click a thing, set a select — so that every
-judgement is reachable by `npm test` without a browser.
+`src/tolls.ts` holds everything the E-ZPass side decides: the date windows, the
+request body, when a window is fully read, which rows are crossings and how they
+become CSV. The function injected into the page lives in `src/background.ts` and
+does the least possible — get a token, make one call — so that every judgement
+is reachable by `npm test` without a browser.
 
 `examples/ezpass/scraped-from-page.csv` is a contract between this extension and
-the Python importer: `tolls.test.ts` asserts the scraper still produces it byte
+the Python importer: `tolls.test.ts` asserts the CSV writer still produces it byte
 for byte, and `api/tests/test_parsing_ezpass.py` asserts the importer still
 reads it. Changing the CSV shape on one side fails on the other.
 
@@ -196,6 +168,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.19.0 | build + reload | **Send tolls** and the site's **Read E-ZPass** work from any page: they call E-ZPass's own API from an open or hidden e-zpassny.com tab, and only need you logged in to E-ZPass in Chrome (tick "Keep me Logged In" — the site logs out after ~10 idle minutes otherwise). Crossings only; payments, credits and parking are left out, and so are the account holder's name and address |
 | 1.18.0 | build + reload | **Pull trips** and **File the next toll invoice** work from any page: they use an open Turo tab or a hidden one, and only need you logged in to Turo in Chrome (logged out is said in those words) |
 | 1.17.0 | build + reload | runs **Read E-ZPass** queued from the site (the invoices page, from a phone), on an E-ZPass tab left open and logged in on the computer, and reports the result back |
 | 1.16.0 | build + reload | Pull also reads Turo's receipt for rentals with an uncharged reimbursement, and the API settles an invoice whose exact toll line the receipt shows paid |

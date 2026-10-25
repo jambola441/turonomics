@@ -18,13 +18,9 @@ export interface ImportResult {
 }
 
 export interface SendTollsResult {
-  /** Per window only: rows dated outside it, and the span actually seen. */
-  outside?: number;
-  span?: string;
   /**
-   * What the run did, step by step, with account data masked. Always present on
-   * a read made a window at a time; the popup shows it so it can be pasted into
-   * a bug report.
+   * What the run did, step by step, with no account data in it. The popup
+   * shows it so it can be pasted into a bug report.
    */
   log?: string[];
   /**
@@ -32,19 +28,12 @@ export interface SendTollsResult {
    * `result` is then the sum over them.
    */
   windows?: WindowReport[];
-  /** How many pages of the statement were read, and why reading stopped. */
-  pagesRead?: number;
-  pagingStopped?: string;
-  /** Null when the page yielded no statement; the report says what it had. */
+  /** Null when nothing was read: logged out, refused, or stopped early. */
   result: ImportResult | null;
-  source: "download" | "table" | "none";
+  source: "api" | "none";
   rowCount: number;
-  /** Set when the API refused the file, verbatim — it names the columns. */
+  /** Why the run stopped, in words for the operator. */
   problem?: string;
-  /** The masked page description, for when there was nothing to send. */
-  report?: string;
-  /** The page shows charges as positive, which the API reads as payments. */
-  amountsLookPositive?: boolean;
 }
 
 /** What the API says it wants fetched, and from where. */
@@ -176,7 +165,7 @@ export type MessageType =
   | { type: "FETCH_DETAIL"; tripId: string }
   | { type: "DETAIL_RESULT"; tripId: string; scheduleDates: string[]; scheduleTimes: string[] }
   | { type: "DETAIL_ERROR"; tripId: string; error: string }
-  | { type: "SEND_TOLLS"; tabId: number }
+  | { type: "SEND_TOLLS" }
   | { type: "SEND_TOLLS_RESULT"; result: SendTollsResult }
   | { type: "SEND_TOLLS_ERROR"; error: string }
   | { type: "PROBE_TURO"; tabId: number }

@@ -297,13 +297,10 @@ pullBtn.addEventListener("click", async () => {
   pullReportWrap.classList.add("hidden");
   pullBtn.disabled = true;
   try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab?.id || !tab.url?.startsWith("https://turo.com/")) {
-      showStatus("Open any Turo page first — it needs your logged-in session.", true);
-      return;
-    }
+    // Any page will do: the worker uses an open Turo tab, or a hidden one it
+    // opens and closes, and only needs you logged in to Turo in this Chrome.
     showStatus("Asking Turo about each rental...");
-    const reply = await send(null, { type: "PULL_TURO", tabId: tab.id });
+    const reply = await send(null, { type: "PULL_TURO", tabId: await activeTuroTabId() });
     if (reply.type === "PULL_TURO_ERROR") throw new Error(reply.error);
     if (reply.type !== "PULL_TURO_RESULT") throw new Error("Unexpected response from the worker.");
     statusEl.classList.add("hidden");
@@ -371,10 +368,8 @@ fileBtn.addEventListener("click", async () => {
   fileResultEl.classList.add("hidden");
   fileBtn.disabled = true;
   try {
-    const tab = await turoTab();
-    if (!tab?.id) return;
     showStatus("Drafting, attaching the evidence and filing...");
-    const reply = await send(null, { type: "FILE_INVOICE", tabId: tab.id });
+    const reply = await send(null, { type: "FILE_INVOICE", tabId: await activeTuroTabId() });
     if (reply.type === "FILE_INVOICE_ERROR") throw new Error(reply.error);
     if (reply.type !== "FILE_INVOICE_RESULT") throw new Error("Unexpected response from the worker.");
     statusEl.classList.add("hidden");
@@ -391,6 +386,12 @@ const watchBtn = document.getElementById("watchBtn") as HTMLButtonElement;
 const reportBtn = document.getElementById("reportBtn") as HTMLButtonElement;
 
 /** The Turo or E-ZPass tab, or a message saying to open one. */
+/** The Turo tab in front, if that is where the popup was opened; else none. */
+async function activeTuroTabId(): Promise<number | undefined> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  return tab?.id !== undefined && tab.url?.startsWith("https://turo.com/") ? tab.id : undefined;
+}
+
 async function turoTab(): Promise<chrome.tabs.Tab | null> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !isProbeable(tab.url)) {

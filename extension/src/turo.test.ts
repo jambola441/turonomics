@@ -11,6 +11,7 @@ import { test } from "node:test";
 
 import type { TuroPullResult } from "./types.js";
 import {
+  sessionLooksLive,
   CHARGE_KEYS,
   describeFiling,
   reimbursementRequestPath,
@@ -787,4 +788,14 @@ test("a receipt Turo would not return is reported, not read as nothing paid", ()
 
 test("a pull that read no receipts says nothing about them", () => {
   assert.ok(!/receipt/.test(describePull({ ...EMPTY, asked: 1, stored: 1 })));
+});
+
+
+test("a Turo session is live unless Turo says 401 or 403", () => {
+  assert.equal(sessionLooksLive(200), true);
+  assert.equal(sessionLooksLive(401), false);
+  assert.equal(sessionLooksLive(403), false);
+  // Could not tell: let the work run and fail in its own words.
+  assert.equal(sessionLooksLive(0), true);
+  assert.equal(sessionLooksLive(undefined), true);
 });

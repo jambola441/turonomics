@@ -196,6 +196,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.18.0 | build + reload | **Pull trips** and **File the next toll invoice** work from any page: they use an open Turo tab or a hidden one, and only need you logged in to Turo in Chrome (logged out is said in those words) |
 | 1.17.0 | build + reload | runs **Read E-ZPass** queued from the site (the invoices page, from a phone), on an E-ZPass tab left open and logged in on the computer, and reports the result back |
 | 1.16.0 | build + reload | Pull also reads Turo's receipt for rentals with an uncharged reimbursement, and the API settles an invoice whose exact toll line the receipt shows paid |
 | 1.15.3 | build + reload | fixes 1.15.2 wiping the end date (it focused the field); refuses to search with a date the page rejects; checks the table is back on page 1; the 5-minute cooldown is gone |

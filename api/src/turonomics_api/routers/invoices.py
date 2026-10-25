@@ -736,10 +736,16 @@ def ledger(session: DbSession) -> LedgerResponse:
     built = build_invoices(session, now=now, include_recovered=True)
     asked = _reimbursements(session, [i.trip_id for i in built])
     crossings = _tolls_by_trip(session, [i.trip_id for i in built])
-    # Held here rather than fetched by id per row: the session only remembers
-    # a loaded row while something refers to it, and building the invoices
-    # keeps the figures, not the rows, so a get() per rental was a query each.
-    trips = _trips_by_id(session, [i.trip_id for i in built])
+    # Every rental on the books, read once and used twice: for the rows below
+    # and for the quiet rentals after them. Held in a dict rather than fetched
+    # by id per row: the session only remembers a loaded row while something
+    # refers to it, and building the invoices keeps the figures, not the rows,
+    # so a get() per rental was a query each. A rental with crossings that is
+    # not on the books (cancelled, say) is fetched by id, which is nearly
+    # always nobody.
+    on_the_books = _rentals_on_the_books(session, now=now)
+    trips = {trip.id: trip for trip in on_the_books}
+    trips.update(_trips_by_id(session, [i.trip_id for i in built if i.trip_id not in trips]))
 
     rows: list[LedgerRow] = []
     for invoice in built:
@@ -780,7 +786,11 @@ def ledger(session: DbSession) -> LedgerResponse:
     first, last = session.execute(
         select(func.min(Toll.occurred_at), func.max(Toll.occurred_at))
     ).one()
-    rows.extend(_quiet_rentals(session, rows, first=first, last=last, window=window, now=now))
+    rows.extend(
+        _quiet_rentals(
+            session, rows, on_the_books, first=first, last=last, window=window, now=now
+        )
+    )
     rows.sort(key=lambda row: row.ends_at, reverse=True)
     return LedgerResponse(
         statements_from=first,
@@ -828,9 +838,24 @@ NO_CROSSINGS = "no crossings"
 NO_STATEMENT = "no statement yet"
 
 
+def _rentals_on_the_books(session: Session, *, now: datetime) -> list[Trip]:
+    """Every rental that has started and was not cancelled, with its car."""
+    return list(
+        session.scalars(
+            select(Trip)
+            .where(
+                Trip.state != TripState.cancelled,
+                Trip.starts_at <= now,
+            )
+            .options(selectinload(Trip.vehicle))
+        )
+    )
+
+
 def _quiet_rentals(
     session: Session,
     seen: list[LedgerRow],
+    on_the_books: list[Trip],
     *,
     first: datetime | None,
     last: datetime | None,
@@ -849,15 +874,7 @@ def _quiet_rentals(
     and a car that crossed nothing that month is still covered by it.
     """
     known = {row.trip_id for row in seen}
-    trips = session.scalars(
-        select(Trip)
-        .where(
-            Trip.state != TripState.cancelled,
-            Trip.starts_at <= now,
-        )
-        .options(selectinload(Trip.vehicle))
-    ).all()
-    quiet = [trip for trip in trips if trip.id not in known]
+    quiet = [trip for trip in on_the_books if trip.id not in known]
     asked = _reimbursements(session, [trip.id for trip in quiet])
     out: list[LedgerRow] = []
     for trip in quiet:

@@ -534,14 +534,20 @@ class Trip(Base):
     # Turo's reservation page fetches them. Lists, kept whole for the trip
     # view; `extras_synced_at` says when, so a finished trip is not re-read on
     # every pull.
-    turo_photos: Mapped[list[object] | None] = mapped_column(JSONB)
-    turo_messages: Mapped[list[object] | None] = mapped_column(JSONB)
+    #
+    # Deferred, with the receipt below: they are the bulk of a trip row, and
+    # only the trip view wants them. Every list and the ledger read the whole
+    # trip table, and reading these three along with it was most of what made
+    # those pages slow. Deferred means a query that does not ask for them
+    # does not get them; touching one on a loaded trip fetches it then.
+    turo_photos: Mapped[list[object] | None] = mapped_column(JSONB, deferred=True)
+    turo_messages: Mapped[list[object] | None] = mapped_column(JSONB, deferred=True)
     extras_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Turo's receipt for the rental (`/api/reservation/<id>/receipt`), whole: what
     # the guest paid, what the host earned, and the reimbursements on top. The
     # place to see what actually reached the host, and the evidence that a
     # reimbursement was settled.
-    turo_receipt: Mapped[dict[str, object] | None] = mapped_column(JSONB)
+    turo_receipt: Mapped[dict[str, object] | None] = mapped_column(JSONB, deferred=True)
     receipt_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Miles the tracker recorded over the rental, from Bouncie's odometer at
     # the first and last drive. Set the first time the rental's route is read

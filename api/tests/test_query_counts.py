@@ -58,16 +58,15 @@ def _rentals(session: Session, car: Vehicle, first: int, count: int) -> None:
     session.commit()
 
 
-def _statements(engine: Engine, session: Session, read: Callable[[], object]) -> int:
-    """How many statements `read` sends, from a session that remembers nothing."""
+def _sql(engine: Engine, session: Session, read: Callable[[], object]) -> list[str]:
+    """The statements `read` sends, from a session that remembers nothing."""
     # Expired, so that a lazy load the code relies on shows up as the query it
     # is, rather than being answered from what the fixture just inserted.
     session.expire_all()
-    seen = 0
+    seen: list[str] = []
 
-    def tick(*_: object) -> None:
-        nonlocal seen
-        seen += 1
+    def tick(_conn: object, _cursor: object, statement: str, *_: object) -> None:
+        seen.append(statement)
 
     event.listen(engine, "before_cursor_execute", tick)
     try:
@@ -75,6 +74,20 @@ def _statements(engine: Engine, session: Session, read: Callable[[], object]) ->
     finally:
         event.remove(engine, "before_cursor_execute", tick)
     return seen
+
+
+def _statements(engine: Engine, session: Session, read: Callable[[], object]) -> int:
+    """How many statements `read` sends, from a session that remembers nothing."""
+    return len(_sql(engine, session, read))
+
+
+# The columns that make a trip row heavy: Turo's photos, the message thread
+# and the receipt. The trip view wants them; nothing that lists rentals does.
+HEAVY = ("turo_photos", "turo_messages", "turo_receipt")
+
+
+def _reads_heavy_columns(statements: list[str]) -> list[str]:
+    return [col for col in HEAVY if any(col in sql for sql in statements)]
 
 
 @requires_db
@@ -90,6 +103,10 @@ def test_the_ledger_asks_the_same_questions_for_three_rentals_as_for_twelve(
     large = _statements(engine, session, lambda: ledger(session))
     assert len(ledger(session).rows) == 12, "every rental is on the ledger"
     assert large == small, f"{small} statements for 3 rentals became {large} for 12"
+    statements = _sql(engine, session, lambda: ledger(session))
+    assert _reads_heavy_columns(statements) == [], "the ledger reads no photos or messages"
+    trip_loads = [sql for sql in statements if "FROM trip" in sql]
+    assert len(trip_loads) <= 2, f"the trip table was read {len(trip_loads)} times"
 
 
 @requires_db
@@ -111,3 +128,5 @@ def test_the_trips_list_asks_the_same_questions_for_three_rentals_as_for_twelve(
     rows = list_trips(session, manual_only=False, authorization=None).trips
     assert len(rows) == 12 and all(r.toll_count == 2 for r in rows), "the counts still hold"
     assert large == small, f"{small} statements for 3 rentals became {large} for 12"
+    statements = _sql(engine, session, read)
+    assert _reads_heavy_columns(statements) == [], "the list reads no photos or messages"

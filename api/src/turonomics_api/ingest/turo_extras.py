@@ -32,6 +32,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import Trip, TripState
+from turonomics_api.names import repair_mojibake
 
 # How long after a trip ends its photos and thread are still worth re-reading:
 # the guest's return photos, the host's inspection, a dispute about either.
@@ -174,7 +175,7 @@ def thread(messages: list[object] | None) -> list[Message]:
         out.append(
             Message(
                 role=role if isinstance(role, str) else None,
-                name=name if isinstance(name, str) else None,
+                name=repair_mojibake(name) if isinstance(name, str) else None,
                 sent_at=_moment(message.get("sentTime")),
                 text=text if isinstance(text, str) else None,
                 images=len(images) if isinstance(images, list) else 0,

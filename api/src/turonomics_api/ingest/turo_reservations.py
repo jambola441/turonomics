@@ -36,6 +36,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import Trip, TripSource, TripState, Vehicle
+from turonomics_api.names import repair_mojibake
 from turonomics_api.plates import normalize_plate
 
 log = logging.getLogger("turonomics.ingest.turo_reservations")
@@ -154,7 +155,8 @@ def parse_reservation(entry: Mapping[str, Any]) -> TuroReservation | None:
         starts_at=span[0],
         ends_at=span[1],
         status=status if isinstance(status, str) else None,
-        guest_name=name.strip() if isinstance(name, str) and name.strip() else None,
+        # Turo has sent a name double-encoded; see names.py.
+        guest_name=repair_mojibake(name.strip()) if isinstance(name, str) and name.strip() else None,
         plate=normalize_plate(plate) if isinstance(plate, str) and plate.strip() else None,
         vin=vin.strip().upper() if isinstance(vin, str) and vin.strip() else None,
         listing_id=str(listing) if isinstance(listing, int) and not isinstance(listing, bool)

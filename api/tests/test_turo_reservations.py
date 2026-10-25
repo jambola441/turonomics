@@ -140,6 +140,15 @@ def test_a_reservation_reads_its_car_and_guest() -> None:
     assert parsed.cancelled is False, "a cancelledRequest span alone is not a cancellation"
 
 
+def test_a_name_turo_sent_double_encoded_is_read_as_written() -> None:
+    entry = _trip(1, JUNE, JUNE + td(days=2))
+    # The UTF-8 bytes of "İ" (C4 B0), each read as a character: how one real
+    # guest's name arrived from Turo.
+    entry["renter"] = {"id": 555, "firstName": "\u00c4\u00b0lkay"}
+    parsed = parse_reservation(entry)
+    assert parsed is not None and parsed.guest_name == "\u0130lkay"
+
+
 def test_cancelled_is_read_off_the_status() -> None:
     parsed = parse_reservation(_trip(1, JUNE, JUNE + td(days=2), status="CANCELLED"))
     assert parsed is not None and parsed.cancelled is True

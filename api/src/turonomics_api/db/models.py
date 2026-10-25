@@ -557,6 +557,12 @@ class Trip(Base):
     # Which version of the counting rule produced them (`TRACKER_MILES_RULE`),
     # so miles counted by an older one are read again.
     tracker_miles_rule: Mapped[int | None] = mapped_column(SmallInteger)
+    # The operator looked at what Turo already charged on this rental, which
+    # did not square with its crossings, and marked it checked. Held with the
+    # charged total it was checked against: a check covers that charge, and a
+    # new one from Turo brings the warning back.
+    turo_charge_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    turo_charge_checked_cents: Mapped[int | None] = mapped_column(Integer)
 
     vehicle: Mapped[Vehicle] = relationship(back_populates="trips")
 

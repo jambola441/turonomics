@@ -39,11 +39,9 @@
       <hr />
 
       <section>
-        <p class="subtitle">On any Turo page — trips, or an invoice — or the E-ZPass activity page</p>
-        <!-- The trip scraper matches on emotion class names and reads dates
-             with no year in them. Turo's pages get their data as JSON; this
-             finds out from where. The report names the shape of each payload
-             and masks every value, so it is safe to paste. -->
+        <!-- From any page: the worker uses an open Turo tab or a hidden one,
+             like the Monarch extension does a bank's. -->
+        <p class="subtitle">From any page — you only need to be logged in to Turo in Chrome</p>
         <button id="fileBtn" class="btn">File the next toll invoice</button>
         <div id="fileResult" class="result hidden"></div>
         <button id="pullBtn" class="btn btn-quiet">Pull trips from Turo</button>
@@ -52,6 +50,15 @@
           <summary>What came back</summary>
           <pre id="pullReport"></pre>
         </details>
+      </section>
+
+      <hr />
+
+      <section>
+        <p class="subtitle">On any Turo page — trips, or an invoice — or the E-ZPass activity page</p>
+        <!-- Turo's pages get their data as JSON; this finds out from where.
+             The report names the shape of each payload and masks every value,
+             so it is safe to paste. -->
         <button id="probeBtn" class="btn btn-quiet">What does this page fetch?</button>
         <!-- For capturing something that happens later, like filing an
              invoice: start the watch, do the thing, then report. The one-shot

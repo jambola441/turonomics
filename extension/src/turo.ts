@@ -611,3 +611,13 @@ export function listPath(template: string, page: number, size: number): string {
   }
   return template.replace("{page}", String(page)).replace("{size}", String(size));
 }
+/**
+ * Whether Turo's answer to an account call means the session is live.
+ *
+ * Only 401 and 403 count as logged out. Anything else, a network failure or
+ * a probe that could not run included, lets the work go ahead and fail in
+ * its own words, rather than being stopped by a check that could not tell.
+ */
+export function sessionLooksLive(status: number | undefined | null): boolean {
+  return status !== 401 && status !== 403;
+}

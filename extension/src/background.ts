@@ -54,6 +54,7 @@ import {
   type WindowReport,
 } from "./tolls.js";
 import {
+  sessionLooksLive,
   describeEmbedded,
   listPath,
   nextPage,
@@ -1988,7 +1989,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "FILE_INVOICE") {
-    fileInvoice(message.tabId).then(
+    withTuroTab(message.tabId, (tabId) => fileInvoice(tabId)).then(
       (result) => sendResponse({ type: "FILE_INVOICE_RESULT", result } satisfies MessageType),
       (error: unknown) =>
         sendResponse({
@@ -2000,7 +2001,7 @@ chrome.runtime.onMessage.addListener((message: MessageType, _sender, sendRespons
   }
 
   if (message.type === "PULL_TURO") {
-    pullTuro(message.tabId).then(
+    withTuroTab(message.tabId, (tabId) => pullTuro(tabId)).then(
       (result) => sendResponse({ type: "PULL_TURO_RESULT", result } satisfies MessageType),
       (error: unknown) =>
         sendResponse({
@@ -2140,26 +2141,48 @@ async function runCommands(): Promise<void> {
 
 async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: string }> {
   if (command.kind === "tolls") return runTollsCommand();
-  let tab: { id: number; opened: boolean };
-  try {
-    tab = await turoTabForCommands();
-  } catch (error) {
-    return { ok: false, result: error instanceof Error ? error.message : String(error) };
-  }
   try {
     if (command.kind === "pull") {
-      return { ok: true, result: describePull(await pullTuro(tab.id)) };
+      return { ok: true, result: describePull(await withTuroTab(undefined, pullTuro)) };
     }
     if (command.kind === "file" && command.trip_id) {
-      const outcome = await fileInvoice(tab.id, command.trip_id);
+      const tripId = command.trip_id;
+      const outcome = await withTuroTab(undefined, (tabId) => fileInvoice(tabId, tripId));
       return { ok: outcome.filed, result: describeFiling(outcome) };
     }
     return { ok: false, result: `this version of the extension cannot ${command.kind}` };
   } catch (error) {
     return { ok: false, result: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Run some work inside a Turo page, wherever the user happens to be.
+ *
+ * The tab given (the one the popup was opened on), an open Turo tab, or a
+ * hidden one opened for this and closed after — so all that is asked of the
+ * user is to be logged in to Turo in this Chrome, as the Monarch extension
+ * asks of a bank. Logged out is said in those words before anything runs,
+ * rather than surfacing later as a 401 from some call in the middle.
+ */
+async function withTuroTab<T>(preferred: number | undefined, work: (tabId: number) => Promise<T>): Promise<T> {
+  const tab = preferred !== undefined ? { id: preferred, opened: false } : await turoTabForCommands();
+  try {
+    const [probe] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, func: turoSessionInPage });
+    if (!sessionLooksLive(probe?.result)) {
+      throw new Error("You're not logged in to Turo in this Chrome. Log in at turo.com, then try again.");
+    }
+    return await work(tab.id);
   } finally {
     if (tab.opened) chrome.tabs.remove(tab.id).catch(() => undefined);
   }
+}
+
+/** The status Turo answers an account call with, from inside the page; 0 on a network failure. */
+function turoSessionInPage(): Promise<number> {
+  return fetch("/api/v2/driver/detail", { credentials: "include", headers: { Accept: "application/json" } })
+    .then((response) => response.status)
+    .catch(() => 0);
 }
 
 /**

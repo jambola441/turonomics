@@ -18,7 +18,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip, TripState
@@ -116,6 +116,34 @@ def _reimbursements(
         if row.trip_id is not None:
             out.setdefault(row.trip_id, []).append(row)
     return out
+
+
+def _tolls_by_trip(session: Session, trip_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[Toll]]:
+    """Every crossing on these rentals, settled ones included, in one query.
+
+    The ledger once asked for each rental's crossings as it reached that
+    rental: one round trip per row, and the page waited on all of them in
+    turn. The database is on another host, so that was the page's load time.
+    """
+    if not trip_ids:
+        return {}
+    out: dict[uuid.UUID, list[Toll]] = {}
+    for toll in session.scalars(select(Toll).where(Toll.trip_id.in_(trip_ids))):
+        if toll.trip_id is not None:
+            out.setdefault(toll.trip_id, []).append(toll)
+    return out
+
+
+def _trips_by_id(session: Session, trip_ids: list[uuid.UUID]) -> dict[uuid.UUID, Trip]:
+    """These rentals, with their cars, in one query."""
+    if not trip_ids:
+        return {}
+    return {
+        trip.id: trip
+        for trip in session.scalars(
+            select(Trip).where(Trip.id.in_(trip_ids)).options(selectinload(Trip.vehicle))
+        )
+    }
 
 
 def _unreadable(rows: list[ReimbursementInvoice]) -> int:
@@ -626,8 +654,8 @@ class _Tally:
 
 
 def _tally(
-    session: Session,
     invoice: Invoice,
+    tolls: list[Toll],
     theirs: list[ReimbursementInvoice],
     *,
     window: int,
@@ -640,11 +668,11 @@ def _tally(
     offered Austin's $40.71 while the ledger — had it been able to see the
     $140.40 — would have said to check Turo first.
     """
-    # Every crossing on the rental, settled ones included, whichever way the
-    # invoice was built: next-draft builds it from the open crossings only,
-    # and judged on those alone a rental half paid by a toll line read as
-    # wholly covered by it.
-    tolls = session.scalars(select(Toll).where(Toll.trip_id == invoice.trip_id)).all()
+    # `tolls` is every crossing on the rental, settled ones included, whichever
+    # way the invoice was built: next-draft builds it from the open crossings
+    # only, and judged on those alone a rental half paid by a toll line read
+    # as wholly covered by it. The caller fetches them, for all its rentals
+    # at once (see _tolls_by_trip).
     unfiled = sum(t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is None)
     filed = sum(
         t.amount_cents for t in tolls if t.recovered_at is None and t.filed_at is not None
@@ -707,14 +735,21 @@ def ledger(session: DbSession) -> LedgerResponse:
     window = toll_filing_window_days()
     built = build_invoices(session, now=now, include_recovered=True)
     asked = _reimbursements(session, [i.trip_id for i in built])
+    crossings = _tolls_by_trip(session, [i.trip_id for i in built])
+    # Held here rather than fetched by id per row: the session only remembers
+    # a loaded row while something refers to it, and building the invoices
+    # keeps the figures, not the rows, so a get() per rental was a query each.
+    trips = _trips_by_id(session, [i.trip_id for i in built])
 
     rows: list[LedgerRow] = []
     for invoice in built:
         theirs = asked.get(invoice.trip_id) or []
-        tally = _tally(session, invoice, theirs, window=window, now=now)
+        tally = _tally(
+            invoice, crossings.get(invoice.trip_id) or [], theirs, window=window, now=now
+        )
         unfiled, filed, recovered = tally.unfiled, tally.filed, tally.recovered
         state, note, left = tally.state, tally.note, tally.left
-        trip = session.get(Trip, invoice.trip_id)
+        trip = trips.get(invoice.trip_id)
         charged = sum(r.total_cents for r in theirs if r.state == "charged")
         toll_lines = [r.toll_cents for r in theirs if r.toll_cents is not None]
         rows.append(
@@ -815,10 +850,12 @@ def _quiet_rentals(
     """
     known = {row.trip_id for row in seen}
     trips = session.scalars(
-        select(Trip).where(
+        select(Trip)
+        .where(
             Trip.state != TripState.cancelled,
             Trip.starts_at <= now,
         )
+        .options(selectinload(Trip.vehicle))
     ).all()
     quiet = [trip for trip in trips if trip.id not in known]
     asked = _reimbursements(session, [trip.id for trip in quiet])
@@ -878,10 +915,15 @@ def next_draft(session: DbSession) -> DraftResponse:
     window = toll_filing_window_days()
     built = build_invoices(session, now=now)
     asked = _reimbursements(session, [i.trip_id for i in built])
+    crossings = _tolls_by_trip(session, [i.trip_id for i in built])
     fileable = []
     for invoice in built:
         tally = _tally(
-            session, invoice, asked.get(invoice.trip_id) or [], window=window, now=now
+            invoice,
+            crossings.get(invoice.trip_id) or [],
+            asked.get(invoice.trip_id) or [],
+            window=window,
+            now=now,
         )
         # The ledger's word decides, not a second copy of its reasoning. That
         # covers the window, Turo having charged something unreadable, and
@@ -930,7 +972,8 @@ def hold_reason(
     from the site's File button, which must not be a way around it.
     """
     asked = _reimbursements(session, [invoice.trip_id]).get(invoice.trip_id) or []
-    tally = _tally(session, invoice, asked, window=window, now=now)
+    tolls = _tolls_by_trip(session, [invoice.trip_id]).get(invoice.trip_id) or []
+    tally = _tally(invoice, tolls, asked, window=window, now=now)
     if tally.state not in _FILEABLE:
         return tally.note or tally.state
     if tally.left is None:

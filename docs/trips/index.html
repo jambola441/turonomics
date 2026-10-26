@@ -9,6 +9,7 @@
 <link rel="apple-touch-icon" href="../fleet/icons/icon-180.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="../uniform.css">
+<link rel="stylesheet" href="../shell.css">
 <link rel="stylesheet" href="../fleet/vendor/leaflet.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
@@ -22,14 +23,14 @@
   header{padding:16px 0 14px;border-bottom:1px solid var(--border);margin-bottom:16px}
   .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
-  h2{font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;
+  h2{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;text-transform:uppercase;
      color:var(--dim);margin:18px 0 8px}
-  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .nav{display:flex;gap:7px}
-  .nav a{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-       color:var(--muted);text-decoration:none;border:1px solid var(--border);
-       border-radius:var(--u-radius-md);padding:7px 10px}
-  .nav a:hover{border-color:var(--border2);color:var(--text)}
+  h2.group{color:var(--muted);margin:20px 0 8px}
+  h2.group.work{color:var(--amber)}
+  .lede{font-size:13px;color:var(--dim);line-height:1.5;margin:-2px 0 10px}
+  details.finished{margin-top:20px;border-top:1px solid var(--line);padding-top:10px}
+  details.finished>summary{cursor:pointer;font-size:13px;color:var(--dim);padding:6px 0 10px}
+  .stamp{font-size:var(--tn-small);color:var(--dim);margin-top:4px}
   .err{padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);
        border:1px solid var(--u-err-line);color:var(--red);font-size:13px;line-height:1.45;
        margin-bottom:14px}
@@ -54,42 +55,48 @@
        padding:10px 12px}
   details.add summary{cursor:pointer;font-size:13px;color:var(--muted)}
   .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
-  .form label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--dim)}
+  .form label{display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--dim)}
   .form .wide{grid-column:1 / -1}
   .result{font-size:12.5px;color:var(--muted);margin-top:8px}
 
   .trip{border:1px solid var(--border);border-radius:var(--u-radius-lg);margin-bottom:8px;
-        background:var(--surface)}
+        background:var(--surface);scroll-margin-top:12px}
   .trip-head{display:flex;gap:10px;align-items:flex-start;padding:11px 12px;cursor:pointer}
+  .trip .more{font-size:12px;color:var(--u-link);margin-top:4px}
+  .trip .more::after{content:" ▾"}
+  .trip.open .more::after{content:" ▴"}
   .trip-head:hover{background:var(--surface2)}
   .trip-body{flex:1;min-width:0}
-  .who{font-size:14.5px;font-weight:600}
-  .meta{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
-  .badge{font-family:var(--mono);font-size:9px;letter-spacing:.08em;text-transform:uppercase;
-         border:1px solid var(--border);border-radius:999px;padding:2px 7px;margin-left:6px;
-         color:var(--muted);vertical-align:2px}
+  .who{font-size:var(--tn-title);font-weight:600}
+  .meta{font-size:var(--tn-small);color:var(--muted);margin-top:3px}
+  /* Badges on a line of their own under the name, so a long one does not
+     break the name across lines. */
+  .badges{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+  .badge{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+         border:1px solid var(--border);border-radius:999px;padding:2px 7px;
+         color:var(--muted);white-space:nowrap}
   .badge.off{color:var(--blue);border-color:var(--blue)}
   .badge.odd{color:var(--red);border-color:var(--red);font-weight:700}
   .badge.miles{color:var(--amber);border-color:var(--amber)}
   .badge.miles.gone{color:var(--dim);border-color:var(--border)}
   .note.dim-note{color:var(--muted)}
   .side{text-align:right;flex-shrink:0}
-  .state{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  .state{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.06em;text-transform:uppercase;
          color:var(--dim)}
   .state.tobill{color:var(--amber)}
   .amt{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:2px}
-  .amt-k{font-family:var(--mono);font-size:9px;letter-spacing:.06em;text-transform:uppercase;
+  .amt-k{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
          color:var(--dim);margin-top:1px}
   .tofile{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--amber);margin-top:8px}
 
   .view{border-top:1px solid var(--border);padding:4px 12px 14px}
   .links{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-  .links a{font-size:12.5px;color:var(--blue)}
-  dl.facts{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:4px 12px;font-size:12.5px}
+  .links a{font-size:13px;color:var(--blue)}
+  dl.facts{display:grid;grid-template-columns:minmax(120px,auto) 1fr;gap:4px 12px;font-size:13px}
   dl.facts dt{color:var(--dim)}
-  dl.facts dd{font-family:var(--mono);font-size:11.5px;word-break:break-word}
+  dl.facts dd{font-family:var(--mono);font-size:12px;word-break:break-word}
   table{width:100%;border-collapse:collapse;font-size:12px}
-  th{text-align:left;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;
+  th{text-align:left;font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.08em;
      text-transform:uppercase;color:var(--dim);padding:5px 6px;border-bottom:1px solid var(--border)}
   td{padding:6px;border-bottom:1px solid var(--line);vertical-align:top}
   .num{text-align:right;font-family:var(--mono);white-space:nowrap}
@@ -97,7 +104,7 @@
   .inv{border:1px solid var(--line);border-radius:var(--u-radius-md);padding:8px 10px;
        margin-bottom:6px;font-size:12.5px}
   .inv .top{display:flex;justify-content:space-between;gap:8px}
-  .inv .sub{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
+  .inv .sub{font-size:12px;color:var(--dim);margin-top:3px}
   .note{font-size:12px;color:var(--amber);margin-top:6px;line-height:1.45}
   .quiet{font-size:12.5px;color:var(--dim)}
   pre{font-family:var(--mono);font-size:10.5px;line-height:1.45;white-space:pre-wrap;
@@ -107,7 +114,7 @@
   .msg{border:1px solid var(--line);border-radius:var(--u-radius-md);padding:7px 9px;
        max-width:88%;font-size:12.5px;line-height:1.45}
   .msg.host{align-self:flex-end;background:var(--surface2)}
-  .msg-who{font-family:var(--mono);font-size:10px;color:var(--dim);margin-bottom:2px}
+  .msg-who{font-family:var(--mono);font-size:11px;color:var(--dim);margin-bottom:2px}
   .msg-text{white-space:pre-wrap;word-break:break-word}
   .route{height:300px;border-radius:var(--u-radius-md);border:1px solid var(--border);
          margin-top:4px;background:var(--u-map, var(--surface2))}
@@ -122,19 +129,19 @@
   .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px;margin-top:12px}
   .tile{background:var(--surface2);border:1px solid var(--line);border-radius:var(--u-radius-md);
         padding:9px 10px;min-width:0}
-  .tile .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+  .tile .k{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.08em;text-transform:uppercase;
            color:var(--dim)}
   .tile .v{font-family:var(--mono);font-size:17px;font-weight:600;margin-top:3px}
-  .tile .n{font-size:11px;color:var(--muted);margin-top:2px}
+  .tile .n{font-size:12px;color:var(--muted);margin-top:2px}
   .tile.warn .v{color:var(--amber)}
   .line{font-size:13px;line-height:1.5}
   .line.dim{color:var(--muted);font-size:12px}
-  .chip{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;
+  .chip{font-family:var(--mono);font-size:10px;letter-spacing:.06em;text-transform:uppercase;
         border:1px solid var(--border);border-radius:999px;padding:1px 6px;margin-right:4px}
   .chip.ok{color:var(--green);border-color:var(--u-ok-line)}
   .chip.wait{color:var(--amber)}
   .inv .sub a{color:var(--blue)}
-  details.fold summary{cursor:pointer;font-family:var(--mono);font-size:10px;letter-spacing:.1em;
+  details.fold summary{cursor:pointer;font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;
        text-transform:uppercase;color:var(--dim);margin:18px 0 8px}
   details.fold .thread{margin-top:6px}
 </style>
@@ -144,8 +151,9 @@
   <header>
     <div class="row">
       <h1>Trips<span class="u-dot">.</span></h1>
-      <div class="nav"><a href="../invoices/">Invoices</a><a href="../tolls/">Tolls</a><a href="../fleet/">Fleet</a></div>
+      <nav data-tn-nav="trips"></nav>
     </div>
+    <p class="tn-purpose">Every rental, Turo's and typed-in, and everything known about each.</p>
     <div class="stamp" id="stamp">loading…</div>
     <div class="ext" id="ext">looking for the extension…</div>
   </header>
@@ -180,19 +188,14 @@
 </main>
 
 <script src="../fleet/vendor/leaflet.js"></script>
+<script src="../shell.js"></script>
 <script>
 (function () {
   "use strict";
 
-  var API = (function () {
-    var override = new URLSearchParams(location.search).get("api");
-    if (override) return override.replace(/\/$/, "");
-    var meta = document.querySelector('meta[name="turonomics-api"]');
-    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
-  })();
+  var API = TN.API;
+  var name = TN.personName;
 
-  // Shared with the invoices and tolls pages, so the token is asked for once.
-  var TOKEN_KEY = "turonomics.tolls.token";
   var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false,
                 maps: {}, tiles: null, flags: {} };
 
@@ -225,34 +228,13 @@
   }
   function fail(message) { var box = el("err"); box.textContent = message; box.hidden = false; }
 
-  function token() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; } }
-  function rememberToken(v) {
-    try { v ? localStorage.setItem(TOKEN_KEY, v) : localStorage.removeItem(TOKEN_KEY); }
-    catch (e) { /* private window */ }
-  }
-  function authHeaders() { var v = token(); return v ? { Authorization: "Bearer " + v } : {}; }
-  function askToken() {
-    var entered = window.prompt("This needs the tolls token (TOLLS_TOKEN).");
-    if (!entered) return false;
-    rememberToken(entered.trim());
-    return true;
-  }
+  var token = TN.token;
+  var authHeaders = TN.authHeaders;
 
   // A request that may need the token: tried as is, and once more after
   // asking if the API refuses it.
   function authed(path, init) {
-    init = init || {};
-    var go = function () {
-      return fetch(API + path, Object.assign({}, init, {
-        headers: Object.assign({}, init.headers || {}, authHeaders())
-      }));
-    };
-    return go().then(function (r) {
-      if (r.status !== 401) return r;
-      rememberToken("");
-      if (!askToken()) throw new Error("the token is needed for this");
-      return go();
-    });
+    return TN.authed(path, init, "Trips name guests, so this needs the tolls token.");
   }
   function json(r) {
     return r.json().catch(function () { return {}; }).then(function (b) {
@@ -300,7 +282,7 @@
     var card = el("trip-" + trip.id);
     var odd = oddCount(trip);
     if (!card || !odd || card.querySelector(".badge.odd")) return;
-    var who = card.querySelector(".who");
+    var who = card.querySelector(".badges");
     if (who) add(who, "span", "badge odd", flagText(odd));
   }
 
@@ -358,6 +340,19 @@
     return hay.indexOf(state.q) !== -1;
   }
 
+  // Whether there is still something to ask Turo for on a finished rental:
+  // tolls the ledger says can be filed, or distance never invoiced, while the
+  // window is open.
+  function needsFiling(trip) {
+    var row = state.ledger[trip.id];
+    if (!row || row.days_left == null || row.days_left < 0) return false;
+    return row.state === "to bill" || row.state === "partly billed" || !!row.distance_unbilled_cents;
+  }
+
+  // The work first: a rental that needs filing, one under way, and the next
+  // ones out. Finished rentals with nothing left to do, most of the list, are
+  // folded under them. A search shows every match in one list, since then
+  // the question is "where is it", not "what next".
   function render() {
     var list = el("list");
     list.textContent = "";
@@ -366,7 +361,40 @@
       add(list, "div", "empty", state.trips.length ? "Nothing matches." : "No trips yet.");
       return;
     }
-    shown.forEach(function (trip) { renderTrip(trip, list); });
+    if (state.q) {
+      shown.forEach(function (trip) { renderTrip(trip, list); });
+      return;
+    }
+    var now = Date.now();
+    var active = [], upcoming = [], tofile = [], finished = [];
+    shown.forEach(function (trip) {
+      if (new Date(trip.starts_at).getTime() > now) upcoming.push(trip);
+      else if (new Date(trip.ends_at).getTime() > now) active.push(trip);
+      else if (needsFiling(trip)) tofile.push(trip);
+      else finished.push(trip);
+    });
+    // The list comes newest first; the next booking out reads first.
+    upcoming.reverse();
+    function group(title, trips, lede, work) {
+      if (!trips.length) return;
+      add(list, "h2", "group" + (work ? " work" : ""), title + " · " + trips.length);
+      if (lede) add(list, "div", "lede", lede);
+      trips.forEach(function (trip) { renderTrip(trip, list); });
+    }
+    group("Needs filing", tofile,
+          "Finished, with tolls or distance Turo will still take a filing for.", true);
+    group("On a trip now", active);
+    group("Coming up", upcoming);
+    if (finished.length) {
+      var fold = add(list, "details", "finished");
+      // Kept open as it was left, and opened when a link points into it.
+      fold.open = !!state.finishedOpen ||
+        finished.some(function (t) { return t.id === state.open; });
+      fold.addEventListener("toggle", function () { state.finishedOpen = fold.open; });
+      add(fold, "summary", null, "Finished · " + finished.length +
+          (finished.length === 1 ? " rental" : " rentals") + " with nothing left to file");
+      finished.forEach(function (trip) { renderTrip(trip, fold); });
+    }
   }
 
   // What is left to ask for on a rental, tolls | distance, each only while it
@@ -400,12 +428,20 @@
   }
 
   function renderTrip(trip, into) {
-    var card = add(into, "div", "trip");
+    var open = state.open === trip.id;
+    var card = add(into, "div", "trip" + (open ? " open" : ""));
     card.id = "trip-" + trip.id;
     var head = add(card, "div", "trip-head");
+    head.setAttribute("role", "button");
+    head.setAttribute("tabindex", "0");
+    head.setAttribute("aria-expanded", open ? "true" : "false");
+    head.addEventListener("keydown", function (ev) {
+      if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(trip.id); }
+    });
     var body = add(head, "div", "trip-body");
-    var who = add(body, "div", "who",
-        (trip.guest_name || "No name") + " — " + (trip.vehicle_nickname || "?"));
+    add(body, "div", "who",
+        (name(trip.guest_name) || "No name") + " — " + (trip.vehicle_nickname || "?"));
+    var who = add(body, "div", "badges");
     add(who, "span", "badge" + (off(trip) ? " off" : ""), off(trip) ? "off-platform" : "Turo");
     var odd = oddCount(trip);
     if (odd) add(who, "span", "badge odd", flagText(odd));
@@ -420,8 +456,8 @@
     }
     add(body, "div", "meta",
         when(trip.starts_at) + " → " + when(trip.ends_at) +
-        (trip.turo_trip_id ? " · " + trip.turo_trip_id : "") +
         (trip.toll_count ? " · " + trip.toll_count + (trip.toll_count === 1 ? " crossing" : " crossings") : ""));
+    add(body, "div", "more", open ? "hide" : "details");
     var side = add(head, "div", "side");
     var row = state.ledger[trip.id];
     if (row) {
@@ -435,7 +471,7 @@
       add(side, "div", "amt", money(trip.earnings_cents));
     }
     head.addEventListener("click", function () { toggle(trip.id); });
-    if (state.open === trip.id) renderView(trip, card);
+    if (open) renderView(trip, card);
   }
 
   function toggle(id) {
@@ -543,6 +579,15 @@
       var h = add(links, "a", null, "Invoices on Turo");
       h.href = view.invoice_hub_url; h.target = "_blank"; h.rel = "noopener";
     }
+    if (trip.toll_count) {
+      var c = add(links, "a", null, "Its crossings on Tolls");
+      c.href = TN.withApi("../tolls/") + (TN.withApi("") ? "&" : "?") + "trip=" + trip.id;
+    }
+    if (state.ledger[trip.id] && state.ledger[trip.id].unfiled_cents) {
+      var iv = add(links, "a", null, "On Invoices");
+      iv.href = TN.withApi("../invoices/") + "#" + trip.id;
+    }
+    if (trip.turo_trip_id) add(links, "span", "quiet", "Reservation " + trip.turo_trip_id);
 
     // The answers first, one tile each: the tolls, the miles, the money, the
     // clock. Everything under them is the working.
@@ -871,6 +916,11 @@
     });
     if (bounds.length === 1) map.setView(bounds[0], 13);
     else map.fitBounds(bounds, { padding: [18, 18] });
+    // The box can be sized after Leaflet measured it (fonts, the view still
+    // laying out), which drew the map as a small square of tiles.
+    if (typeof ResizeObserver === "function") {
+      new ResizeObserver(function () { map.invalidateSize(); }).observe(div);
+    }
     var unplaced = (m.tolls || []).length - placed.length;
     var said = [];
     if (m.route_source === "bouncie") said.push("Route from Bouncie");
@@ -930,7 +980,7 @@
   function queueFiling(trip, row) {
     var on = !!(state.ext && state.ext.listening);
     if (!window.confirm("File " + money(row.unfiled_cents) + " of tolls to " +
-        (trip.guest_name || "this guest") + " on Turo?\n\nYour browser's extension files it, " +
+        (name(trip.guest_name) || "this guest") + " on Turo?\n\nYour browser's extension files it, " +
         "with the evidence sheet attached." + (on ? "" :
         "\n\nThe extension is not listening right now, so this waits until Chrome wakes it."))) return;
     authed("/api/commands", {
@@ -949,7 +999,7 @@
   }
 
   function dropRental(trip) {
-    if (!window.confirm("Remove the rental for " + (trip.guest_name || "no name") +
+    if (!window.confirm("Remove the rental for " + (name(trip.guest_name) || "no name") +
                         "?\n\nIts tolls go back to unattributed; they are not deleted.")) return;
     authed("/api/trips/" + trip.id, { method: "DELETE" })
       .then(json)
@@ -1062,6 +1112,7 @@
         state.trips.some(function (t) { return t.id === wanted; })) toggle(wanted);
   }
   window.addEventListener("hashchange", openFromHash);
+  window.addEventListener("tn-token-saved", function () { load(); });
   load().then(openFromHash);
   watchExtension();
   // Often enough to notice Chrome waking or sleeping while the page is open.

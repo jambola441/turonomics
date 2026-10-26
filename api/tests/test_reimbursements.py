@@ -288,6 +288,50 @@ def test_a_charged_total_that_does_not_match_is_surfaced_not_written_off(
 
 
 @requires_db
+def test_a_checked_charge_folds_its_warning_until_turo_charges_again(
+    api_client, monkeypatch, session, trip
+) -> None:
+    """Marking Turo's charge checked covers that charge, and only that one."""
+    monkeypatch.delenv("TOLLS_TOKEN", raising=False)
+    api_client.post("/api/tolls/import",
+                    files={"statement": ("a.csv", _statement("-9.11"), "text/csv")})
+    parsed = parse_invoice("Dylan has been charged for your reimbursement invoice", CHARGED_BODY)
+    assert parsed is not None
+    record_invoice(session, parsed, now=NOW)
+    session.commit()
+
+    marked = api_client.post(f"/api/invoices/{trip.id}/checked").json()
+    assert marked["checked_at"] is not None and marked["checked_cents"] == 1555
+    body = api_client.get("/api/invoices").json()
+    row = body["invoices"][0]
+    assert row["checked_at"] is not None, "the check is on the row"
+    assert row["charged_but_different"] is True, "the facts are unchanged"
+    assert body["needs_a_look_cents"] == 0, "a checked rental needs no look"
+    assert len(body["invoices"]) == 1 and row["total_cents"] == 911, "nor is it written off"
+
+    # Turo charges something more on the rental: the check was not about that.
+    session.refresh(trip)
+    trip.turo_charge_checked_cents = 1000
+    session.commit()
+    again = api_client.get("/api/invoices").json()
+    assert again["invoices"][0]["checked_at"] is None
+    assert again["needs_a_look_cents"] == 911
+
+    api_client.post(f"/api/invoices/{trip.id}/checked")
+    api_client.post(f"/api/invoices/{trip.id}/checked?undo=true")
+    assert api_client.get("/api/invoices").json()["invoices"][0]["checked_at"] is None
+
+
+@requires_db
+def test_checking_a_charge_needs_the_token(api_client, monkeypatch, trip) -> None:
+    monkeypatch.setenv("TOLLS_TOKEN", "secret")
+    assert api_client.post(f"/api/invoices/{trip.id}/checked").status_code == 401
+    ok = api_client.post(f"/api/invoices/{trip.id}/checked",
+                         headers={"Authorization": "Bearer secret"})
+    assert ok.status_code == 200
+
+
+@requires_db
 def test_an_invoice_arriving_before_the_statement_is_applied_later(
     api_client, monkeypatch, session, trip
 ) -> None:

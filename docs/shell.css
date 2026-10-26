@@ -1,0 +1,51 @@
+/* The shared shell: nav, settings panel, and the type scale every page reads
+   from. Loaded after uniform.css and before each page's own styles.
+
+   The type floor is the point of the scale. Dates, crossing counts and days
+   left are what tell one card from the next, and they had drifted down to
+   10.5px and below while headings stayed large. Nothing read to decide goes
+   under --tn-small; only uppercase labels use --tn-label. */
+
+:root {
+  --tn-label: 11px;     /* uppercase mono labels: K, states, chips */
+  --tn-small: 12.5px;   /* the facts on a card: dates, counts, days left */
+  --tn-body: 14px;
+  --tn-title: 15.5px;   /* a card's name */
+}
+
+.tn-nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.tn-nav a,.tn-gear{font-family:var(--u-font-mono);font-size:var(--tn-label);letter-spacing:.06em;
+  text-transform:uppercase;color:var(--u-muted);text-decoration:none;background:none;
+  border:1px solid var(--u-line);border-radius:var(--u-radius-md);padding:8px 10px;cursor:pointer;
+  line-height:1.2}
+.tn-nav a:hover,.tn-gear:hover{border-color:var(--u-line-strong);color:var(--u-fg)}
+.tn-nav a[aria-current="page"]{color:var(--u-fg);border-color:var(--u-line-strong);
+  background:var(--u-surface-2)}
+.tn-gear{margin-left:auto;font-size:15px;letter-spacing:0;padding:5px 10px}
+
+/* One line under a page's title saying which question the page answers.
+   Invoices and Tolls show the same crossings from two angles; the names alone
+   did not say which. */
+.tn-purpose{font-size:13px;color:var(--u-muted);margin-top:6px;line-height:1.45}
+
+.tn-settings{margin:auto;border:1px solid var(--u-line-strong);border-radius:var(--u-radius-lg);
+  background:var(--u-surface);color:var(--u-fg);padding:18px;width:min(420px,calc(100vw - 32px));
+  font-family:var(--u-font-sans)}
+.tn-settings::backdrop{background:rgba(0,0,0,.55)}
+.tn-settings h2{font-family:var(--u-font-sans);font-size:17px;font-weight:700;margin:0 0 6px;
+  text-transform:none;letter-spacing:0;color:var(--u-fg)}
+.tn-settings .tn-why{font-size:13px;color:var(--u-amber);margin:0 0 12px;line-height:1.45}
+.tn-settings .tn-field{display:flex;flex-direction:column;gap:5px;font-size:12.5px;color:var(--u-muted)}
+.tn-settings input{font:inherit;font-size:14px;color:var(--u-fg);background:var(--u-surface-2);
+  border:1px solid var(--u-line-strong);border-radius:var(--u-radius-md);padding:10px 11px;width:100%}
+.tn-settings .tn-help{font-size:12.5px;color:var(--u-dim);margin:8px 0 0;line-height:1.45}
+.tn-settings .tn-api{font-family:var(--u-font-mono);font-size:11.5px;word-break:break-all}
+.tn-buttons{display:flex;gap:8px;margin-top:16px;flex-wrap:wrap}
+.tn-btn{font:inherit;font-size:13px;font-weight:600;color:var(--u-fg);background:var(--u-surface-2);
+  border:1px solid var(--u-line-strong);border-radius:var(--u-radius-md);padding:9px 14px;cursor:pointer;
+  min-height:40px}
+.tn-btn:hover{border-color:var(--u-muted)}
+.tn-btn.tn-go{color:var(--u-green);border-color:var(--u-ok-line)}
+
+/* A disabled button that says why, in place of one that is not there. */
+.tn-why-off{font-size:12px;color:var(--u-dim);line-height:1.4}

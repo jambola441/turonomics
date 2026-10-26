@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="../fleet/icons/icon-180.png">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="../uniform.css">
+<link rel="stylesheet" href="../shell.css">
 <style>
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   body{
@@ -25,11 +26,7 @@
   header{padding:16px 0 14px;border-bottom:1px solid var(--border);margin-bottom:16px}
   .row{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
   h1{font-size:24px;font-weight:700;letter-spacing:-.02em}
-  .stamp{font-family:var(--mono);font-size:11px;color:var(--dim)}
-  .back{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;
-        color:var(--muted);text-decoration:none;border:1px solid var(--border);
-        border-radius:var(--u-radius-md);padding:7px 10px}
-  .back:hover{border-color:var(--border2);color:var(--text)}
+  .stamp{font-size:var(--tn-small);color:var(--dim);margin-top:4px}
 
   .stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px;margin-bottom:16px}
   @media (max-width:560px){.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
@@ -37,19 +34,19 @@
   .lost{font-size:12px;color:var(--dim);margin:-8px 0 14px;line-height:1.45}
   .stat{display:flex;flex-direction:column;gap:5px;padding:12px;background:var(--surface2);
         border:1px solid var(--border);border-radius:var(--u-radius-lg);min-width:0}
-  .stat .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
+  .stat .k{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;
            text-transform:uppercase;color:var(--dim)}
   .stat .v{font-family:var(--mono);font-size:19px;font-weight:600;letter-spacing:-.02em}
-  .stat .n{font-size:11px;color:var(--dim);line-height:1.35}
+  .stat .n{font-size:12px;color:var(--dim);line-height:1.35}
   .stat.owed .v{color:var(--amber)}
   .stat.loose .v{color:var(--red)}
 
   section{margin-bottom:18px}
-  h2{font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;
+  h2{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.13em;text-transform:uppercase;
      color:var(--muted);font-weight:600;margin-bottom:9px}
 
   .card{padding:14px;border-radius:var(--u-radius-lg);background:var(--surface2);border:1px solid var(--border)}
-  .card p{font-size:12.5px;color:var(--muted);line-height:1.5}
+  .card p{font-size:13px;color:var(--muted);line-height:1.5}
   .card.warn{background:var(--u-warn-bg);border-color:var(--u-warn-line)}
   .card.warn h2{color:var(--amber)}
 
@@ -80,7 +77,7 @@
   .form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-top:12px}
   .form label{display:flex;flex-direction:column;gap:4px;min-width:0}
   .form .wide{grid-column:1 / -1}
-  .form .k{font-family:var(--mono);font-size:9.5px;letter-spacing:.1em;
+  .form .k{font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;
        text-transform:uppercase;color:var(--dim)}
   .form input{font:inherit;font-size:13px;color:var(--text);background:var(--surface);
        border:1px solid var(--border2);border-radius:var(--u-radius-md);padding:9px 10px;min-height:40px;
@@ -91,12 +88,14 @@
        background:var(--surface);border:1px solid var(--border2)}
   .rental .r-body{flex:1;min-width:0}
   .rental .r-who{font-size:14px;font-weight:600}
-  .rental .r-when{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
-  .rental .r-tolls{font-family:var(--mono);font-size:11px;flex-shrink:0;color:var(--dim)}
+  .rental .r-when{font-size:var(--tn-small);color:var(--dim);margin-top:2px}
+  .rental .r-tolls{font-family:var(--mono);font-size:12px;flex-shrink:0;color:var(--dim)}
   .rental .r-tolls.none{color:var(--amber)}
 
-  .filters{display:flex;gap:7px;margin-bottom:10px}
-  .filter{flex:0 0 auto;font:inherit;font-family:var(--mono);font-size:11.5px;font-weight:600;
+  .filters{display:flex;gap:7px;margin-bottom:10px;flex-wrap:wrap}
+  .scope{font-size:13px;color:var(--muted);margin:0 0 10px;line-height:1.45}
+  .scope a{color:var(--u-link)}
+  .filter{flex:0 0 auto;font:inherit;font-family:var(--mono);font-size:12px;font-weight:600;
           letter-spacing:.04em;color:var(--muted);background:var(--surface2);
           border:1px solid var(--border);border-radius:var(--u-radius-md);padding:9px 12px;cursor:pointer;
           min-height:40px}
@@ -104,22 +103,23 @@
 
   .ledger{display:flex;flex-direction:column;gap:6px}
   .toll{display:flex;align-items:center;gap:11px;padding:11px 12px;border-radius:var(--u-radius-lg);
-        background:var(--surface);border:1px solid var(--border2)}
+        background:var(--surface);border:1px solid var(--border2);scroll-margin-top:12px}
+  .toll.linked{border-color:var(--u-link)}
   .toll.done{opacity:.55}
   .toll .body{flex:1;min-width:0}
   .toll .t-plaza{font-size:14.5px;font-weight:600;letter-spacing:-.005em}
-  .toll .t-when{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:2px}
-  .toll .t-who{font-size:12px;color:var(--muted);margin-top:3px;line-height:1.35}
+  .toll .t-when{font-size:var(--tn-small);color:var(--dim);margin-top:2px}
+  .toll .t-who{font-size:13px;color:var(--muted);margin-top:3px;line-height:1.35}
   .toll .t-who.loose{color:var(--red)}
   /* Known, just not ours. Dim rather than red: red means "do something", and
      there is nothing to do about a crossing on a family car. */
   .toll .t-who.outside{color:var(--dim)}
   /* A guess, and styled like one: no colour that implies a state, and the
      gap first because the gap is what makes it a guess worth reading. */
-  .toll .t-near{font-family:var(--mono);font-size:10.5px;color:var(--dim);margin-top:3px}
+  .toll .t-near{font-size:12.5px;color:var(--dim);margin-top:3px}
   /* Amber, not green: this one is billed to a guest on an inference, and the
      operator should be able to see which ones those are at a glance. */
-  .toll .t-over{font-family:var(--mono);font-size:10.5px;color:var(--amber);margin-top:3px}
+  .toll .t-over{font-size:12.5px;color:var(--amber);margin-top:3px}
   .outside-note{font-size:12px;color:var(--dim);line-height:1.5;margin:-8px 0 16px;padding:0 2px}
   .toll .t-amt{font-family:var(--mono);font-size:15px;font-weight:600;flex-shrink:0}
   .tick{flex-shrink:0;width:34px;height:34px;border-radius:var(--u-radius-md);font:inherit;font-size:15px;
@@ -136,7 +136,8 @@
   .empty{padding:36px 16px;text-align:center;color:var(--muted);font-size:13.5px;line-height:1.55}
   .err{padding:12px 14px;border-radius:var(--u-radius-md);background:var(--u-err-bg);border:1px solid var(--u-err-line);
        color:var(--red);font-size:13px;line-height:1.45;margin-bottom:14px}
-  .note{font-size:12px;color:var(--dim);line-height:1.5;margin-top:9px}
+  .note{font-size:12.5px;color:var(--dim);line-height:1.5;margin-top:9px}
+  .note a{color:var(--u-link)}
 </style>
 </head>
 <body>
@@ -144,12 +145,10 @@
   <header>
     <div class="row">
       <h1>Tolls<span class="u-dot">.</span></h1>
-      <div style="display:flex;gap:7px">
-      <a class="back" href="../trips/">Trips</a>
-      <a class="back" href="../invoices/">Invoices</a>
-      <a class="back" href="../fleet/">Fleet</a>
-      </div>
+      <nav data-tn-nav="tolls"></nav>
     </div>
+    <p class="tn-purpose">Every crossing on the E-ZPass statements, and whose it was. What to
+      ask Turo for is on Invoices.</p>
     <div class="stamp" id="stamp">loading…</div>
   </header>
 
@@ -182,6 +181,16 @@
   </section>
 
   <section>
+    <h2>Crossings</h2>
+    <div class="scope" id="scope" hidden></div>
+    <div class="filters">
+      <button class="filter" id="f-owed" aria-pressed="true">Open</button>
+      <button class="filter" id="f-loose" aria-pressed="false">No rental</button>
+      <button class="filter" id="f-all" aria-pressed="false">All</button>
+    </div>
+    <div class="ledger" id="ledger"></div>
+  </section>
+  <section>
     <div class="card">
       <h2>Statement</h2>
       <p>Account activity CSV from ezpassny.com. Crossings already on file are
@@ -192,6 +201,8 @@
         <input type="file" id="file" accept=".csv,text/csv">
       </div>
       <p class="note" id="import-result" hidden></p>
+      <p class="note">Two CSVs to match without storing either? The original
+        <a href="../match/">two-file matcher</a> is still there.</p>
     </div>
   </section>
 
@@ -222,61 +233,36 @@
     </div>
   </section>
 
-  <section>
-    <h2>Ledger</h2>
-    <div class="filters">
-      <button class="filter" id="f-all" aria-pressed="true">All</button>
-      <button class="filter" id="f-owed" aria-pressed="false">To recover</button>
-    </div>
-    <div class="ledger" id="ledger"></div>
-  </section>
 </main>
 
+<script src="../shell.js"></script>
 <script>
 (function () {
   "use strict";
 
-  var API = (function () {
-    var override = new URLSearchParams(location.search).get("api");
-    if (override) return override.replace(/\/$/, "");
-    var meta = document.querySelector('meta[name="turonomics-api"]');
-    return (meta && meta.content ? meta.content : "").replace(/\/$/, "");
-  })();
+  var API = TN.API;
+  var name = TN.personName;
 
-  var state = { data: null, owedOnly: false, busy: false };
+  // Open crossings by default: the work is what has not been billed back.
+  // "No rental" is the other job (a tag to bind, a rental to type in), and
+  // everything is one click away. ?trip=<id> narrows to one rental's
+  // crossings, from the trips page; #toll-<id> points at one crossing.
+  var params = new URLSearchParams(location.search);
+  var state = { data: null, filter: "open", trip: params.get("trip") || null, busy: false };
 
   // The writes change what a guest gets billed, so the API can be set to
   // require a token (TOLLS_TOKEN). Kept per browser rather than in the page:
   // this is a static file served to anyone who has the URL, so a secret
-  // committed into it would not be one.
-  var TOKEN_KEY = "turonomics.tolls.token";
-
-  function token() {
-    try { return localStorage.getItem(TOKEN_KEY) || ""; } catch (e) { return ""; }
-  }
-
-  function rememberToken(value) {
-    try {
-      if (value) localStorage.setItem(TOKEN_KEY, value);
-      else localStorage.removeItem(TOKEN_KEY);
-    } catch (e) { /* private window: it just has to be re-entered */ }
-  }
-
-  // Asked for before the write, not after a 401, because the alternative is
-  // losing the file the operator just picked.
+  // committed into it would not be one. Asked for before the write, not
+  // after a 401, because the alternative is losing the file just picked.
   function ensureToken() {
-    if (!state.data || !state.data.token_required) return true;
-    if (token()) return true;
-    var entered = window.prompt("This API needs the tolls token (TOLLS_TOKEN) to make changes.");
-    if (!entered) return false;
-    rememberToken(entered.trim());
-    return true;
+    return TN.needToken(state.data && state.data.token_required).then(function (ok) {
+      if (!ok) throw new Error("the token is needed for this");
+    });
   }
 
-  function authHeaders() {
-    var value = token();
-    return value ? { Authorization: "Bearer " + value } : {};
-  }
+  function authHeaders() { return TN.authHeaders(); }
+  function rememberToken(value) { TN.rememberToken(value); }
 
   // A rejected token is a wrong token. Forgetting it means the next attempt
   // asks again rather than failing the same way forever.
@@ -340,7 +326,7 @@
       return { text: toll.outside_label + " — not the fleet's", outside: true };
     }
     if (toll.guest_name && toll.vehicle_nickname) {
-      return { text: toll.guest_name + " — " + toll.vehicle_nickname, loose: false };
+      return { text: name(toll.guest_name) + " — " + toll.vehicle_nickname, loose: false };
     }
     if (toll.vehicle_nickname) {
       return { text: toll.vehicle_nickname + " — no trip, so ours", loose: false };
@@ -372,7 +358,7 @@
   // page cannot tell the difference and should not pretend to.
   function nearNote(toll) {
     if (toll.near_gap_seconds == null) return null;
-    var who = toll.near_guest ? toll.near_guest + "'s" : "a";
+    var who = toll.near_guest ? name(toll.near_guest) + "'s" : "a";
     return gap(toll.near_gap_seconds) + " " + toll.near_relation + " " + who + " trip";
   }
 
@@ -459,19 +445,27 @@
   function renderLedger(data) {
     var ledger = el("ledger");
     clear(ledger);
-    var rows = (data.tolls || []).filter(function (t) {
-      return !state.owedOnly || !t.recovered_at;
+    var all = data.tolls || [];
+    var scoped = state.trip ? all.filter(function (t) { return t.trip_id === state.trip; }) : all;
+    var rows = scoped.filter(function (t) {
+      if (state.filter === "open") return !t.recovered_at;
+      if (state.filter === "loose") return !t.trip_id && !t.outside_label;
+      return true;
     });
+    renderScope(scoped);
 
     if (!rows.length) {
-      add(ledger, "div", "empty", data.tolls && data.tolls.length
-        ? "Everything on this statement has been billed back."
-        : "No statement uploaded yet.");
+      add(ledger, "div", "empty", !all.length ? "No statement uploaded yet." :
+        state.filter === "loose" ? "Every crossing has a rental or a known car." :
+        state.filter === "open" ? "Everything here has been billed back." : "Nothing here.");
       return;
     }
 
+    var linked = location.hash.replace(/^#toll-/, "");
     rows.forEach(function (toll) {
-      var card = add(ledger, "div", "toll" + (toll.recovered_at ? " done" : ""));
+      var card = add(ledger, "div", "toll" + (toll.recovered_at ? " done" : "") +
+                     (toll.id === linked ? " linked" : ""));
+      card.id = "toll-" + toll.id;
       var body = add(card, "div", "body");
       add(body, "div", "t-plaza", toll.plaza);
       add(body, "div", "t-when", when(toll.occurred_at));
@@ -497,6 +491,26 @@
     });
   }
 
+  // Says which rental's crossings these are, with the way back to all of them.
+  function renderScope(scoped) {
+    var box = el("scope");
+    box.hidden = !state.trip;
+    if (!state.trip) return;
+    clear(box);
+    var first = scoped[0];
+    box.appendChild(document.createTextNode(scoped.length + (scoped.length === 1 ? " crossing" : " crossings") +
+      " on " + (first ? (name(first.guest_name) || "this") + "'s rental" +
+      (first.vehicle_nickname ? " in " + first.vehicle_nickname : "") : "this rental") + " · "));
+    var all = add(box, "a", null, "show every crossing");
+    all.href = location.pathname + (TN.withApi("") || "");
+    all.addEventListener("click", function (ev) {
+      ev.preventDefault();
+      state.trip = null;
+      try { history.replaceState(null, "", all.href); } catch (e) { /* file:// */ }
+      render();
+    });
+  }
+
   function render() {
     if (!state.data) return;
     renderStats(state.data);
@@ -509,19 +523,11 @@
   // billed to. Tried with whatever token is saved, and once more after asking
   // if the API refuses it.
   function readTolls() {
-    var go = function () { return fetch(API + "/api/tolls", { headers: authHeaders() }); };
-    return go().then(function (r) {
-      if (r.status !== 401) return r;
-      rememberToken("");
-      var entered = window.prompt("The tolls list needs the tolls token (TOLLS_TOKEN).");
-      if (!entered) throw new Error("the token is needed to see the tolls");
-      rememberToken(entered.trim());
-      return go();
-    }).then(function (r) {
-      if (r.status === 401) { rememberToken(""); throw new Error("the token was rejected"); }
-      if (!r.ok) throw new Error("the API said " + r.status);
-      return r.json();
-    });
+    return TN.authed("/api/tolls", null, "The crossings name guests and tags, so they need the tolls token.")
+      .then(function (r) {
+        if (!r.ok) throw new Error("the API said " + r.status);
+        return r.json();
+      });
   }
 
   function load() {
@@ -540,7 +546,19 @@
         state.data = data;
         el("stamp").textContent = (data.tolls || []).length + " crossings on file";
         clearError();
+        // A link to one crossing shows it even when the default view would not.
+        var linked = location.hash.replace(/^#toll-/, "");
+        if (linked && !state.linkedShown) {
+          state.linkedShown = true;
+          var hit = (data.tolls || []).filter(function (t) { return t.id === linked; })[0];
+          if (hit && hit.recovered_at) setFilter("all", true);
+        }
         render();
+        var card = linked && el("toll-" + linked);
+        if (card && card.scrollIntoView && !state.scrolled) {
+          state.scrolled = true;
+          card.scrollIntoView({ block: "center" });
+        }
       })
       .catch(function (e) {
         el("stamp").textContent = "";
@@ -552,11 +570,13 @@
   // collected, so it shows what the server came back with, not what was
   // tapped.
   function recover(toll) {
-    if (state.busy || !ensureToken()) return;
+    if (state.busy) return;
     state.busy = true;
     var undo = !!toll.recovered_at;
-    fetch(API + "/api/tolls/" + toll.id + "/recovered?undo=" + (undo ? "true" : "false"),
-          { method: "POST", headers: authHeaders() })
+    ensureToken().then(function () {
+      return fetch(API + "/api/tolls/" + toll.id + "/recovered?undo=" + (undo ? "true" : "false"),
+                   { method: "POST", headers: authHeaders() });
+    })
       .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
@@ -571,14 +591,16 @@
   // again; a mis-tapped delete loses a charge the operator was owed, and the
   // only way back is to find it in the statement and import it a second time.
   function discard(toll) {
-    if (state.busy || !ensureToken()) return;
+    if (state.busy) return;
     var sure = window.confirm(
       "Remove this " + money(toll.amount_cents) + " crossing at " + toll.plaza + "?\n\n" +
       "It will come back if you import a statement that still contains it."
     );
     if (!sure) return;
     state.busy = true;
-    fetch(API + "/api/tolls/" + toll.id, { method: "DELETE", headers: authHeaders() })
+    ensureToken().then(function () {
+      return fetch(API + "/api/tolls/" + toll.id, { method: "DELETE", headers: authHeaders() });
+    })
       .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
@@ -590,15 +612,17 @@
   }
 
   function upload(file) {
-    if (!file || state.busy || !ensureToken()) return;
+    if (!file || state.busy) return;
     state.busy = true;
     var form = new FormData();
     form.append("statement", file, file.name);
     var result = el("import-result");
     result.hidden = false;
     result.textContent = "Reading " + file.name + "…";
-    fetch(API + "/api/tolls/import",
-          { method: "POST", body: form, headers: authHeaders() })
+    ensureToken().then(function () {
+      return fetch(API + "/api/tolls/import",
+                   { method: "POST", body: form, headers: authHeaders() });
+    })
       .then(handleStatus)
       .then(function (r) {
         return r.json().then(function (body) {
@@ -625,12 +649,14 @@
   }
 
   function rematch() {
-    if (state.busy || !ensureToken()) return;
+    if (state.busy) return;
     state.busy = true;
     var result = el("import-result");
     result.hidden = false;
     result.textContent = "Re-matching…";
-    fetch(API + "/api/tolls/rematch", { method: "POST", headers: authHeaders() })
+    ensureToken().then(function () {
+      return fetch(API + "/api/tolls/rematch", { method: "POST", headers: authHeaders() });
+    })
       .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
@@ -664,7 +690,7 @@
       var card = add(list, "div", "rental");
       var body = add(card, "div", "r-body");
       add(body, "div", "r-who",
-          (trip.guest_name || "No name") + " — " + (trip.vehicle_nickname || "?"));
+          (name(trip.guest_name) || "No name") + " — " + (trip.vehicle_nickname || "?"));
       add(body, "div", "r-when", when(trip.starts_at) + " → " + when(trip.ends_at));
       // A rental that caught nothing is usually a window typed slightly wrong,
       // which is the cheapest moment to notice it.
@@ -678,11 +704,13 @@
   }
 
   function dropRental(trip) {
-    if (state.busy || !ensureToken()) return;
-    if (!window.confirm("Remove the rental for " + (trip.guest_name || "no name") +
+    if (state.busy) return;
+    if (!window.confirm("Remove the rental for " + (name(trip.guest_name) || "no name") +
                         "?\n\nIts tolls go back to unattributed; they are not deleted.")) return;
     state.busy = true;
-    fetch(API + "/api/trips/" + trip.id, { method: "DELETE", headers: authHeaders() })
+    ensureToken().then(function () {
+      return fetch(API + "/api/trips/" + trip.id, { method: "DELETE", headers: authHeaders() });
+    })
       .then(handleStatus)
       .then(function (r) {
         if (!r.ok) throw new Error("the API said " + r.status);
@@ -694,7 +722,7 @@
   }
 
   function saveRental() {
-    if (state.busy || !ensureToken()) return;
+    if (state.busy) return;
     var result = el("r-result");
     var car = el("r-car").value.trim();
     var from = el("r-from").value;
@@ -718,10 +746,12 @@
     state.busy = true;
     result.hidden = false;
     result.textContent = "Recording…";
-    fetch(API + "/api/trips", {
-      method: "POST",
-      headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
-      body: JSON.stringify(body),
+    ensureToken().then(function () {
+      return fetch(API + "/api/trips", {
+        method: "POST",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders()),
+        body: JSON.stringify(body),
+      });
     })
       .then(handleStatus)
       .then(function (r) {
@@ -766,15 +796,21 @@
   });
   el("rematch").addEventListener("click", rematch);
 
-  function setFilter(owedOnly) {
-    state.owedOnly = owedOnly;
-    el("f-all").setAttribute("aria-pressed", owedOnly ? "false" : "true");
-    el("f-owed").setAttribute("aria-pressed", owedOnly ? "true" : "false");
-    render();
+  function setFilter(filter, quiet) {
+    state.filter = filter;
+    el("f-owed").setAttribute("aria-pressed", filter === "open" ? "true" : "false");
+    el("f-loose").setAttribute("aria-pressed", filter === "loose" ? "true" : "false");
+    el("f-all").setAttribute("aria-pressed", filter === "all" ? "true" : "false");
+    if (!quiet) render();
   }
-  el("f-all").addEventListener("click", function () { setFilter(false); });
-  el("f-owed").addEventListener("click", function () { setFilter(true); });
+  el("f-owed").addEventListener("click", function () { setFilter("open"); });
+  el("f-loose").addEventListener("click", function () { setFilter("loose"); });
+  el("f-all").addEventListener("click", function () { setFilter("all"); });
+  // Opened on one rental's crossings, from the trips page: all of them,
+  // billed back or not, since the question there is "what was on this trip".
+  if (state.trip) setFilter("all", true);
 
+  window.addEventListener("tn-token-saved", function () { load().then(loadRentals); });
   load().then(loadRentals);
 })();
 </script>

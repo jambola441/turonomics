@@ -84,6 +84,10 @@ class InvoiceRow(BaseModel):
     # Every charge on the invoices against this rental, as "label $amount",
     # so a bundled one reads as a bundle rather than as a puzzling total.
     charged_lines: list[str] = []
+    # When the operator marked Turo's charge checked, while that charge is
+    # still the one they looked at. A checked rental keeps its crossings and
+    # its place in the list; only the warning folds away.
+    checked_at: datetime | None = None
 
 
 class InvoicesResponse(BaseModel):
@@ -1100,7 +1104,8 @@ def list_invoices(
     window = toll_filing_window_days()
     built = build_invoices(session, now=now, include_recovered=include_recovered)
     asked = _reimbursements(session, [i.trip_id for i in built])
-    rows = [_row(i, window, now, asked.get(i.trip_id)) for i in built]
+    checks = _checks(session, [i.trip_id for i in built])
+    rows = [_checked(_row(i, window, now, asked.get(i.trip_id)), checks) for i in built]
     return InvoicesResponse(
         invoices=rows,
         window_days=window,
@@ -1110,9 +1115,80 @@ def list_invoices(
             if r.days_left is not None and 0 <= r.days_left <= URGENT_DAYS
         ),
         expired_cents=sum(r.total_cents for r in rows if r.expired),
-        needs_a_look_cents=sum(r.total_cents for r in rows if r.charged_but_different),
+        needs_a_look_cents=sum(
+            r.total_cents for r in rows if r.charged_but_different and r.checked_at is None
+        ),
         off_platform_cents=sum(r.total_cents for r in rows if r.off_platform),
         token_required=token_configured(),
+    )
+
+
+def _checks(
+    session: Session, trip_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, tuple[datetime, int | None]]:
+    """When each of these rentals had Turo's charge marked checked, and at what total."""
+    if not trip_ids:
+        return {}
+    return {
+        trip_id: (at, cents)
+        for trip_id, at, cents in session.execute(
+            select(Trip.id, Trip.turo_charge_checked_at, Trip.turo_charge_checked_cents).where(
+                Trip.id.in_(trip_ids), Trip.turo_charge_checked_at.is_not(None)
+            )
+        )
+        if at is not None
+    }
+
+
+def _checked(
+    row: InvoiceRow, checks: dict[uuid.UUID, tuple[datetime, int | None]]
+) -> InvoiceRow:
+    """The row with its check, if the check was against the charge Turo has now."""
+    found = checks.get(row.trip_id)
+    if found and found[1] == row.charged_cents:
+        row.checked_at = found[0]
+    return row
+
+
+class CheckedResponse(BaseModel):
+    trip_id: uuid.UUID
+    checked_at: datetime | None
+    checked_cents: int | None
+
+
+@router.post("/{trip_id}/checked", response_model=CheckedResponse)
+def mark_charge_checked(
+    trip_id: uuid.UUID,
+    session: DbSession,
+    undo: bool = False,
+    authorization: Annotated[str | None, Header()] = None,
+) -> CheckedResponse:
+    """Record that what Turo already charged on a rental has been looked at.
+
+    The invoices page says "Turo already charged $X here, so check before
+    asking again" on a rental whose charge does not square with its crossings,
+    and said it on every load with no way to say it had been done. The check
+    is held with the charged total it covers; a different charge later brings
+    the warning back. Nothing about what can be filed changes.
+    """
+    require_token(authorization)
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise HTTPException(404, "no such rental")
+    if undo:
+        trip.turo_charge_checked_at = None
+        trip.turo_charge_checked_cents = None
+    else:
+        asked = _reimbursements(session, [trip_id]).get(trip_id) or []
+        trip.turo_charge_checked_at = datetime.now(UTC)
+        trip.turo_charge_checked_cents = sum(
+            r.total_cents for r in asked if r.state == "charged"
+        )
+    session.commit()
+    return CheckedResponse(
+        trip_id=trip_id,
+        checked_at=trip.turo_charge_checked_at,
+        checked_cents=trip.turo_charge_checked_cents,
     )
 
 

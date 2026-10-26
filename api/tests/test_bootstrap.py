@@ -14,6 +14,7 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
+from turonomics_api.asp.ingest import FORT_GREENE_PARK_BBOX, SIGN_AREAS, ZIP_11238_BBOX
 from turonomics_api.bootstrap import (
     apply_plates,
     parse_plate_map,
@@ -205,8 +206,13 @@ def counted_fetch(monkeypatch):
     calls: list[tuple] = []
 
     def fake(bbox, **kw):
+        # A block inside whatever box was asked for, named after it, so each
+        # area loads a block-side of its own.
         calls.append(bbox)
-        return [_sign(993000, 187000, 50), _sign(993200, 187010, 200)]
+        x, y = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+        street = f"STREET {bbox[0]}"
+        return [{**_sign(x, y, 50), "on_street": street},
+                {**_sign(x + 200, y + 10, 200), "on_street": street}]
 
     monkeypatch.setattr("turonomics_api.bootstrap.fetch_signs", fake)
     return calls
@@ -220,9 +226,9 @@ def test_signs_are_not_loaded_unless_switched_on(session, monkeypatch, counted_f
 
 def test_signs_load_into_an_empty_database(session, monkeypatch, counted_fetch, boots_against_test_db) -> None:
     monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
-    assert run_sign_bootstrap() == 1
-    assert len(counted_fetch) == 1
-    assert session.scalar(select(func.count()).select_from(StreetSegmentSide)) == 1
+    assert run_sign_bootstrap() == len(SIGN_AREAS)
+    assert counted_fetch == [area.bbox for area in SIGN_AREAS]
+    assert session.scalar(select(func.count()).select_from(StreetSegmentSide)) == len(SIGN_AREAS)
 
 
 def test_a_restart_does_not_refetch_the_dataset(session, monkeypatch, counted_fetch, boots_against_test_db) -> None:
@@ -232,7 +238,41 @@ def test_a_restart_does_not_refetch_the_dataset(session, monkeypatch, counted_fe
     monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
     run_sign_bootstrap()
     assert run_sign_bootstrap() == 0
-    assert len(counted_fetch) == 1
+    assert len(counted_fetch) == len(SIGN_AREAS)
+
+
+def test_a_new_area_is_fetched_on_its_own(session, monkeypatch, counted_fetch, boots_against_test_db) -> None:
+    """The fleet's 11238 signs were loaded long ago; adding Fort Greene must
+    load Fort Greene on the next boot without fetching 11238 again."""
+    monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS[:1])
+    run_sign_bootstrap()
+    assert counted_fetch == [ZIP_11238_BBOX]
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS)
+    assert run_sign_bootstrap() == 1
+    assert counted_fetch == [ZIP_11238_BBOX, FORT_GREENE_PARK_BBOX]
+
+
+def test_the_areas_probes_do_not_overlap_each_others_boxes() -> None:
+    """A probe another area's load can reach would mark this area loaded
+    when it never was."""
+    def inside(probe, box):
+        return not (probe[2] < box[0] or probe[0] > box[2] or probe[3] < box[1] or probe[1] > box[3])
+    for area in SIGN_AREAS:
+        x0, y0, x1, y1 = area.probe
+        assert area.bbox[0] <= x0 < x1 <= area.bbox[2] and area.bbox[1] <= y0 < y1 <= area.bbox[3]
+        for other in SIGN_AREAS:
+            if other is not area:
+                assert not inside(area.probe, other.bbox), (area.name, other.name)
+
+
+def test_fort_greene_park_sits_four_blocks_inside_its_box() -> None:
+    """The park's kerbs, from the signs on Myrtle, DeKalb, St Edwards and
+    Washington Park, with room on every side."""
+    x0, y0, x1, y1 = FORT_GREENE_PARK_BBOX
+    park = (990250, 190540, 991600, 191920)
+    assert x0 < park[0] - 1000 and x1 > park[2] + 1000
+    assert y0 < park[1] - 1500 and y1 > park[3] + 1500
 
 
 def test_force_reloads_over_existing_rules(session, monkeypatch, counted_fetch, boots_against_test_db) -> None:
@@ -240,10 +280,10 @@ def test_force_reloads_over_existing_rules(session, monkeypatch, counted_fetch, 
     monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
     run_sign_bootstrap()
     monkeypatch.setenv("BOOTSTRAP_SIGNS", "force")
-    assert run_sign_bootstrap() == 1
-    assert len(counted_fetch) == 2
+    assert run_sign_bootstrap() == len(SIGN_AREAS)
+    assert len(counted_fetch) == 2 * len(SIGN_AREAS)
     # Reloading replaces rather than duplicates.
-    assert session.scalar(select(func.count()).select_from(StreetSegmentSide)) == 1
+    assert session.scalar(select(func.count()).select_from(StreetSegmentSide)) == len(SIGN_AREAS)
 
 
 def test_an_open_data_outage_does_not_stop_the_boot(session, monkeypatch, boots_against_test_db) -> None:

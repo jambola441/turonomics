@@ -25,11 +25,11 @@ from collections import Counter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from turonomics_api.asp.ingest import ZIP_11238_BBOX, fetch_signs, load_signs
+from turonomics_api.asp.ingest import SIGN_AREAS, SignArea, fetch_signs, load_signs, segments_within
 from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.bouncie.sync import sync_vehicles
 from turonomics_api.db.base import session_scope
-from turonomics_api.db.models import StreetSegmentSide, Vehicle
+from turonomics_api.db.models import Vehicle
 from turonomics_api.gmail.probe import DEFAULT_LIMIT, DEFAULT_QUERY, probe
 from turonomics_api.plates import normalize_plate
 from turonomics_api.settings import outside_fleet, parse_pairs
@@ -279,12 +279,15 @@ def _parse_bbox(raw: str) -> tuple[int, int, int, int]:
 
 
 def run_sign_bootstrap() -> int:
-    """Load street-cleaning rules if there are none. Returns rules created.
+    """Load street-cleaning rules for each area not loaded yet. Returns rules created.
 
-    Skipped when segments already exist, because the fetch pulls several
-    thousand rows and re-doing it on every restart would add half a minute to
-    each deploy for no change. ``BOOTSTRAP_SIGNS=force`` reloads anyway, which
-    is how to pick up the monthly dataset refresh.
+    An area is skipped when block-sides already sit in its probe box, because
+    the fetch pulls thousands of rows and re-doing it on every restart would
+    add half a minute to each deploy for no change. Adding an area to
+    ``SIGN_AREAS`` loads just that one on the next boot.
+    ``BOOTSTRAP_SIGNS=force`` reloads every area, which is how to pick up the
+    monthly dataset refresh. ``BOOTSTRAP_SIGNS_BBOX`` replaces the areas with
+    one box of its own.
 
     Runs before the vehicle sync: a parking session resolves its candidate
     sides at the moment it opens, so the rules have to be in place first or the
@@ -295,25 +298,35 @@ def run_sign_bootstrap() -> int:
         log.info("BOOTSTRAP_SIGNS not set — skipping")
         return 0
 
+    created = 0
     try:
-        with session_scope() as session:
-            existing = session.scalar(select(func.count()).select_from(StreetSegmentSide)) or 0
-            if existing and mode != "force":
-                log.info("%d street segments already loaded — skipping", existing)
-                return 0
-
-            raw = os.environ.get("BOOTSTRAP_SIGNS_BBOX", "").strip()
-            bbox = _parse_bbox(raw) if raw else ZIP_11238_BBOX
-            log.info("fetching street-cleaning signs for %s ...", bbox)
-            rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
-            report = load_signs(session, rows)
-            log.info("%s", report.summary())
-            return report.rules_created
+        raw = os.environ.get("BOOTSTRAP_SIGNS_BBOX", "").strip()
+        if raw:
+            box = _parse_bbox(raw)
+            areas: tuple[SignArea, ...] = (SignArea("BOOTSTRAP_SIGNS_BBOX", box, box),)
+        else:
+            areas = SIGN_AREAS
+        for area in areas:
+            # One transaction per area: an area that fails costs only itself,
+            # and the next boot tries it again.
+            with session_scope() as session:
+                existing = segments_within(session, area.probe)
+                if existing and mode != "force":
+                    log.info("%s: %d street segments already loaded — skipping",
+                             area.name, existing)
+                    continue
+                log.info("fetching street-cleaning signs for %s %s ...", area.name, area.bbox)
+                rows = fetch_signs(
+                    area.bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None
+                )
+                report = load_signs(session, rows)
+                log.info("%s: %s", area.name, report.summary())
+                created += report.rules_created
     except Exception as exc:  # noqa: BLE001 - boot convenience must not break boot
         # Same reasoning as the fleet bootstrap: an Open Data outage should
         # cost a stale rule set, not a service that will not start.
         log.warning("sign bootstrap failed, continuing without it: %s", exc)
-        return 0
+    return created
 
 
 def run_gmail_probe() -> int:

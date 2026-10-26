@@ -19,7 +19,7 @@ from collections.abc import Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
-from turonomics_api.asp.ingest import ZIP_11238_BBOX, fetch_signs, load_signs
+from turonomics_api.asp.ingest import SIGN_AREAS, fetch_signs, load_signs
 from turonomics_api.bootstrap import run_bootstrap
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.bouncie.sync import sync_vehicles
@@ -79,16 +79,17 @@ def cmd_load_signs(args: argparse.Namespace) -> int:
         parts = [int(v) for v in args.bbox.split(",")]
         if len(parts) != 4:
             raise SystemExit("--bbox needs exactly four numbers: x0,y0,x1,y1")
-        bbox = (parts[0], parts[1], parts[2], parts[3])
+        boxes = [(parts[0], parts[1], parts[2], parts[3])]
     else:
-        bbox = ZIP_11238_BBOX
-    print(f"fetching current street-cleaning signs in {bbox} ...")
-    rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
-    with session_scope() as session:
-        report = load_signs(session, rows)
-        print(report.summary())
-        for reason, n in report.unparsed_reasons.most_common():
-            print(f"  unparsed: {n} x {reason}")
+        boxes = [area.bbox for area in SIGN_AREAS]
+    for bbox in boxes:
+        print(f"fetching current street-cleaning signs in {bbox} ...")
+        rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
+        with session_scope() as session:
+            report = load_signs(session, rows)
+            print(report.summary())
+            for reason, n in report.unparsed_reasons.most_common():
+                print(f"  unparsed: {n} x {reason}")
     return 0
 
 
@@ -177,7 +178,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_signs.add_argument(
         "--bbox",
-        help="state plane (EPSG:2263) x0,y0,x1,y1; defaults to zip 11238 and its surroundings",
+        help="state plane (EPSG:2263) x0,y0,x1,y1; defaults to every area in SIGN_AREAS",
     )
     p_signs.set_defaults(func=cmd_load_signs)
 

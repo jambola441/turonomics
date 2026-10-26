@@ -29,6 +29,10 @@ import {
   type WindowReport,
 } from "./tolls.js";
 import {
+  describeMessageSend,
+  messageProblem,
+  MESSAGE_SEND_PATH,
+  type MessageSendOutcome,
   sessionLooksLive,
   describeEmbedded,
   listPath,
@@ -1216,6 +1220,23 @@ async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: 
     if (command.kind === "pull") {
       return { ok: true, result: describePull(await withTuroTab(undefined, pullTuro)) };
     }
+    if (command.kind === "message") {
+      // Approved by a person on the site; the API only hands one out after
+      // Send. Checked again here rather than trusting the shape.
+      const problem = messageProblem(command);
+      if (problem) return { ok: false, result: problem };
+      const reservation = command.turo_trip_id as string;
+      const text = (command.message as string).trim();
+      const outcome = await withTuroTab(undefined, async (tabId) => {
+        const [injected] = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: sendMessageInPage,
+          args: [MESSAGE_SEND_PATH, reservation, text],
+        });
+        return (injected?.result as MessageSendOutcome | undefined) ?? { status: 0 };
+      });
+      return describeMessageSend(outcome);
+    }
     if (command.kind === "file" && command.trip_id) {
       const tripId = command.trip_id;
       const outcome = await withTuroTab(undefined, (tabId) => fileInvoice(tabId, tripId));
@@ -1224,6 +1245,32 @@ async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: 
     return { ok: false, result: `this version of the extension cannot ${command.kind}` };
   } catch (error) {
     return { ok: false, result: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * Post one message to a reservation's thread, from inside a Turo page, the
+ * way Turo's own thread page does: a form, the session's cookies, no other
+ * header. Runs in the page and can import nothing.
+ */
+async function sendMessageInPage(
+  path: string,
+  reservationId: string,
+  text: string
+): Promise<{ status: number; id?: string; error?: string }> {
+  try {
+    const form = new FormData();
+    form.append("message", text);
+    form.append("reservationId", reservationId);
+    const response = await fetch(path, { method: "POST", body: form, credentials: "include" });
+    const body = (await response.json().catch(() => null)) as { id?: unknown; message?: unknown } | null;
+    return {
+      status: response.status,
+      id: body && typeof body.id === "string" ? body.id : undefined,
+      error: response.ok ? undefined : body && typeof body.message === "string" ? body.message : undefined,
+    };
+  } catch (error) {
+    return { status: 0, error: error instanceof Error ? error.message : String(error) };
   }
 }
 

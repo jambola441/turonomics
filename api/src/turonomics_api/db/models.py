@@ -887,6 +887,44 @@ class ExtensionCommand(Base):
     trip: Mapped[Trip | None] = relationship()
 
 
+class MessageDraft(Base):
+    """A message to a rental's guest, written but not sent until approved.
+
+    Drafted by a person on the site or by Claude through the MCP endpoint, and
+    sent only when the operator presses Send on the site, which queues a
+    ``message`` command for the extension to post from a Turo tab. Nothing
+    else sends one: the MCP tools can draft and read drafts, and there is no
+    tool to approve.
+
+    A message is never resent on its own. One that was handed to the extension
+    and never reported may have gone out; it is marked failed with that said,
+    and a person decides.
+    """
+
+    __tablename__ = "message_draft"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    trip_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("trip.id", ondelete="CASCADE"), index=True
+    )
+    body: Mapped[str] = mapped_column(Text)
+    # draft -> approved -> sent | failed, or draft -> discarded.
+    state: Mapped[str] = mapped_column(String(12), index=True)
+    # "site" or "mcp": who wrote it, so a draft from Claude reads as one.
+    created_by: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    command_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extension_command.id", ondelete="SET NULL")
+    )
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # What the extension said when it tried.
+    result: Mapped[str | None] = mapped_column(Text)
+
+    trip: Mapped[Trip] = relationship()
+
+
 class ExtensionCheckin(Base):
     """When the extension last asked for work, so the site can say whether
     anything is listening before a person waits on a button that cannot fire.

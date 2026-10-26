@@ -4,10 +4,13 @@ The site cannot talk to Turo; only the operator's browser holds that session.
 So a button on the site queues a command here, and the extension — asking
 every few seconds while Chrome is open — claims it, runs it, and reports.
 
-Two kinds, both things the extension's popup already does:
+The kinds:
 
 * ``pull`` — read Turo's trips and invoices.
 * ``file`` — file the toll invoice for one rental.
+* ``tolls`` — read E-ZPass.
+* ``message`` — send an approved message to a rental's guest. Never queued
+  here directly: only Send on an approved draft queues one (routers/messages).
 
 What keeps this from being a way to bill a guest twice:
 
@@ -31,7 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
-from turonomics_api.db.models import ExtensionCheckin, ExtensionCommand, Trip
+from turonomics_api.db.models import ExtensionCheckin, ExtensionCommand, MessageDraft, Trip
 from turonomics_api.routers.invoices import fileable_invoice
 from turonomics_api.routers.tolls import require_token, token_configured
 
@@ -44,6 +47,11 @@ DbSession = Annotated[Session, Depends(get_session)]
 # "tolls" reads E-ZPass in the computer's Chrome, wherever it is logged in to
 # E-ZPass: the phone has no E-ZPass session and the site has no E-ZPass password.
 KINDS = frozenset({"pull", "file", "tolls"})
+MESSAGE = "message"
+# The first extension that can send a message. An older one would claim the
+# command, fail it with "this version cannot message", and leave the draft
+# failed for no reason; it is never handed one.
+MESSAGE_MIN_VERSION = (1, 20, 0)
 QUEUED, RUNNING, DONE, FAILED, ABANDONED = "queued", "running", "done", "failed", "abandoned"
 
 # A filing takes seconds and a full pull under a minute. Ten minutes without a
@@ -72,6 +80,9 @@ class CommandOut(BaseModel):
     claimed_at: datetime | None
     finished_at: datetime | None
     result: str | None
+    # For a message, given only to the extension that claims it: the text to
+    # send. Never in the public list.
+    message: str | None = None
 
 
 class CommandsResponse(BaseModel):
@@ -105,6 +116,19 @@ def _out(command: ExtensionCommand) -> CommandOut:
     )
 
 
+def version_at_least(version: str | None, wanted: tuple[int, ...]) -> bool:
+    """Whether "1.20.0" is at least (1, 20, 0); anything unreadable is not."""
+    try:
+        parts = tuple(int(p) for p in (version or "").split(".")[:3])
+    except ValueError:
+        return False
+    return len(parts) == 3 and parts >= wanted
+
+
+def _draft_for(session: Session, command: ExtensionCommand) -> MessageDraft | None:
+    return session.scalar(select(MessageDraft).where(MessageDraft.command_id == command.id))
+
+
 def _abandon_stale(session: Session, now: datetime) -> None:
     for command in session.scalars(
         select(ExtensionCommand).where(
@@ -117,8 +141,16 @@ def _abandon_stale(session: Session, now: datetime) -> None:
         command.result = (
             "the browser never reported back — check Turo before filing this again"
             if command.kind == "file"
+            else "the browser never reported back — check the thread on Turo before "
+            "sending this again"
+            if command.kind == MESSAGE
             else "the browser never reported back"
         )
+        if command.kind == MESSAGE:
+            draft = _draft_for(session, command)
+            if draft is not None and draft.state == "approved":
+                draft.state = "failed"
+                draft.result = command.result
         log.warning("command %s (%s) abandoned", command.id, command.kind)
 
 
@@ -149,6 +181,10 @@ def queue_command(
     authorization: Annotated[str | None, Header()] = None,
 ) -> CommandOut:
     require_token(authorization)
+    if payload.kind == MESSAGE:
+        raise HTTPException(
+            status_code=422, detail="a message is sent with Send on its approved draft"
+        )
     if payload.kind not in KINDS:
         raise HTTPException(status_code=422, detail=f"no such command: {payload.kind}")
     if payload.kind == "file":
@@ -217,21 +253,24 @@ def claim(
         checkin.version = x_extension_version or checkin.version
     _abandon_stale(session, now)
 
+    query = select(ExtensionCommand).where(ExtensionCommand.state == QUEUED)
+    if not version_at_least(x_extension_version, MESSAGE_MIN_VERSION):
+        query = query.where(ExtensionCommand.kind != MESSAGE)
     command = session.scalar(
-        select(ExtensionCommand)
-        .where(ExtensionCommand.state == QUEUED)
-        .order_by(ExtensionCommand.requested_at)
-        .limit(1)
-        .with_for_update(skip_locked=True)
+        query.order_by(ExtensionCommand.requested_at).limit(1).with_for_update(skip_locked=True)
     )
     if command is None:
         session.commit()
         return Response(status_code=204)
     command.state = RUNNING
     command.claimed_at = now
+    out = _out(command)
+    if command.kind == MESSAGE:
+        draft = _draft_for(session, command)
+        out.message = draft.body if draft is not None else None
     session.commit()
     log.info("command %s claimed: %s", command.id, command.kind)
-    return _out(command)
+    return out
 
 
 @router.post("/{command_id}/done", response_model=CommandOut)
@@ -253,6 +292,12 @@ def done(
     command.state = DONE if payload.ok else FAILED
     command.finished_at = datetime.now(UTC)
     command.result = payload.result[:2000]
+    if command.kind == MESSAGE:
+        draft = _draft_for(session, command)
+        if draft is not None:
+            draft.state = "sent" if payload.ok else "failed"
+            draft.sent_at = command.finished_at if payload.ok else None
+            draft.result = command.result
     session.commit()
     log.info("command %s %s: %s", command.id, command.state, command.result)
     return _out(command)

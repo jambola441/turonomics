@@ -144,6 +144,8 @@ export interface SiteCommand {
   trip_id: string | null;
   turo_trip_id: string | null;
   guest_name: string | null;
+  /** For a message: the approved text, given only to the extension claiming it. */
+  message?: string | null;
 }
 
 export interface FileInvoiceResult {

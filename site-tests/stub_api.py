@@ -402,6 +402,16 @@ INVOICES = [
 # listening, which is what the page shows and acts on.
 COMMANDS: list[dict[str, object]] = []
 
+# A message Claude drafted to the Turo rental's guest, waiting for a person.
+DRAFTS: list[dict[str, object]] = [{
+    "id": "dddd1111-0000-0000-0000-000000000001",
+    "trip_id": "11111111-1111-1111-1111-111111111111", "guest_name": "Alice",
+    "vehicle_nickname": "Jolene", "turo_trip_id": "58626257",
+    "body": "Hi Alice, a toll from your trip is on its way as an invoice.",
+    "state": "draft", "created_by": "mcp", "created_at": NOW.isoformat(),
+    "updated_at": NOW.isoformat(), "approved_at": None, "sent_at": None, "result": None,
+}]
+
 
 def _commands_payload() -> dict[str, object]:
     return {
@@ -563,6 +573,10 @@ class Handler(BaseHTTPRequestHandler):
                 ],
                 "route_source": "bouncie", "note": None,
             })
+        elif self.path.startswith("/api/messages"):
+            if not self._authorized(record=False):
+                return
+            self._send({"drafts": DRAFTS})
         elif self.path.startswith("/api/trips/") and self.path.endswith("/view"):
             # Behind the token, as the real one is: Turo's detail names the
             # guest and the pickup address.
@@ -610,7 +624,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         path, _, query = self.path.partition("?")
         if (path.startswith("/api/tolls") or path.startswith("/api/trips")
-                or path.startswith("/api/invoices")
+                or path.startswith("/api/invoices") or path.startswith("/api/messages")
                 or path.startswith("/api/commands")) and not self._authorized():
             return
         if path == "/api/commands":
@@ -628,6 +642,28 @@ class Handler(BaseHTTPRequestHandler):
             }
             COMMANDS.append(command)
             self._send(command)
+            return
+        if path.startswith("/api/messages"):
+            body = json.loads(self._read_body() or b"{}")
+            parts = path.split("/")
+            if path == "/api/messages":
+                draft = {**DRAFTS[0], "id": f"dddd1111-0000-0000-0000-{len(DRAFTS) + 1:012d}",
+                         "trip_id": body["trip_id"], "body": body["body"].strip(),
+                         "created_by": "site", "state": "draft"}
+                DRAFTS.insert(0, draft)
+                self._send(draft)
+                return
+            for draft in DRAFTS:
+                if draft["id"] == parts[3]:
+                    if parts[4] == "edit":
+                        draft["body"] = body["body"].strip()
+                    elif parts[4] == "discard":
+                        draft["state"] = "discarded"
+                    elif parts[4] == "send":
+                        draft["state"] = "approved"
+                    self._send(draft)
+                    return
+            self._send({"detail": "no such draft"}, status=404)
             return
         if path.startswith("/api/invoices/") and path.endswith("/checked"):
             trip_id = path.split("/")[-2]

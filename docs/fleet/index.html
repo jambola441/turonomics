@@ -38,6 +38,12 @@
   .dot{width:7px;height:7px;border-radius:50%}
   #map{flex:1;min-height:0;background:var(--u-map)}
   .leaflet-container{background:var(--u-map);font-family:inherit}
+  /* Over the map until its first tile arrives. The tile provider can take
+     several seconds, and a dark empty pane read as broken. */
+  .map-wait{position:absolute;left:50%;top:16px;transform:translateX(-50%);z-index:500;
+    font-size:12.5px;color:var(--muted);background:color-mix(in srgb,var(--bg) 85%,transparent);
+    border:1px solid var(--border);border-radius:var(--u-radius-md);padding:6px 11px;
+    pointer-events:none;white-space:nowrap}
   .name[data-focus]{cursor:pointer}
   .name[data-focus]:hover{text-decoration:underline;text-underline-offset:3px}
   .chip{cursor:pointer}
@@ -939,6 +945,18 @@
       attribution: (cfg && cfg.attribution) || "&copy; OpenStreetMap contributors",
       maxZoom: (cfg && cfg.max_zoom) || 19,
     });
+    var wait = document.createElement("div");
+    wait.className = "map-wait";
+    wait.textContent = "Loading the map…";
+    map.getContainer().appendChild(wait);
+    var slow = setTimeout(function () {
+      wait.textContent = "The map provider is slow — the cars are listed below";
+    }, 10000);
+    function painted() {
+      clearTimeout(slow);
+      if (wait.parentNode) wait.parentNode.removeChild(wait);
+    }
+    layer.once("tileload", painted);
     var failures = 0;
     layer.on("tileerror", function () {
       failures += 1;
@@ -948,7 +966,7 @@
       L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors — basemap key rejected",
         maxZoom: 19,
-      }).addTo(map);
+      }).once("tileload", painted).addTo(map);
     });
     layer.addTo(map);
   }

@@ -121,6 +121,10 @@ def main() -> int:
                     if current else here.count() == 0)
 
             check("the fleet page has the same nav as the others", nav_ok("fleet"))
+            # Tiles are blocked here, so none ever paints: the map says it is
+            # loading rather than sitting there dark and empty.
+            check("the map says it is loading until a tile arrives",
+                  page.locator("#map .map-wait").is_visible())
 
             check("the error banner is not showing", page.locator("#err").is_hidden())
             check("every vehicle has a chip", page.locator(".chip").count() == 3)

@@ -8,15 +8,17 @@
 
 :root {
   --tn-label: 11px;     /* uppercase mono labels: K, states, chips */
-  --tn-small: 12.5px;   /* the facts on a card: dates, counts, days left */
+  --tn-small: 13px;     /* the facts on a card: dates, counts, days left */
   --tn-body: 14px;
   --tn-title: 15.5px;   /* a card's name */
 }
 
 .tn-nav{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.tn-nav a,.tn-gear{font-family:var(--u-font-mono);font-size:var(--tn-label);letter-spacing:.06em;
+/* The nav at 12.5px: it is read on every page, and 11px was the smallest
+   text left on a laptop screen. */
+.tn-nav a,.tn-gear{font-family:var(--u-font-mono);font-size:12.5px;letter-spacing:.05em;
   text-transform:uppercase;color:var(--u-muted);text-decoration:none;background:none;
-  border:1px solid var(--u-line);border-radius:var(--u-radius-md);padding:8px 10px;cursor:pointer;
+  border:1px solid var(--u-line);border-radius:var(--u-radius-md);padding:8px 9px;cursor:pointer;
   line-height:1.2}
 .tn-nav a:hover,.tn-gear:hover{border-color:var(--u-line-strong);color:var(--u-fg)}
 .tn-nav a[aria-current="page"]{color:var(--u-fg);border-color:var(--u-line-strong);

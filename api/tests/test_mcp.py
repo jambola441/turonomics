@@ -161,12 +161,14 @@ def test_what_is_not_offered_is_said_so(api_client, token) -> None:
 
 
 @requires_db
-def test_every_tool_is_listed_as_read_only(api_client, token) -> None:
+def test_every_tool_but_drafting_is_listed_as_read_only(api_client, token) -> None:
     tools = rpc(api_client, "tools/list").json()["result"]["tools"]
     assert {t["name"] for t in tools} == {
-        "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status"}
+        "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status",
+        "draft_message", "message_drafts"}
     for tool in tools:
-        assert tool["annotations"]["readOnlyHint"] is True
+        # Drafting writes a draft and nothing else; it destroys nothing.
+        assert tool["annotations"]["readOnlyHint"] is (tool["name"] != "draft_message")
         assert tool["annotations"]["destructiveHint"] is False
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
 

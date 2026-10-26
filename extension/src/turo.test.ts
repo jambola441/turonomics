@@ -11,6 +11,8 @@ import { test } from "node:test";
 
 import type { TuroPullResult } from "./types.js";
 import {
+  describeMessageSend,
+  messageProblem,
   sessionLooksLive,
   CHARGE_KEYS,
   describeFiling,
@@ -798,4 +800,28 @@ test("a Turo session is live unless Turo says 401 or 403", () => {
   // Could not tell: let the work run and fail in its own words.
   assert.equal(sessionLooksLive(0), true);
   assert.equal(sessionLooksLive(undefined), true);
+});
+
+// ---------------------------------------------------------------------------
+// Sending an approved message
+// ---------------------------------------------------------------------------
+
+test("a message needs a reservation and words before it goes to Turo", () => {
+  assert.equal(messageProblem({ turo_trip_id: "59077848", message: "Hi" }), null);
+  assert.match(messageProblem({ turo_trip_id: null, message: "Hi" }) ?? "", /reservation/);
+  assert.match(messageProblem({ turo_trip_id: "../inbox", message: "Hi" }) ?? "", /reservation/);
+  assert.match(messageProblem({ turo_trip_id: "59077848", message: "   " }) ?? "", /empty/);
+  assert.match(messageProblem({ turo_trip_id: "59077848" }) ?? "", /empty/);
+});
+
+test("a message is reported sent only when Turo stored it", () => {
+  assert.deepEqual(describeMessageSend({ status: 200, id: "a-uuid" }), { ok: true, result: "sent on Turo" });
+  // A 200 without the stored message is not proof it went.
+  assert.equal(describeMessageSend({ status: 200 }).ok, false);
+  const refused = describeMessageSend({ status: 400, error: "Message too long" });
+  assert.equal(refused.ok, false);
+  assert.match(refused.result, /400: Message too long/);
+  assert.match(refused.result, /nothing was sent/);
+  assert.match(describeMessageSend({ status: 401 }).result, /not logged in/);
+  assert.match(describeMessageSend({ status: 0 }).result, /no answer/);
 });

@@ -682,6 +682,10 @@ def main() -> int:
                   page.locator(".trip").count() == 1)
             page.fill("#q", "")
             check("the trips page has the shared nav", nav_ok("trips"))
+            waiting = page.locator("#waiting")
+            check("a message Claude drafted waits at the top of the trips page",
+                  waiting.is_visible() and "1 message waiting" in waiting.inner_text().lower()
+                  and "drafted by Claude" in waiting.inner_text())
             check("trips are grouped, the work first and finished ones folded",
                   "needs filing" in trips_text
                   and page.locator("details.finished").count() <= 1)
@@ -760,6 +764,29 @@ def main() -> int:
             check("a rental to bill can be filed from its view",
                   page.locator(".view .btn.go").count() == 1
                   and "$11.00" in page.locator(".view .btn.go").inner_text())
+            # Messages: the draft is on its trip, editable, and goes only on Send,
+            # after a confirm that shows the whole message.
+            draft_box = page.locator("#trip-11111111-1111-1111-1111-111111111111 .draft textarea")
+            check("the draft is on its trip, editable",
+                  draft_box.count() == 1 and "toll from your trip" in draft_box.input_value())
+            confirm_answers.append(False)
+            page.locator(".draft .btn.approve", has_text="Send on Turo").click()
+            page.wait_for_timeout(500)
+            check("cancelling the confirm sends nothing",
+                  page.locator(".draft .sub").first.inner_text().startswith("draft"))
+            confirm_answers.append(True)
+            page.locator(".draft .btn.approve", has_text="Send on Turo").click()
+            page.wait_for_timeout(900)
+            check("Send, confirmed, hands it to the extension",
+                  "sending" in page.locator(".draft .sub").first.inner_text()
+                  and page.locator(".draft textarea").count() == 0)
+            check("and it leaves the waiting list", page.locator("#waiting").is_hidden())
+            page.locator(".compose textarea").fill("Thanks for a great trip!")
+            page.locator(".compose .btn", has_text="Save as draft").click()
+            page.wait_for_timeout(900)
+            check("a message written here is saved as a draft, not sent",
+                  page.locator(".draft textarea").count() == 1
+                  and page.locator(".draft textarea").input_value() == "Thanks for a great trip!")
             check("the trip view does not push the page sideways",
                   page.evaluate("document.documentElement.scrollWidth <= window.innerWidth"))
             check("the trips page says the extension is listening, by the File button too",

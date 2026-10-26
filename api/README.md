@@ -65,7 +65,8 @@ plate alone (the plate on the toll must exactly match the plate on the trip).
 The API is also an MCP server: one endpoint speaking MCP's streamable HTTP
 transport (a JSON-RPC request per POST, a JSON answer, no event stream), so a
 Claude session can ask about the fleet's own data instead of reading code or
-the site. It only reads. Six tools:
+the site. It reads, and writes one thing: a draft message to a guest, which
+nothing sends until the operator presses Send on the trips page. Eight tools:
 
 | tool | answers |
 |---|---|
@@ -75,6 +76,18 @@ the site. It only reads. Six tools:
 | `trip` | everything about one rental (the guest's messages only when asked) |
 | `tolls` | crossings: open, with no rental, or all; optionally one rental's |
 | `extension_status` | whether the browser extension is listening, and its last jobs |
+| `draft_message` | writes a message to a rental's guest **as a draft**; it is not sent |
+| `message_drafts` | the drafts and what became of each (draft, approved, sent, failed, discarded) |
+
+### Messages to guests (`/api/messages`)
+
+Every message is approved by a person. A draft, from the site or from Claude,
+is sent only when Send is pressed on it on the trips page, which queues a
+`message` command; the extension (1.20.0 or later) posts it from a Turo tab
+with Turo's own `POST /api/v2/message/send` and reports whether Turo stored it.
+No MCP tool approves or sends, a `message` command cannot be queued except
+from an approved draft, an older extension is never handed one, and one that
+was claimed and never reported is marked failed rather than sent again.
 
 It needs `TOLLS_TOKEN` as a bearer token, and unlike the pages it refuses to
 answer at all while `TOLLS_TOKEN` is unset. In Claude Code:

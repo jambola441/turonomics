@@ -144,6 +144,25 @@
   details.fold summary{cursor:pointer;font-family:var(--mono);font-size:var(--tn-label);letter-spacing:.1em;
        text-transform:uppercase;color:var(--dim);margin:18px 0 8px}
   details.fold .thread{margin-top:6px}
+
+  /* Messages to the guest: drafts, each sent only when a person presses Send. */
+  .waiting{border:1px solid var(--u-warn-line);background:var(--u-warn-bg);border-radius:var(--u-radius-md);
+           padding:10px 12px;margin-bottom:12px}
+  .waiting h2{color:var(--amber);margin:0 0 6px}
+  .waiting a{display:block;font-size:13.5px;color:var(--text);text-decoration:none;padding:5px 0;
+             border-top:1px solid var(--u-warn-line);line-height:1.4}
+  .waiting a:first-of-type{border-top:0}
+  .waiting a .from{font-size:12px;color:var(--muted)}
+  .draft{border:1px solid var(--border);border-radius:var(--u-radius-md);padding:10px;margin-bottom:8px}
+  .draft.mine{border-color:var(--u-warn-line)}
+  .draft .sub{font-size:12px;color:var(--dim);margin-bottom:6px}
+  .draft textarea,.compose textarea{font:inherit;font-size:13.5px;line-height:1.45;color:var(--text);
+       background:var(--surface2);border:1px solid var(--border);border-radius:var(--u-radius-md);
+       padding:8px 10px;width:100%;min-height:84px;resize:vertical}
+  .draft .text{font-size:13.5px;line-height:1.45;white-space:pre-wrap;word-break:break-word}
+  .draft .row-btns,.compose .row-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center}
+  .draft .count{font-size:12px;color:var(--dim);margin-left:auto}
+  .btn.approve{color:var(--green);border-color:var(--u-ok-line)}
 </style>
 </head>
 <body>
@@ -184,6 +203,8 @@
     </div>
   </div>
 
+  <section class="waiting" id="waiting" hidden></section>
+
   <div id="list"></div>
 </main>
 
@@ -196,7 +217,7 @@
   var API = TN.API;
   var name = TN.personName;
 
-  var state = { trips: [], ledger: {}, filter: "all", q: "", open: null, views: {}, busy: false,
+  var state = { trips: [], ledger: {}, drafts: [], filter: "all", q: "", open: null, views: {}, busy: false,
                 maps: {}, tiles: null, flags: {} };
 
   function el(id) { return document.getElementById(id); }
@@ -772,6 +793,8 @@
       });
     }
 
+    if (!off(trip)) renderDrafts(trip, box);
+
     // The thread folded, with its length on the fold: it is the longest part
     // of the page and the least often wanted.
     if (view.messages == null) {
@@ -974,7 +997,12 @@
     fetch(API + "/api/commands", { headers: authHeaders() })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
-      .then(function (data) { state.ext = data; showExtension(); });
+      .then(function (data) {
+        state.ext = data;
+        showExtension();
+        // A message being sent says what became of it without a reload.
+        if (state.drafts.some(function (d) { return d.state === "approved"; })) loadDrafts();
+      });
   }
 
   function queueFiling(trip, row) {
@@ -1057,7 +1085,120 @@
       .catch(function () { return { rows: [] }; });
   }
 
+  // -------------------------------------------------------------------------
+  // Messages to the guest
+  // -------------------------------------------------------------------------
+  // Written here or by Claude through the MCP endpoint, and sent only when
+  // Send is pressed here: the extension then posts it from a Turo tab. Every
+  // message is approved by a person; nothing else sends one.
+
+  var STATE_WORD = { draft: "draft", approved: "sending…", sent: "sent", failed: "not sent",
+                     discarded: "discarded" };
+
+  function loadDrafts() {
+    if (!token()) return Promise.resolve();
+    return fetch(API + "/api/messages", { headers: authHeaders() })
+      .then(function (r) { return r.ok ? r.json() : { drafts: [] }; })
+      .then(function (data) {
+        state.drafts = data.drafts || [];
+        renderWaiting();
+        if (state.open) render();
+      })
+      .catch(function () { /* the list is the page's job; drafts are extra */ });
+  }
+
+  // Drafts nobody has read yet, at the top of the page: a draft from Claude
+  // is waiting on a person, and should not be found only by opening the trip.
+  function renderWaiting() {
+    var box = el("waiting");
+    box.textContent = "";
+    var waiting = state.drafts.filter(function (d) { return d.state === "draft"; });
+    box.hidden = !waiting.length;
+    if (!waiting.length) return;
+    add(box, "h2", null, waiting.length + (waiting.length === 1 ? " message" : " messages") +
+        " waiting for you to read and send");
+    waiting.forEach(function (d) {
+      var a = add(box, "a");
+      a.href = "#" + d.trip_id;
+      add(a, "div", null, (name(d.guest_name) || "Guest") + " — " + (d.vehicle_nickname || "?") +
+          ": " + d.body.split("\n")[0].slice(0, 90) + (d.body.length > 90 ? "…" : ""));
+      add(a, "div", "from", (d.created_by === "mcp" ? "drafted by Claude" : "drafted here") +
+          " · " + when(d.created_at, true));
+    });
+  }
+
+  function messageCall(path, body) {
+    return authed(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    }).then(json);
+  }
+
+  function renderDrafts(trip, box) {
+    section(box, "Message the guest");
+    var mine = state.drafts.filter(function (d) { return d.trip_id === trip.id; });
+    mine.forEach(function (d) {
+      var card = add(box, "div", "draft" + (d.state === "draft" ? " mine" : ""));
+      add(card, "div", "sub", STATE_WORD[d.state] + " · " +
+          (d.created_by === "mcp" ? "drafted by Claude" : "drafted here") + " · " +
+          when(d.created_at, true) + (d.sent_at ? " · sent " + when(d.sent_at, true) : "") +
+          (d.result && d.state !== "sent" ? " — " + d.result : ""));
+      if (d.state !== "draft") {
+        add(card, "div", "text", d.body);
+        return;
+      }
+      var text = add(card, "textarea");
+      text.value = d.body;
+      text.maxLength = 2000;
+      var btns = add(card, "div", "row-btns");
+      var send = add(btns, "button", "btn approve", "Send on Turo");
+      send.type = "button";
+      var save = add(btns, "button", "btn", "Save");
+      save.type = "button";
+      var drop = add(btns, "button", "btn drop", "Discard");
+      drop.type = "button";
+      var count = add(btns, "span", "count", text.value.length + "/2000");
+      text.addEventListener("input", function () { count.textContent = text.value.length + "/2000"; });
+      save.addEventListener("click", function () {
+        messageCall("/api/messages/" + d.id + "/edit", { body: text.value })
+          .then(loadDrafts).catch(function (e) { fail("Could not save it: " + e.message); });
+      });
+      drop.addEventListener("click", function () {
+        if (!window.confirm("Discard this draft?")) return;
+        messageCall("/api/messages/" + d.id + "/discard")
+          .then(loadDrafts).catch(function (e) { fail("Could not discard it: " + e.message); });
+      });
+      send.addEventListener("click", function () {
+        // The approval. Saved first, so what is sent is what is on screen.
+        var body = text.value.trim();
+        if (!body) return;
+        if (!window.confirm("Send this to " + (name(trip.guest_name) || "the guest") +
+            " on Turo?\n\n" + body)) return;
+        var save = body === d.body ? Promise.resolve()
+          : messageCall("/api/messages/" + d.id + "/edit", { body: body });
+        save.then(function () { return messageCall("/api/messages/" + d.id + "/send"); })
+          .then(loadDrafts).then(watchExtension)
+          .catch(function (e) { fail("Could not send it: " + e.message); });
+      });
+    });
+    var compose = add(box, "div", "compose");
+    var text = add(compose, "textarea");
+    text.placeholder = "Write a message to " + (name(trip.guest_name) || "the guest") +
+      " — it is saved as a draft, and sent only when you press Send.";
+    text.maxLength = 2000;
+    var btns = add(compose, "div", "row-btns");
+    var keep = add(btns, "button", "btn", "Save as draft");
+    keep.type = "button";
+    keep.addEventListener("click", function () {
+      if (!text.value.trim()) return;
+      messageCall("/api/messages", { trip_id: trip.id, body: text.value })
+        .then(loadDrafts).catch(function (e) { fail("Could not save it: " + e.message); });
+    });
+  }
+
   function load() {
+    loadDrafts();
     // Both behind the token: they name guests. With one saved, both reads go
     // out together and the list is drawn as soon as it lands — each is a slow
     // query, and one after the other was most of the wait. Without one, the

@@ -621,3 +621,49 @@ export function listPath(template: string, page: number, size: number): string {
 export function sessionLooksLive(status: number | undefined | null): boolean {
   return status !== 401 && status !== 403;
 }
+
+// ---------------------------------------------------------------------------
+// Sending an approved message
+// ---------------------------------------------------------------------------
+// Turo's own thread page sends with POST /api/v2/message/send, a form with
+// `message` and `reservationId`, and the session's cookies; no CSRF header.
+// Read from its bundled code, not from a recorded send. The answer is the
+// message as stored, of which only its id is relied on here.
+
+export const MESSAGE_SEND_PATH = "/api/v2/message/send";
+
+/** Why a claimed message command cannot be sent as it stands, or null. */
+export function messageProblem(command: {
+  turo_trip_id: string | null;
+  message?: string | null;
+}): string | null {
+  if (!command.turo_trip_id || !/^\d+$/.test(command.turo_trip_id)) {
+    return "no Turo reservation to send to";
+  }
+  if (!command.message || !command.message.trim()) return "the message is empty";
+  return null;
+}
+
+export interface MessageSendOutcome {
+  status: number;
+  /** The stored message's id, when Turo answered with one. */
+  id?: string;
+  /** Turo's own words when it refused, as its page would toast them. */
+  error?: string;
+}
+
+/** What to report to the site: sent only when Turo gave the message an id. */
+export function describeMessageSend(outcome: MessageSendOutcome): { ok: boolean; result: string } {
+  if (outcome.status >= 200 && outcome.status < 300 && outcome.id) {
+    return { ok: true, result: "sent on Turo" };
+  }
+  if (outcome.status === 401 || outcome.status === 403) {
+    return { ok: false, result: "Turo refused it — the browser is not logged in to Turo" };
+  }
+  return {
+    ok: false,
+    result: `Turo did not take it (${outcome.status || "no answer"}${
+      outcome.error ? `: ${outcome.error.slice(0, 200)}` : ""
+    }) — nothing was sent`,
+  };
+}

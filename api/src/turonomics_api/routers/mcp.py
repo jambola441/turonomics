@@ -13,8 +13,10 @@ small enough to implement here, under test, rather than take on an SDK. A GET
 is refused with 405, which the transport defines as "this server offers no
 event stream".
 
-Read-only on purpose. Filing on Turo, ticking off crossings and the rest stay
-on the site and the extension, where a person presses the button.
+It reads, and it writes one thing: a draft message to a rental's guest, which
+nothing sends until the operator presses Send on it on the site. There is no
+tool to approve or send one. Filing on Turo, ticking off crossings and the
+rest stay on the site and the extension, where a person presses the button.
 
 Behind ``TOLLS_TOKEN`` like the pages that name guests, and stricter than
 they are: those let every request through when the token is unset, and this
@@ -31,6 +33,7 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, date, datetime
 from typing import Annotated, Any
+from urllib.parse import urljoin
 
 from fastapi import APIRouter, Body, Depends, Header
 from fastapi.responses import JSONResponse, Response
@@ -55,8 +58,10 @@ INSTRUCTIONS = (
     "days_left is what remains of that window (negative once it has closed). "
     "Start with next_to_file for what to do, find_trips to locate a rental by guest, "
     "car, reservation number or date, and trip for everything about one rental. "
-    "This server only reads: filing, ticking off and pulling from Turo are done on "
-    "the site or by the browser extension."
+    "draft_message writes a message to a rental's guest as a draft; it is not sent "
+    "until the operator reads it and presses Send on the site, so say that it is a "
+    "draft and is waiting for them. Nothing else here writes: filing, ticking off and "
+    "pulling from Turo are done on the site or by the browser extension."
 )
 
 
@@ -252,6 +257,46 @@ def tool_extension_status(session: Session, auth: str, args: dict[str, Any]) -> 
                  exclude={"token_required"})
 
 
+def _draft_view(draft: Any) -> dict[str, Any]:
+    from turonomics_api.routers.messages import draft_out
+    from turonomics_api.settings import site_url
+
+    data = _dump(draft_out(draft))
+    # SITE_URL names the fleet page; the trips page sits beside it.
+    data["review_at"] = urljoin(site_url(), "../trips/") + f"#{draft.trip_id}"
+    return data
+
+
+def tool_draft_message(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.messages import create_draft
+
+    trip_id = _uuid(args.get("trip_id"))
+    text = args.get("text")
+    if not isinstance(text, str):
+        raise _ToolError("text is the message, as a string")
+    try:
+        draft = create_draft(session, trip_id, text, "mcp")
+    except ValueError as exc:
+        raise _ToolError(str(exc)) from exc
+    data = _draft_view(draft)
+    data["sent"] = False
+    data["next"] = "Waiting for the operator to read it and press Send on the trip's page."
+    return data
+
+
+def tool_message_drafts(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.messages import STATES, list_drafts
+
+    state = args.get("state") or None
+    if state is not None and state not in STATES:
+        raise _ToolError(f"state is one of {', '.join(STATES)}")
+    trip = _uuid(args["trip_id"]) if args.get("trip_id") else None
+    drafts = list_drafts(session, trip, state)
+    limit = _limit(args.get("limit"), 25, 200)
+    return {"drafts": [_draft_view(d) for d in drafts[:limit]],
+            "more": max(len(drafts) - limit, 0)}
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": properties,
                               "additionalProperties": False}
@@ -330,6 +375,34 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
             "limit": _LIMIT,
         }),
     }),
+    "draft_message": (tool_draft_message, {
+        "title": "Draft a message to a guest",
+        "description": (
+            "Write a message to a Turo rental's guest as a draft. It is NOT sent: the "
+            "operator reads it on the site and presses Send, and only then does the "
+            "browser extension post it to the reservation's thread on Turo. Write it "
+            "as the host, in plain text."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string", "description": "From find_trips or the ledger."},
+            "text": {"type": "string", "description": "The message, at most 2000 characters."},
+        }, ["trip_id", "text"]),
+        "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                        "idempotentHint": False, "openWorldHint": False},
+    }),
+    "message_drafts": (tool_message_drafts, {
+        "title": "Message drafts",
+        "description": (
+            "Messages drafted to guests, newest first, and what became of each: draft "
+            "(waiting for the operator), approved (sending), sent, failed, discarded."
+        ),
+        "inputSchema": _schema({
+            "state": {"type": "string",
+                      "enum": ["draft", "approved", "sent", "failed", "discarded"]},
+            "trip_id": {"type": "string"},
+            "limit": _LIMIT,
+        }),
+    }),
     "extension_status": (tool_extension_status, {
         "title": "The browser extension",
         "description": (
@@ -344,7 +417,7 @@ READ_ONLY = {"readOnlyHint": True, "destructiveHint": False, "openWorldHint": Fa
 
 
 def _tool_list() -> list[dict[str, Any]]:
-    return [{"name": name, **spec, "annotations": READ_ONLY} for name, (_, spec) in TOOLS.items()]
+    return [{"name": name, "annotations": READ_ONLY, **spec} for name, (_, spec) in TOOLS.items()]
 
 
 # ---------------------------------------------------------------------------

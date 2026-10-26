@@ -18,6 +18,7 @@ from turonomics_api.routers import (
     invoices,
     match,
     mcp,
+    messages,
     push,
     sync,
     tolls,
@@ -122,6 +123,7 @@ app.include_router(trips.router)
 app.include_router(invoices.router)
 app.include_router(turo.router)
 app.include_router(commands.router)
+app.include_router(messages.router)
 app.include_router(mcp.router)
 
 

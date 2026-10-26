@@ -168,6 +168,7 @@ reload.
 
 | version | needs | why |
 |---|---|---|
+| 1.20.0 | build + reload | sends a message to a guest once you have approved it with **Send** on the trips page: the site queues it, and the extension posts it to the reservation's thread from a Turo tab, the way Turo's own thread page does, then reports whether Turo stored it. The API hands a message only to 1.20.0 or later |
 | 1.19.0 | build + reload | **Send tolls** and the site's **Read E-ZPass** work from any page: they call E-ZPass's own API from an open or hidden e-zpassny.com tab, and only need you logged in to E-ZPass in Chrome (tick "Keep me Logged In" — the site logs out after ~10 idle minutes otherwise). Crossings only; payments, credits and parking are left out, and so are the account holder's name and address |
 | 1.18.0 | build + reload | **Pull trips** and **File the next toll invoice** work from any page: they use an open Turo tab or a hidden one, and only need you logged in to Turo in Chrome (logged out is said in those words) |
 | 1.17.0 | build + reload | runs **Read E-ZPass** queued from the site (the invoices page, from a phone), on an E-ZPass tab left open and logged in on the computer, and reports the result back |

@@ -60,6 +60,33 @@ plate alone (the plate on the toll must exactly match the plate on the trip).
 }
 ```
 
+### `POST /mcp` — the books, for Claude
+
+The API is also an MCP server: one endpoint speaking MCP's streamable HTTP
+transport (a JSON-RPC request per POST, a JSON answer, no event stream), so a
+Claude session can ask about the fleet's own data instead of reading code or
+the site. It only reads. Six tools:
+
+| tool | answers |
+|---|---|
+| `next_to_file` | what Turo will still take a filing for, soonest deadline first |
+| `ledger` | every rental and what became of its crossings, with totals; by state or guest |
+| `find_trips` | rentals by guest, car, reservation number or dates; gives the `trip_id` |
+| `trip` | everything about one rental (the guest's messages only when asked) |
+| `tolls` | crossings: open, with no rental, or all; optionally one rental's |
+| `extension_status` | whether the browser extension is listening, and its last jobs |
+
+It needs `TOLLS_TOKEN` as a bearer token, and unlike the pages it refuses to
+answer at all while `TOLLS_TOKEN` is unset. In Claude Code:
+
+```sh
+claude mcp add --transport http turonomics https://turonomics.onrender.com/mcp \
+  --header "Authorization: Bearer $TOLLS_TOKEN"
+```
+
+The claude.ai and mobile apps' custom connectors may need OAuth rather than a
+bearer header; this endpoint does not offer OAuth yet.
+
 ## CSV Schemas
 
 ### Turo CSV (from extension)

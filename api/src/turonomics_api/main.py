@@ -17,6 +17,7 @@ from turonomics_api.routers import (
     gmail,
     invoices,
     match,
+    mcp,
     push,
     sync,
     tolls,
@@ -121,6 +122,7 @@ app.include_router(trips.router)
 app.include_router(invoices.router)
 app.include_router(turo.router)
 app.include_router(commands.router)
+app.include_router(mcp.router)
 
 
 @app.get("/health")

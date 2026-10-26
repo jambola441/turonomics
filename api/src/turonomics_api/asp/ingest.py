@@ -52,6 +52,49 @@ _SIDE_CODES = {
 # still needs its rules.
 ZIP_11238_BBOX = (991558, 180860, 997338, 190790)
 
+# Fort Greene Park and four blocks out from each side of it, counted on the
+# streets rather than as a radius, since the blocks are long one way and short
+# the other: east past Cumberland, Carlton and Adelphi to Clermont; west past
+# Ashland, Rockwell and Flatbush Avenue Extension to Fleet Place; north past
+# Park and Flushing to the Navy Yard; south past Lafayette, Fulton and Hanson
+# Place to Atlantic. The park itself runs about x 990,250-991,600 and
+# y 190,540-191,920, almost all of it outside the 11238 box.
+FORT_GREENE_PARK_BBOX = (989150, 188400, 992650, 193800)
+
+
+@dataclass(frozen=True)
+class SignArea:
+    """A box of signs loaded as one piece.
+
+    ``probe`` is a part of the box that no other area reaches. A segment
+    inside it means this area has been loaded, which is how a new area gets
+    fetched on the next boot without re-fetching the ones already there.
+    """
+
+    name: str
+    bbox: tuple[int, int, int, int]
+    probe: tuple[int, int, int, int]
+
+
+SIGN_AREAS: tuple[SignArea, ...] = (
+    # Prospect Heights' middle, south of anything the Fort Greene box reaches.
+    SignArea("zip 11238", ZIP_11238_BBOX, (993000, 181000, 997000, 188000)),
+    # The park's west and north sides and beyond, all outside the 11238 box.
+    SignArea("Fort Greene Park and 4 blocks around", FORT_GREENE_PARK_BBOX,
+             (989150, 190850, 991500, 193800)),
+)
+
+
+def segments_within(session: Session, box: tuple[int, int, int, int]) -> int:
+    """How many loaded block-sides touch a state-plane box."""
+    x0, y0, x1, y1 = box
+    envelope = func.ST_Transform(func.ST_MakeEnvelope(x0, y0, x1, y1, NY_STATE_PLANE), 4326)
+    return session.scalar(
+        select(func.count())
+        .select_from(StreetSegmentSide)
+        .where(func.ST_Intersects(func.geometry(StreetSegmentSide.geom), envelope))
+    ) or 0
+
 
 @dataclass
 class IngestReport:

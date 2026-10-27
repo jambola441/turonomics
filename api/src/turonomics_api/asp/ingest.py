@@ -78,6 +78,12 @@ class SignArea:
     ``probe`` is a part of the box that no other area reaches. A segment
     inside it means this area has been loaded, which is how a new area gets
     fetched on the next boot without re-fetching the ones already there.
+
+    "Reaches" is further than the box. A kerb line runs back from its first
+    sign to the block's intersection and on past its last one, so a load
+    leaves lines up to a block outside its box: the Jimmy area was first
+    skipped in production because 14 lines from the boxes beside it crossed
+    its probe. Each probe keeps ``PROBE_MARGIN_FT`` from every other box.
     """
 
     name: str
@@ -85,15 +91,21 @@ class SignArea:
     probe: tuple[int, int, int, int]
 
 
+# Longer than any block here (the avenue blocks run about 800 feet) plus the
+# kerb line's extension past its last sign.
+PROBE_MARGIN_FT = 1000
+
 SIGN_AREAS: tuple[SignArea, ...] = (
     # Prospect Heights' middle, south of anything the Fort Greene box reaches.
-    # Its probe starts at x 993,600, east of the Jimmy box, which reaches 993,510.
-    SignArea("zip 11238", ZIP_11238_BBOX, (993600, 181000, 997000, 188000)),
+    # East Prospect Heights: a thousand feet east of the Jimmy box's 993,510.
+    SignArea("zip 11238", ZIP_11238_BBOX, (994600, 181000, 997000, 188000)),
     # The park's west and north sides and beyond, all outside the 11238 box.
+    # North of the park: a thousand feet north of the 11238 box's 190,790.
     SignArea("Fort Greene Park and 4 blocks around", FORT_GREENE_PARK_BBOX,
-             (989150, 190850, 991500, 193800)),
-    # West of the 11238 box and south of the Fort Greene one.
-    SignArea("10 blocks around Jimmy", JIMMY_BBOX, (988100, 184480, 991500, 188300)),
+             (989150, 191800, 991500, 193800)),
+    # The Park Slope corner: a thousand feet west of the 11238 box's 991,558
+    # and south of the Fort Greene one's 188,400.
+    SignArea("10 blocks around Jimmy", JIMMY_BBOX, (988100, 184480, 990500, 187300)),
 )
 
 

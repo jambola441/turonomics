@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from turonomics_api.asp.ingest import (
     FORT_GREENE_PARK_BBOX,
     JIMMY_BBOX,
+    PROBE_MARGIN_FT,
     SIGN_AREAS,
     ZIP_11238_BBOX,
 )
@@ -211,10 +212,13 @@ def counted_fetch(monkeypatch):
     calls: list[tuple] = []
 
     def fake(bbox, **kw):
-        # A block inside whatever box was asked for, named after it, so each
-        # area loads a block-side of its own.
+        # A block inside the area's probe (or the box asked for, when it is
+        # no area's), named after it, so each area loads a block-side of its
+        # own where the next boot will look for it.
         calls.append(bbox)
-        x, y = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+        area = next((a for a in SIGN_AREAS if a.bbox == bbox), None)
+        box = area.probe if area else bbox
+        x, y = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
         street = f"STREET {bbox[0]}"
         return [{**_sign(x, y, 50), "on_street": street},
                 {**_sign(x + 200, y + 10, 200), "on_street": street}]
@@ -261,17 +265,21 @@ def test_a_new_area_is_fetched_on_its_own(session, monkeypatch, counted_fetch, b
     assert counted_fetch == [ZIP_11238_BBOX, FORT_GREENE_PARK_BBOX, JIMMY_BBOX]
 
 
-def test_the_areas_probes_do_not_overlap_each_others_boxes() -> None:
+def test_the_areas_probes_keep_clear_of_each_others_boxes() -> None:
     """A probe another area's load can reach would mark this area loaded
-    when it never was."""
-    def inside(probe, box):
-        return not (probe[2] < box[0] or probe[0] > box[2] or probe[3] < box[1] or probe[1] > box[3])
+    when it never was, and a load reaches up to a block past its box: the
+    kerb lines run back to the intersection and on past the last sign. The
+    Jimmy area was skipped in production for exactly that."""
+    def apart(probe, box):
+        gap_x = max(box[0] - probe[2], probe[0] - box[2])
+        gap_y = max(box[1] - probe[3], probe[1] - box[3])
+        return max(gap_x, gap_y)
     for area in SIGN_AREAS:
         x0, y0, x1, y1 = area.probe
         assert area.bbox[0] <= x0 < x1 <= area.bbox[2] and area.bbox[1] <= y0 < y1 <= area.bbox[3]
         for other in SIGN_AREAS:
             if other is not area:
-                assert not inside(area.probe, other.bbox), (area.name, other.name)
+                assert apart(area.probe, other.bbox) >= PROBE_MARGIN_FT, (area.name, other.name)
 
 
 def test_jimmy_sits_ten_blocks_inside_its_box() -> None:

@@ -61,6 +61,15 @@ ZIP_11238_BBOX = (991558, 180860, 997338, 190790)
 # y 190,540-191,920, almost all of it outside the 11238 box.
 FORT_GREENE_PARK_BBOX = (989150, 188400, 992650, 193800)
 
+# Ten blocks out from where Jimmy parks, around Flatbush Avenue and Bergen
+# Street (x 990,807, y 187,180), just outside both boxes above. Counted in the
+# short blocks: the numbered streets and places off Flatbush run about 260 feet
+# apart, so ten of them is about half a mile, and the box reaches 2,700 feet
+# each way. That takes in north Park Slope down to Garfield Place, Boerum
+# Hill's east end at 3rd and 4th Avenues and Nevins, and Prospect Heights' west
+# side up to Fulton and Lafayette. About 1,800 signs in October 2026.
+JIMMY_BBOX = (988100, 184480, 993510, 189880)
+
 
 @dataclass(frozen=True)
 class SignArea:
@@ -78,10 +87,13 @@ class SignArea:
 
 SIGN_AREAS: tuple[SignArea, ...] = (
     # Prospect Heights' middle, south of anything the Fort Greene box reaches.
-    SignArea("zip 11238", ZIP_11238_BBOX, (993000, 181000, 997000, 188000)),
+    # Its probe starts at x 993,600, east of the Jimmy box, which reaches 993,510.
+    SignArea("zip 11238", ZIP_11238_BBOX, (993600, 181000, 997000, 188000)),
     # The park's west and north sides and beyond, all outside the 11238 box.
     SignArea("Fort Greene Park and 4 blocks around", FORT_GREENE_PARK_BBOX,
              (989150, 190850, 991500, 193800)),
+    # West of the 11238 box and south of the Fort Greene one.
+    SignArea("10 blocks around Jimmy", JIMMY_BBOX, (988100, 184480, 991500, 188300)),
 )
 
 

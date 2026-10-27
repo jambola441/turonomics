@@ -14,7 +14,12 @@ import pytest
 from sqlalchemy import func, select
 from sqlalchemy.orm import sessionmaker
 
-from turonomics_api.asp.ingest import FORT_GREENE_PARK_BBOX, SIGN_AREAS, ZIP_11238_BBOX
+from turonomics_api.asp.ingest import (
+    FORT_GREENE_PARK_BBOX,
+    JIMMY_BBOX,
+    SIGN_AREAS,
+    ZIP_11238_BBOX,
+)
 from turonomics_api.bootstrap import (
     apply_plates,
     parse_plate_map,
@@ -242,15 +247,18 @@ def test_a_restart_does_not_refetch_the_dataset(session, monkeypatch, counted_fe
 
 
 def test_a_new_area_is_fetched_on_its_own(session, monkeypatch, counted_fetch, boots_against_test_db) -> None:
-    """The fleet's 11238 signs were loaded long ago; adding Fort Greene must
-    load Fort Greene on the next boot without fetching 11238 again."""
+    """11238 and Fort Greene were loaded long ago; adding the area around Jimmy
+    must load just that on the next boot, fetching neither of the others again."""
     monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
     monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS[:1])
     run_sign_bootstrap()
     assert counted_fetch == [ZIP_11238_BBOX]
-    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS)
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS[:2])
     assert run_sign_bootstrap() == 1
     assert counted_fetch == [ZIP_11238_BBOX, FORT_GREENE_PARK_BBOX]
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS)
+    assert run_sign_bootstrap() == 1
+    assert counted_fetch == [ZIP_11238_BBOX, FORT_GREENE_PARK_BBOX, JIMMY_BBOX]
 
 
 def test_the_areas_probes_do_not_overlap_each_others_boxes() -> None:
@@ -264,6 +272,15 @@ def test_the_areas_probes_do_not_overlap_each_others_boxes() -> None:
         for other in SIGN_AREAS:
             if other is not area:
                 assert not inside(area.probe, other.bbox), (area.name, other.name)
+
+
+def test_jimmy_sits_ten_blocks_inside_its_box() -> None:
+    """Where Jimmy parks, Flatbush Avenue at Bergen Street, with ten of the
+    short blocks (about 260 feet each) on every side."""
+    x0, y0, x1, y1 = JIMMY_BBOX
+    jimmy = (990807, 187180)
+    for gap in (jimmy[0] - x0, x1 - jimmy[0], jimmy[1] - y0, y1 - jimmy[1]):
+        assert gap >= 10 * 260
 
 
 def test_fort_greene_park_sits_four_blocks_inside_its_box() -> None:

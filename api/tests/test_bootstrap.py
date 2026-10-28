@@ -27,7 +27,7 @@ from turonomics_api.bootstrap import (
     run_bootstrap,
     run_sign_bootstrap,
 )
-from turonomics_api.db.models import StreetSegmentSide, Vehicle
+from turonomics_api.db.models import AspRule, StreetSegmentSide, Vehicle
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("TEST_DATABASE_URL") and not os.environ.get("DATABASE_URL"),
@@ -224,7 +224,68 @@ def counted_fetch(monkeypatch):
                 {**_sign(x + 200, y + 10, 200), "on_street": street}]
 
     monkeypatch.setattr("turonomics_api.bootstrap.fetch_signs", fake)
+    # No unplaced signs unless a test supplies some.
+    monkeypatch.setattr("turonomics_api.bootstrap.fetch_unplaced_signs", lambda **kw: [])
+    monkeypatch.setattr("turonomics_api.bootstrap.fetch_centerline", lambda *a, **kw: [])
     return calls
+
+
+def _jimmys_block(monkeypatch) -> list[str]:
+    """St Marks Place, whose signs have no coordinates, on the centreline.
+    Returns what gets fetched, in order."""
+    from .test_centerline import CENTERLINE, broom
+
+    fetched: list[str] = []
+
+    def unplaced(**kw):
+        fetched.append("signs")
+        return [broom("N"), broom("S", "TUESDAY")]
+
+    def centerline(polygon, **kw):
+        fetched.append("centerline")
+        return CENTERLINE
+
+    monkeypatch.setattr("turonomics_api.bootstrap.fetch_unplaced_signs", unplaced)
+    monkeypatch.setattr("turonomics_api.bootstrap.fetch_centerline", centerline)
+    return fetched
+
+
+def test_areas_loaded_before_the_centreline_pass_get_it_once(
+    session, monkeypatch, counted_fetch, boots_against_test_db
+) -> None:
+    """Production's three areas were loaded before unplaced signs were
+    placed. The next boot places them without re-fetching any area's signs,
+    and the boot after fetches nothing at all."""
+    monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
+    run_sign_bootstrap()
+    assert len(counted_fetch) == len(SIGN_AREAS)
+
+    fetched = _jimmys_block(monkeypatch)
+    assert run_sign_bootstrap() > 0
+    assert len(counted_fetch) == len(SIGN_AREAS), "no area's signs fetched again"
+    assert fetched == ["signs"] + ["centerline"] * len(SIGN_AREAS)
+    # St Marks Place's two sides, once each however many areas reach them.
+    assert session.scalar(select(func.count()).select_from(StreetSegmentSide)) == (
+        len(SIGN_AREAS) + 2)
+    assert session.scalar(select(func.count()).select_from(AspRule)) == len(SIGN_AREAS) + 2
+
+    assert run_sign_bootstrap() == 0
+    assert len(fetched) == 1 + len(SIGN_AREAS) and len(counted_fetch) == len(SIGN_AREAS)
+
+
+def test_a_new_area_is_placed_as_it_is_loaded(
+    session, monkeypatch, counted_fetch, boots_against_test_db
+) -> None:
+    """Once the pass has run, an area added later gets it with its own load."""
+    monkeypatch.setenv("BOOTSTRAP_SIGNS", "true")
+    fetched = _jimmys_block(monkeypatch)
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS[:2])
+    run_sign_bootstrap()
+    assert fetched == ["signs", "centerline", "centerline"]
+    monkeypatch.setattr("turonomics_api.bootstrap.SIGN_AREAS", SIGN_AREAS)
+    run_sign_bootstrap()
+    assert fetched == ["signs", "centerline", "centerline", "signs", "centerline"]
+    assert counted_fetch == [area.bbox for area in SIGN_AREAS]
 
 
 def test_signs_are_not_loaded_unless_switched_on(session, monkeypatch, counted_fetch) -> None:

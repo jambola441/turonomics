@@ -4,7 +4,9 @@ Geometry comes from the signs themselves rather than from a separate street
 centreline dataset. Signs are mounted on the kerb, so the ones on a block-side
 trace that kerb directly — which is the line a parked car needs to be measured
 against, and is not the same as the street centreline. ``distance_from_intersection``
-orders them along the block, so no spatial sorting is needed.
+orders them along the block, so no spatial sorting is needed. The signs that
+have no position are the exception, placed on the centreline by
+``asp.centerline``.
 
 Three properties of the source worth keeping in mind:
 
@@ -276,56 +278,83 @@ def load_signs(
             report.point_only_sides += 1
         if len(rules) > 1:
             report.multi_rule_sides += 1
-
-        segment = session.scalar(
-            select(StreetSegmentSide).where(
-                StreetSegmentSide.street_name == on,
-                StreetSegmentSide.from_cross_street == frm,
-                StreetSegmentSide.to_cross_street == to,
-                StreetSegmentSide.side == _SIDE_CODES[side_code],
-                StreetSegmentSide.borough == "Brooklyn",
-            )
+        save_block_side(
+            session, (on, frm, to, side_code), _geom_expression(_extend(points, first_distance_ft)),
+            list(rules.values()), report, replace_existing=replace_existing,
         )
-        if segment is None:
-            segment = StreetSegmentSide(
-                street_name=on,
-                from_cross_street=frm,
-                to_cross_street=to,
-                side=_SIDE_CODES[side_code],
-                borough="Brooklyn",
-            )
-            session.add(segment)
-            report.block_sides_created += 1
-        segment.geom = _geom_expression(_extend(points, first_distance_ft))
-        session.flush()
-
-        if replace_existing:
-            # Only rules this loader owns are cleared. A rule captured from a
-            # photograph of the sign outranks the dataset and must survive a
-            # reload, since the operator was standing in front of it.
-            for existing in session.scalars(
-                select(AspRule).where(
-                    AspRule.segment_side_id == segment.id,
-                    AspRule.source == RuleSource.nyc_signs,
-                )
-            ):
-                session.delete(existing)
-            session.flush()
-
-        for rule in rules.values():
-            session.add(
-                AspRule(
-                    segment_side_id=segment.id,
-                    days_of_week=list(rule.days_of_week),
-                    starts_at=rule.starts_at,
-                    ends_at=rule.ends_at,
-                    source=RuleSource.nyc_signs,
-                    confidence=rule.confidence,
-                    raw_sign_text=rule.raw[:2000],
-                )
-            )
-            report.rules_created += 1
 
     session.commit()
     log.info("%s", report.summary())
     return report
+
+
+def find_block_side(
+    session: Session, key: tuple[str, str, str, str]
+) -> StreetSegmentSide | None:
+    on, frm, to, side_code = key
+    return session.scalar(
+        select(StreetSegmentSide).where(
+            StreetSegmentSide.street_name == on,
+            StreetSegmentSide.from_cross_street == frm,
+            StreetSegmentSide.to_cross_street == to,
+            StreetSegmentSide.side == _SIDE_CODES[side_code],
+            StreetSegmentSide.borough == "Brooklyn",
+        )
+    )
+
+
+def save_block_side(
+    session: Session,
+    key: tuple[str, str, str, str],
+    geom: ColumnElement[Any],
+    rules: list[ParsedRule],
+    report: IngestReport,
+    *,
+    replace_existing: bool = True,
+    physical_id: str | None = None,
+) -> StreetSegmentSide:
+    """Write one block-side's kerb line and its dataset rules."""
+    on, frm, to, side_code = key
+    segment = find_block_side(session, key)
+    if segment is None:
+        segment = StreetSegmentSide(
+            street_name=on,
+            from_cross_street=frm,
+            to_cross_street=to,
+            side=_SIDE_CODES[side_code],
+            borough="Brooklyn",
+        )
+        session.add(segment)
+        report.block_sides_created += 1
+    segment.geom = geom
+    if physical_id is not None:
+        segment.nyc_physical_id = physical_id
+    session.flush()
+
+    if replace_existing:
+        # Only rules this loader owns are cleared. A rule captured from a
+        # photograph of the sign outranks the dataset and must survive a
+        # reload, since the operator was standing in front of it.
+        for existing in session.scalars(
+            select(AspRule).where(
+                AspRule.segment_side_id == segment.id,
+                AspRule.source == RuleSource.nyc_signs,
+            )
+        ):
+            session.delete(existing)
+        session.flush()
+
+    for rule in rules:
+        session.add(
+            AspRule(
+                segment_side_id=segment.id,
+                days_of_week=list(rule.days_of_week),
+                starts_at=rule.starts_at,
+                ends_at=rule.ends_at,
+                source=RuleSource.nyc_signs,
+                confidence=rule.confidence,
+                raw_sign_text=rule.raw[:2000],
+            )
+        )
+        report.rules_created += 1
+    return segment

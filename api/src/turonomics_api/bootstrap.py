@@ -21,10 +21,18 @@ import logging
 import os
 import uuid
 from collections import Counter
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.asp.centerline import (
+    area_polygon,
+    fetch_centerline,
+    fetch_unplaced_signs,
+    load_unplaced,
+    placed_count,
+)
 from turonomics_api.asp.ingest import SIGN_AREAS, SignArea, fetch_signs, load_signs, segments_within
 from turonomics_api.bouncie.client import BouncieClient, BouncieError
 from turonomics_api.bouncie.sync import sync_vehicles
@@ -289,6 +297,11 @@ def run_sign_bootstrap() -> int:
     monthly dataset refresh. ``BOOTSTRAP_SIGNS_BBOX`` replaces the areas with
     one box of its own.
 
+    Each area loaded also gets the signs the city never placed, put on its
+    street centreline (see ``asp.centerline``). Areas loaded before that pass
+    existed get it on the first boot that finds no block-side placed that
+    way, which is a one-off: after it, any placed block-side means it ran.
+
     Runs before the vehicle sync: a parking session resolves its candidate
     sides at the moment it opens, so the rules have to be in place first or the
     first sync produces sessions with nothing to choose between.
@@ -299,6 +312,7 @@ def run_sign_bootstrap() -> int:
         return 0
 
     created = 0
+    app_token = os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None
     try:
         raw = os.environ.get("BOOTSTRAP_SIGNS_BBOX", "").strip()
         if raw:
@@ -306,22 +320,36 @@ def run_sign_bootstrap() -> int:
             areas: tuple[SignArea, ...] = (SignArea("BOOTSTRAP_SIGNS_BBOX", box, box),)
         else:
             areas = SIGN_AREAS
+        with session_scope() as session:
+            catch_up = mode == "force" or placed_count(session) == 0
+        # Borough-wide and the same for every area, so fetched at most once.
+        unplaced: list[dict[str, Any]] | None = None
         for area in areas:
             # One transaction per area: an area that fails costs only itself,
             # and the next boot tries it again.
             with session_scope() as session:
                 existing = segments_within(session, area.probe)
                 if existing and mode != "force":
-                    log.info("%s: %d street segments already loaded — skipping",
-                             area.name, existing)
+                    if not catch_up:
+                        log.info("%s: %d street segments already loaded — skipping",
+                                 area.name, existing)
+                        continue
+                else:
+                    log.info("fetching street-cleaning signs for %s %s ...",
+                             area.name, area.bbox)
+                    rows = fetch_signs(area.bbox, app_token=app_token)
+                    report = load_signs(session, rows)
+                    log.info("%s: %s", area.name, report.summary())
+                    created += report.rules_created
+                if unplaced is None:
+                    unplaced = fetch_unplaced_signs(app_token=app_token)
+                if not unplaced:
                     continue
-                log.info("fetching street-cleaning signs for %s %s ...", area.name, area.bbox)
-                rows = fetch_signs(
-                    area.bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None
-                )
-                report = load_signs(session, rows)
-                log.info("%s: %s", area.name, report.summary())
-                created += report.rules_created
+                centerline = fetch_centerline(area_polygon(session, area.bbox),
+                                              app_token=app_token)
+                placement = load_unplaced(session, unplaced, centerline)
+                log.info("%s: %s", area.name, placement.summary())
+                created += placement.placed.rules_created
     except Exception as exc:  # noqa: BLE001 - boot convenience must not break boot
         # Same reasoning as the fleet bootstrap: an Open Data outage should
         # cost a stale rule set, not a service that will not start.

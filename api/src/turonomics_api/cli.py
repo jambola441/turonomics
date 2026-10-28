@@ -19,6 +19,12 @@ from collections.abc import Sequence
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from turonomics_api.asp.centerline import (
+    area_polygon,
+    fetch_centerline,
+    fetch_unplaced_signs,
+    load_unplaced,
+)
 from turonomics_api.asp.ingest import SIGN_AREAS, fetch_signs, load_signs
 from turonomics_api.bootstrap import run_bootstrap
 from turonomics_api.bouncie.client import BouncieClient
@@ -82,14 +88,18 @@ def cmd_load_signs(args: argparse.Namespace) -> int:
         boxes = [(parts[0], parts[1], parts[2], parts[3])]
     else:
         boxes = [area.bbox for area in SIGN_AREAS]
+    app_token = os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None
+    unplaced = fetch_unplaced_signs(app_token=app_token)
     for bbox in boxes:
         print(f"fetching current street-cleaning signs in {bbox} ...")
-        rows = fetch_signs(bbox, app_token=os.environ.get("NYC_OPEN_DATA_APP_TOKEN") or None)
+        rows = fetch_signs(bbox, app_token=app_token)
         with session_scope() as session:
             report = load_signs(session, rows)
             print(report.summary())
             for reason, n in report.unparsed_reasons.most_common():
                 print(f"  unparsed: {n} x {reason}")
+            centerline = fetch_centerline(area_polygon(session, bbox), app_token=app_token)
+            print(load_unplaced(session, unplaced, centerline).summary())
     return 0
 
 

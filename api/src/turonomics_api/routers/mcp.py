@@ -13,10 +13,17 @@ small enough to implement here, under test, rather than take on an SDK. A GET
 is refused with 405, which the transport defines as "this server offers no
 event stream".
 
-It reads, and it writes one thing: a draft message to a rental's guest, which
-nothing sends until the operator presses Send on it on the site. There is no
-tool to approve or send one. Filing on Turo, ticking off crossings and the
-rest stay on the site and the extension, where a person presses the button.
+It reads, and it writes what can be undone or has no effect outside the
+books. The operator's rule: a write that can be reversed is fine, and one that
+cannot waits for a person.
+
+* Done directly: confirming which side of the street a car is on, ticking a
+  task done or back, marking Turo's charge on a rental checked, and asking the
+  extension to pull from Turo or read E-ZPass (both only read).
+* Proposed, never done: a message to a guest is a draft until the operator
+  presses Send, and a toll filing is a proposal until they press File, on the
+  site. Both ask something of a guest that cannot be taken back. There is no
+  tool that sends, files, approves, or marks money recovered.
 
 Behind ``TOLLS_TOKEN`` like the pages that name guests, and stricter than
 they are: those let every request through when the token is unset, and this
@@ -60,8 +67,12 @@ INSTRUCTIONS = (
     "car, reservation number or date, and trip for everything about one rental. "
     "draft_message writes a message to a rental's guest as a draft; it is not sent "
     "until the operator reads it and presses Send on the site, so say that it is a "
-    "draft and is waiting for them. Nothing else here writes: filing, ticking off and "
-    "pulling from Turo are done on the site or by the browser extension."
+    "draft and is waiting for them. propose_filing is the same for a toll filing: it "
+    "puts the rental in front of the operator on the invoices page, and nothing is "
+    "filed until they press File. fleet shows each car, where it is parked and its "
+    "tasks; confirm_parking, complete_task, reopen_task and mark_charge_checked change "
+    "the books directly and can be undone. pull_from_turo and read_ezpass ask the "
+    "operator's browser extension to refresh the data; they only read."
 )
 
 
@@ -297,6 +308,141 @@ def tool_message_drafts(session: Session, auth: str, args: dict[str, Any]) -> di
             "more": max(len(drafts) - limit, 0)}
 
 
+def tool_fleet(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.fleet import get_fleet
+
+    data = _dump(get_fleet(session), exclude={"map_tiles"})
+    for vehicle in data["vehicles"]:
+        # A plate is not needed to talk about a car here, and is the one thing
+        # on this page that identifies it to a stranger.
+        vehicle.pop("plate", None)
+    return data
+
+
+def _vehicle(state: BaseModel) -> dict[str, Any]:
+    data = _dump(state)
+    data.pop("plate", None)
+    return data
+
+
+def _not_found(call: Callable[[], BaseModel]) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    try:
+        return _vehicle(call())
+    except HTTPException as exc:
+        if exc.status_code in (404, 409):
+            raise _ToolError(str(exc.detail)) from exc
+        raise
+
+
+def tool_confirm_parking(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.fleet import ConfirmRequest, confirm_parking_side
+
+    parking = _uuid(args.get("session_id"), "session_id")
+    side = _uuid(args.get("segment_side_id"), "segment_side_id")
+    return _not_found(lambda: confirm_parking_side(
+        parking, ConfirmRequest(segment_side_id=side), session))
+
+
+def tool_complete_task(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.fleet import complete_task
+
+    task = _uuid(args.get("task_id"), "task_id")
+    return _not_found(lambda: complete_task(task, session))
+
+
+def tool_reopen_task(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.fleet import reopen_task
+
+    task = _uuid(args.get("task_id"), "task_id")
+    return _not_found(lambda: reopen_task(task, session))
+
+
+def tool_mark_charge_checked(
+    session: Session, auth: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from turonomics_api.routers.invoices import mark_charge_checked
+
+    trip_id = _uuid(args.get("trip_id"))
+    try:
+        out = mark_charge_checked(trip_id, session, undo=bool(args.get("undo")),
+                                  authorization=auth)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise _ToolError("no rental with that id") from exc
+        raise
+    return _dump(out)
+
+
+def _queue(session: Session, auth: str, kind: str) -> dict[str, Any]:
+    from turonomics_api.routers.commands import CommandIn, list_commands, queue_command
+
+    # Only ever "pull" or "tolls": a filing is queued by a person's File press.
+    assert kind in ("pull", "tolls")
+    command = queue_command(CommandIn(kind=kind), session, authorization=auth)
+    status = list_commands(session, limit=1)
+    return {
+        "command": _dump(command),
+        "extension_listening": status.listening,
+        "next": (
+            "The extension picks it up within seconds; extension_status says when it is done."
+            if status.listening else
+            "Queued, but no extension is listening: it runs when Chrome is next open "
+            "with the extension."
+        ),
+    }
+
+
+def tool_pull_from_turo(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    return _queue(session, auth, "pull")
+
+
+def tool_read_ezpass(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    return _queue(session, auth, "tolls")
+
+
+def _proposal_view(proposal: Any) -> dict[str, Any]:
+    from turonomics_api.routers.filings import proposal_out
+    from turonomics_api.settings import site_url
+
+    data = _dump(proposal_out(proposal))
+    data["review_at"] = urljoin(site_url(), "../invoices/") + f"#{proposal.trip_id}"
+    return data
+
+
+def tool_propose_filing(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.filings import propose
+
+    trip_id = _uuid(args.get("trip_id"))
+    note = args.get("note")
+    if note is not None and not isinstance(note, str):
+        raise _ToolError("note is a short reason, as a string")
+    try:
+        proposal = propose(session, trip_id, note, "mcp")
+    except ValueError as exc:
+        raise _ToolError(str(exc)) from exc
+    data = _proposal_view(proposal)
+    data["filed"] = False
+    data["next"] = "Waiting for the operator to press File on the invoices page."
+    return data
+
+
+def tool_filing_proposals(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.filings import STATES, list_proposals
+
+    state = args.get("state") or None
+    if state is not None and state not in STATES:
+        raise _ToolError(f"state is one of {', '.join(STATES)}")
+    trip = _uuid(args["trip_id"]) if args.get("trip_id") else None
+    proposals = list_proposals(session, trip, state)
+    limit = _limit(args.get("limit"), 25, 200)
+    return {"proposals": [_proposal_view(p) for p in proposals[:limit]],
+            "more": max(len(proposals) - limit, 0)}
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": properties,
                               "additionalProperties": False}
@@ -308,6 +454,12 @@ def _schema(properties: dict[str, Any], required: list[str] | None = None) -> di
 _LIMIT = {"type": "integer", "minimum": 1, "description": "At most this many rows."}
 
 Tool = Callable[[Session, str, dict[str, Any]], dict[str, Any]]
+
+# Every writing tool is marked so, and a client that asks before a write asks
+# before these. None is destructive: each is undone by another call, or only
+# puts something in front of the operator.
+WRITES = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
+          "openWorldHint": False}
 
 TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
     "next_to_file": (tool_next_to_file, {
@@ -387,8 +539,7 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
             "trip_id": {"type": "string", "description": "From find_trips or the ledger."},
             "text": {"type": "string", "description": "The message, at most 2000 characters."},
         }, ["trip_id", "text"]),
-        "annotations": {"readOnlyHint": False, "destructiveHint": False,
-                        "idempotentHint": False, "openWorldHint": False},
+        "annotations": {**WRITES, "idempotentHint": False},
     }),
     "message_drafts": (tool_message_drafts, {
         "title": "Message drafts",
@@ -410,6 +561,95 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
             "was last asked to do (pull from Turo, read E-ZPass, file) with the result."
         ),
         "inputSchema": _schema({"limit": _LIMIT}),
+    }),
+    "fleet": (tool_fleet, {
+        "title": "The fleet",
+        "description": (
+            "Each car now: where it is, fuel, who has it, where it is parked with the "
+            "street-cleaning options (each a segment_side_id) and the deadline once a side "
+            "is confirmed, and its open tasks (each a task_id)."
+        ),
+        "inputSchema": _schema({}),
+    }),
+    "confirm_parking": (tool_confirm_parking, {
+        "title": "Confirm which side a car is parked on",
+        "description": (
+            "Say which street side a parked car is on, from the options fleet lists for "
+            "its parking session. This sets the move-by deadline and the move task. "
+            "Confirming another side later replaces it."
+        ),
+        "inputSchema": _schema({
+            "session_id": {"type": "string", "description": "The car's parking.session_id."},
+            "segment_side_id": {"type": "string",
+                                "description": "One of parking.options[].id."},
+        }, ["session_id", "segment_side_id"]),
+        "annotations": WRITES,
+    }),
+    "complete_task": (tool_complete_task, {
+        "title": "Tick a task done",
+        "description": "Mark a car's task done. reopen_task undoes it.",
+        "inputSchema": _schema({"task_id": {"type": "string"}}, ["task_id"]),
+        "annotations": WRITES,
+    }),
+    "reopen_task": (tool_reopen_task, {
+        "title": "Put a task back",
+        "description": "Reopen a task that was ticked done by mistake.",
+        "inputSchema": _schema({"task_id": {"type": "string"}}, ["task_id"]),
+        "annotations": WRITES,
+    }),
+    "mark_charge_checked": (tool_mark_charge_checked, {
+        "title": "Mark Turo's charge checked",
+        "description": (
+            "Record that what Turo already charged on a rental has been looked at, which "
+            "clears the 'check before asking again' warning until Turo's charge changes. "
+            "Changes nothing about what can be filed. undo: true takes it back."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string"},
+            "undo": {"type": "boolean"},
+        }, ["trip_id"]),
+        "annotations": WRITES,
+    }),
+    "pull_from_turo": (tool_pull_from_turo, {
+        "title": "Refresh from Turo",
+        "description": (
+            "Ask the browser extension to read Turo's trips, invoices and receipts. Only "
+            "reads. Takes under a minute when the extension is listening."
+        ),
+        "inputSchema": _schema({}),
+        "annotations": WRITES,
+    }),
+    "read_ezpass": (tool_read_ezpass, {
+        "title": "Refresh from E-ZPass",
+        "description": "Ask the browser extension to read E-ZPass crossings. Only reads.",
+        "inputSchema": _schema({}),
+        "annotations": WRITES,
+    }),
+    "propose_filing": (tool_propose_filing, {
+        "title": "Propose filing a rental's tolls",
+        "description": (
+            "Put a rental's unfiled tolls in front of the operator to file on Turo. It is "
+            "NOT filed: the operator presses File on the invoices page, and only then does "
+            "the extension file it. Refused if the ledger would not file it. The note is "
+            "shown beside the button."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string", "description": "From next_to_file."},
+            "note": {"type": "string", "description": "Why, in a sentence."},
+        }, ["trip_id"]),
+        "annotations": WRITES,
+    }),
+    "filing_proposals": (tool_filing_proposals, {
+        "title": "Filing proposals",
+        "description": (
+            "Filings proposed, newest first, and what became of each: proposed (waiting), "
+            "filed (File pressed; filing_state is the extension's progress), dismissed."
+        ),
+        "inputSchema": _schema({
+            "state": {"type": "string", "enum": ["proposed", "filed", "dismissed"]},
+            "trip_id": {"type": "string"},
+            "limit": _LIMIT,
+        }),
     }),
 }
 

@@ -617,6 +617,23 @@ def main() -> int:
             card.locator("button", has_text="Undo checked").click()
             page.wait_for_timeout(700)
 
+            # A filing Claude proposed sits on its rental's card, with its
+            # reason; File is the approval and Dismiss the refusal.
+            shashi = page.locator("#rental-ffff0000-0000-0000-0000-000000000007")
+            check("claude's proposal shows on the rental it is for, with its reason",
+                  "claude suggests filing this: forty days left and nothing asked yet"
+                  in shashi.inner_text().lower()
+                  and page.locator(".inv .proposal").count() == 1)
+            shashi.locator("button", has_text="Dismiss suggestion").click()
+            page.wait_for_timeout(700)
+            check("dismissing it takes it off the card and leaves the rental",
+                  page.locator(".inv .proposal").count() == 0
+                  and page.locator("#rental-ffff0000-0000-0000-0000-000000000007").count() == 1
+                  and json.loads(urllib.request.urlopen(urllib.request.Request(
+                      f"{API}/api/filings?state=proposed",
+                      headers={"Authorization": f"Bearer {stub_api.TOLLS_TOKEN}"})).read()
+                  )["proposals"] == [])
+
             # Past the window, folded: kept for the total, out of the way.
             check("rentals past the window are folded away",
                   page.locator("details.archive").count() == 1

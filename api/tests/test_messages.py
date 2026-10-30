@@ -241,7 +241,6 @@ def test_claude_can_draft_but_not_send(api_client, monkeypatch, session, rental)
     assert not {"send_message", "approve_message"} & names, "no tool approves"
     drafting = next(t for t in tools if t["name"] == "draft_message")
     assert drafting["annotations"]["readOnlyHint"] is False
-    assert all(t["annotations"]["readOnlyHint"] for t in tools if t["name"] != "draft_message")
 
     listed = json.loads(_mcp(api_client, "message_drafts", state="draft")["content"][0]["text"])
     assert [d["body"] for d in listed["drafts"]] == ["Hi Austin, just checking in."]

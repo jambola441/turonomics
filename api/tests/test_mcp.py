@@ -8,19 +8,27 @@ endpoint without the token.
 from __future__ import annotations
 
 import json
-from datetime import UTC, datetime, timedelta
+import uuid
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 
 import pytest
 
 from turonomics_api.db.models import (
+    AspRule,
+    ExtensionCommand,
+    FilingProposal,
     ReimbursementInvoice,
+    RuleSource,
+    StreetSegmentSide,
+    StreetSide,
     Toll,
     Trip,
     TripSource,
     TripState,
     Vehicle,
 )
+from turonomics_api.ingest.parking import open_parking_session
 from turonomics_api.routers.mcp import PROTOCOL_VERSIONS
 
 from .conftest import requires_db
@@ -160,17 +168,30 @@ def test_what_is_not_offered_is_said_so(api_client, token) -> None:
     assert rpc(api_client, "ping").json()["result"] == {}
 
 
+WRITERS = {"draft_message", "propose_filing", "confirm_parking", "complete_task",
+           "reopen_task", "mark_charge_checked", "pull_from_turo", "read_ezpass"}
+
+
 @requires_db
-def test_every_tool_but_drafting_is_listed_as_read_only(api_client, token) -> None:
+def test_only_the_writing_tools_are_listed_as_writing(api_client, token) -> None:
     tools = rpc(api_client, "tools/list").json()["result"]["tools"]
     assert {t["name"] for t in tools} == {
         "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status",
-        "draft_message", "message_drafts"}
+        "message_drafts", "fleet", "filing_proposals"} | WRITERS
     for tool in tools:
-        # Drafting writes a draft and nothing else; it destroys nothing.
-        assert tool["annotations"]["readOnlyHint"] is (tool["name"] != "draft_message")
+        assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITERS)
+        # Each write is undone by another call or only waits for a person.
         assert tool["annotations"]["destructiveHint"] is False
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
+
+
+@requires_db
+def test_nothing_offered_files_sends_or_settles_money(api_client, token) -> None:
+    """The operator's rule: what cannot be taken back waits for a person."""
+    names = {t["name"] for t in rpc(api_client, "tools/list").json()["result"]["tools"]}
+    for word in ("send", "approve", "recovered", "settle", "refund", "cancel"):
+        assert not any(word in name for name in names), word
+    assert "file" not in {n.split("_")[0] for n in names}, "only propose_filing"
 
 
 # ---------------------------------------------------------------------------
@@ -302,3 +323,117 @@ def test_tolls_open_nobodys_or_one_rentals(api_client, token, fleet, session) ->
 def test_extension_status_says_whether_it_is_listening(api_client, token) -> None:
     out = data(api_client, "extension_status")
     assert out["listening"] is False and out["commands"] == []
+
+
+# ---------------------------------------------------------------------------
+# Writing: proposed filings, and what can be undone
+# ---------------------------------------------------------------------------
+
+@requires_db
+def test_a_filing_is_proposed_and_nothing_is_queued(api_client, token, fleet, session) -> None:
+    out = data(api_client, "propose_filing", trip_id=str(fleet["soon"].id),
+               note="closes first")
+    assert out["state"] == "proposed" and out["filed"] is False
+    assert out["amount_cents"] == 746 and out["note"] == "closes first"
+    assert out["review_at"].endswith(f"/invoices/#{fleet['soon'].id}")
+    assert session.query(ExtensionCommand).count() == 0, "proposing files nothing"
+
+    again = data(api_client, "propose_filing", trip_id=str(fleet["soon"].id), note="still")
+    assert again["id"] == out["id"] and again["note"] == "still", "one open proposal a rental"
+    listed = data(api_client, "filing_proposals", state="proposed")["proposals"]
+    assert [p["id"] for p in listed] == [out["id"]]
+
+
+@requires_db
+def test_a_filing_the_ledger_would_refuse_is_not_proposed(
+    api_client, token, fleet, session
+) -> None:
+    closed = call(api_client, "propose_filing", trip_id=str(fleet["old"].id))
+    assert closed["isError"] is True and "would not file" in closed["content"][0]["text"]
+    car = session.query(Vehicle).one()
+    typed = Trip(vehicle_id=car.id, guest_name="Dee", starts_at=NOW - timedelta(days=4),
+                 ends_at=NOW - timedelta(days=2), state=TripState.completed,
+                 source=TripSource.manual)
+    session.add(typed)
+    session.commit()
+    off = call(api_client, "propose_filing", trip_id=str(typed.id))
+    assert off["isError"] is True and "off-platform" in off["content"][0]["text"]
+    assert session.query(FilingProposal).count() == 0
+
+
+@requires_db
+def test_pressing_file_is_the_approval(api_client, token, fleet, session) -> None:
+    proposal = data(api_client, "propose_filing", trip_id=str(fleet["soon"].id))
+    queued = api_client.post("/api/commands", headers=AUTH,
+                             json={"kind": "file", "trip_id": str(fleet["soon"].id)})
+    assert queued.status_code == 200, queued.text
+    after = data(api_client, "filing_proposals", trip_id=str(fleet["soon"].id))["proposals"][0]
+    assert after["id"] == proposal["id"] and after["state"] == "filed"
+    assert after["filing_state"] == "queued"
+    assert data(api_client, "filing_proposals", state="proposed")["proposals"] == []
+
+
+@requires_db
+def test_a_proposal_can_be_dismissed_once_and_only_with_the_token(
+    api_client, token, fleet
+) -> None:
+    proposal = data(api_client, "propose_filing", trip_id=str(fleet["soon"].id))
+    path = f"/api/filings/{proposal['id']}/dismiss"
+    assert api_client.post(path).status_code == 401
+    assert api_client.post(path, headers=AUTH).json()["state"] == "dismissed"
+    assert api_client.post(path, headers=AUTH).status_code == 409
+    listed = api_client.get("/api/filings?state=proposed", headers=AUTH).json()
+    assert listed["proposals"] == []
+
+
+@requires_db
+def test_refreshing_queues_reads_and_never_a_filing(api_client, token, session) -> None:
+    first = data(api_client, "pull_from_turo")
+    assert first["command"]["kind"] == "pull" and first["extension_listening"] is False
+    assert data(api_client, "pull_from_turo")["command"]["id"] == first["command"]["id"], (
+        "a second ask while one waits is the same one")
+    assert data(api_client, "read_ezpass")["command"]["kind"] == "tolls"
+    assert {c.kind for c in session.query(ExtensionCommand)} == {"pull", "tolls"}
+
+
+@requires_db
+def test_turos_charge_can_be_marked_checked_and_back(api_client, token, fleet) -> None:
+    trip = str(fleet["later"].id)
+    assert data(api_client, "mark_charge_checked", trip_id=trip)["checked_at"] is not None
+    assert data(api_client, "mark_charge_checked", trip_id=trip, undo=True)["checked_at"] is None
+    missing = call(api_client, "mark_charge_checked", trip_id=str(uuid.uuid4()))
+    assert missing["isError"] is True
+
+
+@requires_db
+def test_a_cars_side_is_confirmed_and_its_task_ticked_and_put_back(
+    api_client, token, session
+) -> None:
+    car = Vehicle(nickname="Jimmy", make="Toyota", model="4-Runner", year=2023,
+                  plate="ABC1234")
+    session.add(car)
+    session.flush()
+    north = StreetSegmentSide(
+        street_name="ST MARKS PLACE", side=StreetSide.north,
+        geom="SRID=4326;LINESTRING(-73.9775 40.68045, -73.9750 40.68045)")
+    session.add(north)
+    session.flush()
+    session.add(AspRule(segment_side_id=north.id, days_of_week=[3], starts_at=time(11, 0),
+                        ends_at=time(12, 30), source=RuleSource.nyc_signs, confidence=1.0))
+    open_parking_session(session, vehicle=car, lat=40.68044, lon=-73.976358, at=NOW)
+    session.commit()
+
+    jimmy = next(v for v in data(api_client, "fleet")["vehicles"] if v["nickname"] == "Jimmy")
+    assert "plate" not in jimmy
+    parking = jimmy["parking"]
+    option = next(o for o in parking["options"] if o["street_name"] == "ST MARKS PLACE")
+    after = data(api_client, "confirm_parking", session_id=parking["session_id"],
+                 segment_side_id=option["id"])
+    assert after["parking"]["confirmed"] is True and after["parking"]["must_move_by"]
+    assert "plate" not in after
+    task = after["tasks"][0]
+    assert data(api_client, "complete_task", task_id=task["id"])["tasks"] == []
+    assert [t["id"] for t in data(api_client, "reopen_task", task_id=task["id"])["tasks"]] == [
+        task["id"]]
+    gone = call(api_client, "complete_task", task_id=str(uuid.uuid4()))
+    assert gone["isError"] is True and "no task" in gone["content"][0]["text"]

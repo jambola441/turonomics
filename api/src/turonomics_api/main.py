@@ -13,6 +13,7 @@ from turonomics_api.db.base import session_scope
 from turonomics_api.ingest.poller import interval_minutes, poll_once, summarize
 from turonomics_api.routers import (
     commands,
+    filings,
     fleet,
     gmail,
     invoices,
@@ -124,6 +125,7 @@ app.include_router(invoices.router)
 app.include_router(turo.router)
 app.include_router(commands.router)
 app.include_router(messages.router)
+app.include_router(filings.router)
 app.include_router(mcp.router)
 
 

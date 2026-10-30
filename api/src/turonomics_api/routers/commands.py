@@ -116,7 +116,7 @@ class DoneIn(BaseModel):
     detail: dict[str, Any] | None = None
 
 
-def _out(command: ExtensionCommand) -> CommandOut:
+def command_out(command: ExtensionCommand) -> CommandOut:
     trip = command.trip
     return CommandOut(
         id=command.id,
@@ -185,7 +185,7 @@ def list_commands(session: DbSession, limit: int = 10) -> CommandsResponse:
     ).all()
     checkin = session.get(ExtensionCheckin, 1)
     return CommandsResponse(
-        commands=[_out(c) for c in commands],
+        commands=[command_out(c) for c in commands],
         extension_seen_at=checkin.seen_at if checkin else None,
         extension_version=checkin.version if checkin else None,
         listening=checkin is not None and now - checkin.seen_at <= LISTENING_WITHIN,
@@ -234,7 +234,7 @@ def queue_command(
         )
     )
     if pending is not None:
-        return _out(pending)
+        return command_out(pending)
 
     command = ExtensionCommand(
         kind=payload.kind,
@@ -249,7 +249,7 @@ def queue_command(
         filed_by_hand(session, command)
     session.commit()
     log.info("command %s queued: %s %s", command.id, command.kind, payload.trip_id or "")
-    return _out(command)
+    return command_out(command)
 
 
 @router.post("/claim", response_model=CommandOut, responses={204: {"description": "nothing"}})
@@ -291,7 +291,7 @@ def claim(
         return Response(status_code=204)
     command.state = RUNNING
     command.claimed_at = now
-    out = _out(command)
+    out = command_out(command)
     if command.kind == MESSAGE:
         draft = _draft_for(session, command)
         out.message = draft.body if draft is not None else None
@@ -331,4 +331,4 @@ def done(
             draft.result = command.result
     session.commit()
     log.info("command %s %s: %s", command.id, command.state, command.result)
-    return _out(command)
+    return command_out(command)

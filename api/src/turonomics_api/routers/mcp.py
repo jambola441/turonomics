@@ -22,10 +22,12 @@ cannot waits for a person.
   extension to pull from Turo or read E-ZPass (both only read), and changing
   Turo's own listing and account settings that no guest books against, each
   change recorded with what it replaced so it can be put back.
+* Filed directly, by the operator's decision: a rental's toll reimbursement,
+  through the same ledger check as the site's File button, and only once the
+  E-ZPass data reaches past the trip (see ``tool_file_toll_invoice``).
 * Proposed, never done: a message to a guest is a draft until the operator
-  presses Send, and a toll filing is a proposal until they press File, on the
-  site. Both ask something of a guest that cannot be taken back. There is no
-  tool that sends, files, approves, or marks money recovered.
+  presses Send on the site. There is no tool that sends a message, approves
+  anything, or marks money recovered.
 
 Behind ``TOLLS_TOKEN`` like the pages that name guests, and stricter than
 they are: those let every request through when the token is unset, and this
@@ -40,7 +42,7 @@ import json
 import os
 import uuid
 from collections.abc import Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any
 from urllib.parse import urljoin
 
@@ -69,9 +71,10 @@ INSTRUCTIONS = (
     "car, reservation number or date, and trip for everything about one rental. "
     "draft_message writes a message to a rental's guest as a draft; it is not sent "
     "until the operator reads it and presses Send on the site, so say that it is a "
-    "draft and is waiting for them. propose_filing is the same for a toll filing: it "
-    "puts the rental in front of the operator on the invoices page, and nothing is "
-    "filed until they press File. fleet shows each car, where it is parked and its "
+    "draft and is waiting for them. file_toll_invoice files a rental's tolls on Turo; "
+    "start from next_to_file, and refresh E-ZPass first with read_ezpass if the newest "
+    "crossings are old. propose_filing instead puts a rental in front of the operator "
+    "on the invoices page for them to file. fleet shows each car, where it is parked and its "
     "tasks; confirm_parking, complete_task, reopen_task and mark_charge_checked change "
     "the books directly and can be undone. pull_from_turo and read_ezpass ask the "
     "operator's browser extension to refresh the data; they only read. "
@@ -419,6 +422,55 @@ def _proposal_view(proposal: Any) -> dict[str, Any]:
     return data
 
 
+# E-ZPass posts a crossing days after it happens. A rental is filed directly
+# only once the newest crossing on record is this far past its end, so what
+# is filed is all there is; inside the window's last days it is filed with
+# what there is rather than lost.
+SETTLED_AFTER = timedelta(days=3)
+FILE_ANYWAY_DAYS = 7
+
+
+def tool_file_toll_invoice(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from sqlalchemy import func, select
+
+    from turonomics_api.db.models import ExtensionCommand, Toll, Trip
+    from turonomics_api.routers import turo_changes
+    from turonomics_api.routers.commands import CommandIn, command_out, queue_command
+    from turonomics_api.routers.invoices import fileable_invoice, ledger
+
+    trip_id = _uuid(args.get("trip_id"))
+    trip = session.get(Trip, trip_id)
+    if trip is None or not trip.turo_trip_id:
+        raise _ToolError("no Turo rental with that id")
+    _, held = fileable_invoice(session, trip_id)
+    if held is not None:
+        raise _ToolError(f"the ledger would not file it: {held}")
+    row = next((r for r in ledger(session).rows if r.trip_id == trip_id), None)
+    days_left = row.days_left if row is not None else None
+    newest = session.scalar(select(func.max(Toll.occurred_at)))
+    settled = newest is not None and newest >= trip.ends_at + SETTLED_AFTER
+    if not settled and (days_left is None or days_left > FILE_ANYWAY_DAYS):
+        seen = newest.date().isoformat() if newest else "nothing yet"
+        raise _ToolError(
+            f"E-ZPass data reaches {seen}; crossings post days late, so this rental is filed "
+            f"once it reaches {(trip.ends_at + SETTLED_AFTER).date().isoformat()} "
+            "(read_ezpass refreshes it), or in the last "
+            f"{FILE_ANYWAY_DAYS} days of the window whatever it reaches"
+        )
+    command = queue_command(CommandIn(kind="file", trip_id=trip_id), session,
+                            authorization=auth)
+    row_cmd = session.get(ExtensionCommand, command.id)
+    if row_cmd is not None:
+        turo_changes.wait(session, row_cmd)
+        command = command_out(row_cmd)
+    data = _dump(command)
+    data["amount_cents"] = row.unfiled_cents if row is not None else None
+    data["filed"] = data["state"] == "done"
+    if data["state"] in ("queued", "running"):
+        data["next"] = "The extension is filing it; extension_status shows the result."
+    return data
+
+
 def tool_propose_filing(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
     from turonomics_api.routers.filings import propose
 
@@ -729,6 +781,21 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
             "before and after, and whether it can be undone."
         ),
         "inputSchema": _schema({"limit": _LIMIT}),
+    }),
+    "file_toll_invoice": (tool_file_toll_invoice, {
+        "title": "File a rental's tolls on Turo",
+        "description": (
+            "File the toll reimbursement for one rental on Turo, through the operator's "
+            "browser extension, as the File button on the invoices page does. The ledger "
+            "decides the amount and the crossings; it is refused if the ledger would not "
+            "file it, and until the E-ZPass data reaches 3 days past the trip's end (late "
+            "crossings), except in the window's last 7 days. A guest cannot be asked twice "
+            "for one crossing. This asks a guest for money and cannot be taken back."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string", "description": "From next_to_file."},
+        }, ["trip_id"]),
+        "annotations": {**WRITES, "destructiveHint": True, "openWorldHint": True},
     }),
     "propose_filing": (tool_propose_filing, {
         "title": "Propose filing a rental's tolls",

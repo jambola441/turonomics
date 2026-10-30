@@ -170,7 +170,7 @@ def test_what_is_not_offered_is_said_so(api_client, token) -> None:
 
 WRITERS = {"draft_message", "propose_filing", "confirm_parking", "complete_task",
            "reopen_task", "mark_charge_checked", "pull_from_turo", "read_ezpass",
-           "change_turo_setting", "undo_turo_change"}
+           "change_turo_setting", "undo_turo_change", "file_toll_invoice"}
 
 
 @requires_db
@@ -182,18 +182,18 @@ def test_only_the_writing_tools_are_listed_as_writing(api_client, token) -> None
         "turo_changes"} | WRITERS
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITERS)
-        # Each write is undone by another call or only waits for a person.
-        assert tool["annotations"]["destructiveHint"] is False
+        # Each write is undone by another call or only waits for a person,
+        # except a filing, which asks a guest for money.
+        assert tool["annotations"]["destructiveHint"] is (tool["name"] == "file_toll_invoice")
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
 
 
 @requires_db
-def test_nothing_offered_files_sends_or_settles_money(api_client, token) -> None:
-    """The operator's rule: what cannot be taken back waits for a person."""
+def test_nothing_offered_sends_settles_or_refunds(api_client, token) -> None:
+    """Filing is the one irreversible thing the operator chose to hand over."""
     names = {t["name"] for t in rpc(api_client, "tools/list").json()["result"]["tools"]}
     for word in ("send", "approve", "recovered", "settle", "refund", "cancel"):
         assert not any(word in name for name in names), word
-    assert "file" not in {n.split("_")[0] for n in names}, "only propose_filing"
 
 
 # ---------------------------------------------------------------------------
@@ -439,3 +439,70 @@ def test_a_cars_side_is_confirmed_and_its_task_ticked_and_put_back(
         task["id"]]
     gone = call(api_client, "complete_task", task_id=str(uuid.uuid4()))
     assert gone["isError"] is True and "no task" in gone["content"][0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Filing directly
+# ---------------------------------------------------------------------------
+
+@requires_db
+def test_a_rental_whose_crossings_are_in_is_filed(api_client, token, fleet, session) -> None:
+    """Ana's rental ended 80 days ago; the newest crossing (5 days ago) is long after."""
+    out = data(api_client, "file_toll_invoice", trip_id=str(fleet["soon"].id))
+    assert out["kind"] == "file" and out["state"] == "queued" and out["amount_cents"] == 746
+    command = session.query(ExtensionCommand).one()
+    assert command.trip_id == fleet["soon"].id
+    again = data(api_client, "file_toll_invoice", trip_id=str(fleet["soon"].id))
+    assert again["id"] == out["id"], "a second ask while one waits is the same filing"
+    assert session.query(ExtensionCommand).count() == 1
+
+
+def _rental_with_a_crossing(session, reservation: str, ended_days_ago: int) -> Trip:
+    """A rental whose one crossing, the newest on record, was during it."""
+    car = session.query(Vehicle).first()
+    if car is None:
+        car = Vehicle(nickname="Jolene", make="Toyota", model="Corolla", year=2025)
+        session.add(car)
+        session.flush()
+    ends = NOW - timedelta(days=ended_days_ago)
+    trip = Trip(vehicle_id=car.id, turo_trip_id=reservation, guest_name="Eve",
+                starts_at=ends - timedelta(days=2), ends_at=ends,
+                state=TripState.completed, source=TripSource.extension)
+    session.add(trip)
+    session.flush()
+    session.add(Toll(fingerprint=f"t{reservation}", occurred_at=ends - timedelta(hours=3),
+                     plaza="RKB", amount_cents=911, transponder_id="99900000111",
+                     vehicle_id=car.id, trip_id=trip.id))
+    session.commit()
+    return trip
+
+
+@requires_db
+def test_a_rental_whose_late_crossings_may_not_be_in_waits(api_client, token, session) -> None:
+    recent = _rental_with_a_crossing(session, "2001", 2)
+    waits = call(api_client, "file_toll_invoice", trip_id=str(recent.id))
+    assert waits["isError"] and "post days late" in waits["content"][0]["text"]
+    assert session.query(ExtensionCommand).count() == 0
+
+
+@requires_db
+def test_near_the_end_of_the_window_it_is_filed_with_what_there_is(
+    api_client, token, session
+) -> None:
+    """Five days left and nothing newer than the trip: waiting would lose it."""
+    closing = _rental_with_a_crossing(session, "2002", 85)
+    assert data(api_client, "file_toll_invoice", trip_id=str(closing.id))["state"] == "queued"
+
+
+@requires_db
+def test_a_rental_the_ledger_would_not_file_is_refused(api_client, token, fleet, session) -> None:
+    closed = call(api_client, "file_toll_invoice", trip_id=str(fleet["old"].id))
+    assert closed["isError"] and "would not file" in closed["content"][0]["text"]
+    assert session.query(ExtensionCommand).count() == 0
+
+
+@requires_db
+def test_filing_settles_a_proposal_for_the_same_rental(api_client, token, fleet) -> None:
+    data(api_client, "propose_filing", trip_id=str(fleet["soon"].id))
+    data(api_client, "file_toll_invoice", trip_id=str(fleet["soon"].id))
+    assert data(api_client, "filing_proposals", state="proposed")["proposals"] == []

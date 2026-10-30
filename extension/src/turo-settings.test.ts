@@ -157,6 +157,20 @@ test("an added extra is undone by removing it, and a removed one by adding it ba
   assert.deepEqual(turo.state.extras.map((e) => e.extraId), [8]);
 });
 
+test("a question's id comes from Turo's answer, since its list lags the add", async () => {
+  const calls: TuroCall[] = [];
+  const call = async (c: TuroCall): Promise<TuroReply> => {
+    calls.push(c);
+    // The list never shows the new one in time; the POST answers with it.
+    if (c.method === "GET") return { status: 200, body: { vehicleFaqs: [{ id: 1, question: "Pets?", answer: "No" }] } };
+    return { status: 200, body: { id: 42, question: "Smoking?", answer: "No" } };
+  };
+  const out = await runSetting({ operation: "faq_add", mode: "write", vehicle_id: CAR, values: { question: "Smoking?", answer: "No" } }, call);
+  assert.equal(out.ok, true, out.result);
+  assert.deepEqual(out.detail?.restore, { operation: "faq_remove", values: { faqId: "42" } });
+  assert.deepEqual(calls.find((c) => c.method === "POST")?.form, { question: "Smoking?", answer: "No" });
+});
+
 test("removing something that is not there is refused", async () => {
   const turo = fakeTuro();
   const out = await runSetting({ operation: "extra_remove", mode: "write", vehicle_id: CAR, values: { extraId: 99 } }, turo.call);

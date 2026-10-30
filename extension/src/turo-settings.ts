@@ -419,7 +419,8 @@ interface ItemList {
   read(ctx: Ctx): Promise<{ items: Record<string, unknown>[]; options?: unknown }>;
   /** The item's fields as an add would take them. */
   fields(item: Record<string, unknown>): Values;
-  add(ctx: Ctx, values: Values): Promise<void>;
+  /** Turo's answer: the new item (questions, feature lines) or the whole list (extras). */
+  add(ctx: Ctx, values: Values): Promise<unknown>;
   update(ctx: Ctx, itemId: string, values: Values): Promise<void>;
   remove(ctx: Ctx, itemId: string): Promise<void>;
 }
@@ -460,7 +461,7 @@ const LISTS: Record<string, ItemList> = {
     async add({ call, vehicle }, values) {
       const form: Record<string, string> = { currencyCode: "USD", vehicleIds: vehicle };
       for (const key of EXTRA_KEYS) form[key] = str(values[key], key);
-      await send(call, { method: "POST", path: "/api/your_car/extras", form });
+      return send(call, { method: "POST", path: "/api/your_car/extras", form });
     },
     // A query string and no body, as Turo's own page sends it.
     async update({ call }, itemId, values) {
@@ -478,7 +479,7 @@ const LISTS: Record<string, ItemList> = {
     },
     fields: (item) => ({ question: item.question, answer: item.answer }),
     async add({ call, vehicle }, values) {
-      await send(call, {
+      return send(call, {
         method: "POST",
         path: `/api/listings/${enc(vehicle)}/faqs`,
         form: { question: str(values.question, "question"), answer: str(values.answer, "answer") },
@@ -503,7 +504,7 @@ const LISTS: Record<string, ItemList> = {
     },
     fields: (item) => ({ feature: item.feature }),
     async add({ call, vehicle }, values) {
-      await send(call, {
+      return send(call, {
         method: "POST",
         path: `/api/listings/${enc(vehicle)}/additional_features`,
         form: { feature: str(values.feature, "feature") },
@@ -539,10 +540,13 @@ async function runItem(kind: string, action: string, ctx: Ctx): Promise<SettingO
   const before = (await spec.read(ctx)).items;
   if (action === "add") {
     const values = only(ctx.values, keys);
-    await spec.add(ctx, values);
+    const reply = await spec.add(ctx, values);
     const after = (await spec.read(ctx)).items;
     const known = new Set(before.map(itemId));
-    const added = after.find((item) => !known.has(itemId(item)));
+    // The new item's id from Turo's answer where it gives one: the question
+    // list can lag an add by seconds. Extras answer with the whole list.
+    const answered = reply && typeof reply === "object" && !Array.isArray(reply) && "id" in reply ? (reply as Record<string, unknown>) : null;
+    const added = answered ?? after.find((item) => !known.has(itemId(item)));
     return {
       ok: true,
       result: `${kind} added`,

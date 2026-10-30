@@ -413,6 +413,17 @@ DRAFTS: list[dict[str, object]] = [{
 }]
 
 
+# A filing Claude proposed through the MCP endpoint, waiting for File or Dismiss.
+PROPOSALS: list[dict[str, object]] = [{
+    "id": "eeee1111-0000-0000-0000-000000000001",
+    "trip_id": "ffff0000-0000-0000-0000-000000000007", "guest_name": "Shashi",
+    "vehicle_nickname": "Jolene", "turo_trip_id": "54958911", "amount_cents": 2263,
+    "note": "forty days left and nothing asked yet", "state": "proposed", "created_by": "mcp",
+    "created_at": NOW.isoformat(), "decided_at": None,
+    "filing_state": None, "filing_result": None,
+}]
+
+
 def _commands_payload() -> dict[str, object]:
     return {
         "commands": list(reversed(COMMANDS)),
@@ -573,6 +584,10 @@ class Handler(BaseHTTPRequestHandler):
                 ],
                 "route_source": "bouncie", "note": None,
             })
+        elif self.path.startswith("/api/filings"):
+            if not self._authorized(record=False):
+                return
+            self._send({"proposals": [p for p in PROPOSALS if p["state"] == "proposed"]})
         elif self.path.startswith("/api/messages"):
             if not self._authorized(record=False):
                 return
@@ -625,7 +640,8 @@ class Handler(BaseHTTPRequestHandler):
         path, _, query = self.path.partition("?")
         if (path.startswith("/api/tolls") or path.startswith("/api/trips")
                 or path.startswith("/api/invoices") or path.startswith("/api/messages")
-                or path.startswith("/api/commands")) and not self._authorized():
+                or path.startswith("/api/commands") or path.startswith("/api/filings")
+                ) and not self._authorized():
             return
         if path == "/api/commands":
             body = json.loads(self._read_body() or b"{}")
@@ -642,6 +658,14 @@ class Handler(BaseHTTPRequestHandler):
             }
             COMMANDS.append(command)
             self._send(command)
+            return
+        if path.startswith("/api/filings/") and path.endswith("/dismiss"):
+            for proposal in PROPOSALS:
+                if proposal["id"] == path.split("/")[3]:
+                    proposal["state"] = "dismissed"
+                    self._send(proposal)
+                    return
+            self._send({"detail": "no such proposal"}, status=404)
             return
         if path.startswith("/api/messages"):
             body = json.loads(self._read_body() or b"{}")

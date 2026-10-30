@@ -17,6 +17,8 @@ What keeps this from being a way to bill a guest twice:
 * A filing is only queued for a rental the ledger would file, by the same rule
   next-draft uses, and checked again by the extension when it runs.
 * A second click while one is queued or running returns the same command.
+* Claude can only propose a filing (routers/filings); this press is what
+  files it.
 * A filing claimed and never reported is never retried. It may have filed and
   lost its answer; it is marked abandoned and left for a person.
 """
@@ -35,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ExtensionCheckin, ExtensionCommand, MessageDraft, Trip
+from turonomics_api.routers.filings import filed_by_hand
 from turonomics_api.routers.invoices import fileable_invoice
 from turonomics_api.routers.tolls import require_token, token_configured
 
@@ -222,6 +225,10 @@ def queue_command(
         requested_at=datetime.now(UTC),
     )
     session.add(command)
+    if payload.kind == "file":
+        # This press is the approval of anything Claude proposed for the rental.
+        session.flush()
+        filed_by_hand(session, command)
     session.commit()
     log.info("command %s queued: %s %s", command.id, command.kind, payload.trip_id or "")
     return _out(command)

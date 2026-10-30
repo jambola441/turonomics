@@ -925,6 +925,39 @@ class MessageDraft(Base):
     trip: Mapped[Trip] = relationship()
 
 
+class FilingProposal(Base):
+    """Claude's suggestion that a rental's tolls be filed on Turo.
+
+    A filing asks a guest for money and cannot be taken back, so Claude does
+    not file: it proposes, through the MCP endpoint, and the proposal shows on
+    the invoices page beside the rental's File button. Pressing File is the
+    approval, and is checked by the same ledger rule as any other File press;
+    Dismiss is the refusal. Nothing else turns a proposal into a filing.
+    """
+
+    __tablename__ = "filing_proposal"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    trip_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("trip.id", ondelete="CASCADE"), index=True
+    )
+    # Claude's reason, shown to the operator beside the button.
+    note: Mapped[str | None] = mapped_column(Text)
+    # What the ledger said was left to file when it was proposed.
+    amount_cents: Mapped[int] = mapped_column(Integer)
+    # proposed -> filed (File pressed) | dismissed.
+    state: Mapped[str] = mapped_column(String(12), index=True)
+    created_by: Mapped[str] = mapped_column(String(10))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    command_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("extension_command.id", ondelete="SET NULL")
+    )
+
+    trip: Mapped[Trip] = relationship()
+    command: Mapped[ExtensionCommand | None] = relationship()
+
+
 class ExtensionCheckin(Base):
     """When the extension last asked for work, so the site can say whether
     anything is listening before a person waits on a button that cannot fire.

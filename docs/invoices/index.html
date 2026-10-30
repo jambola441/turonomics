@@ -71,6 +71,9 @@
   .inv .asked{font-size:var(--tn-small);margin-top:4px;color:var(--blue);line-height:1.45}
   .inv .asked.odd{color:var(--amber)}
   .inv .asked.seen{color:var(--dim)}
+  /* Claude's suggestion that this one be filed: the File button beside it is
+     the approval, and nothing is filed without it. */
+  .inv .proposal{font-size:var(--tn-small);margin-top:6px;color:var(--u-link);line-height:1.45}
   .inv .side{display:flex;flex-direction:column;align-items:flex-end;gap:4px;flex-shrink:0}
   .inv .amt{font-family:var(--mono);font-size:16px;font-weight:600}
   /* Says the card opens, which a bordered box alone did not. */
@@ -197,7 +200,7 @@
   // API decides the same number for its own total; this is only for grouping.
   var URGENT_DAYS = 21;
 
-  var state = { data: null, busy: false, open: {}, ledger: {}, ext: null };
+  var state = { data: null, busy: false, open: {}, ledger: {}, ext: null, proposals: {} };
 
   function el(id) { return document.getElementById(id); }
   function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
@@ -351,6 +354,11 @@
     var clock = clockNote(invoice);
     if (clock) add(body, "div", "clock " + clock.kind, clock.text);
     renderAsked(invoice, body);
+    var proposal = state.proposals[invoice.trip_id];
+    if (proposal) {
+      add(body, "div", "proposal", "Claude suggests filing this" +
+          (proposal.note ? ": " + proposal.note : "") + " — press File to file it");
+    }
     var side = add(head, "div", "side");
     add(side, "div", "amt", money(invoice.total_cents));
     add(side, "div", "more", open ? "hide" : "crossings");
@@ -368,6 +376,11 @@
         add(quick, "span", "tn-why-off", "needs the extension installed");
       }
       file.addEventListener("click", function () { queueFiling(row, invoice); });
+    }
+    if (proposal) {
+      var dismiss = add(quick, "button", "btn small", "Dismiss suggestion");
+      dismiss.type = "button";
+      dismiss.addEventListener("click", function () { dismissProposal(proposal); });
     }
     if (invoice.charged_but_different && !invoice.expired) {
       var check = add(quick, "button", "btn small",
@@ -477,6 +490,29 @@
       .then(function () { return load(); })
       .catch(function (e) { fail("Could not mark it checked: " + e.message); })
       .then(function () { state.busy = false; });
+  }
+
+  function dismissProposal(proposal) {
+    if (state.busy) return;
+    state.busy = true;
+    post("/api/filings/" + proposal.id + "/dismiss")
+      .then(function () { return loadProposals(); })
+      .catch(function (e) { fail("Could not dismiss that: " + e.message); })
+      .then(function () { state.busy = false; });
+  }
+
+  // Filings Claude has proposed and nobody has pressed File or Dismiss on.
+  // Shown on the rental's card; a failure leaves the page as it was.
+  function loadProposals() {
+    return fetch(API + "/api/filings?state=proposed", { headers: TN.authHeaders() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (data) {
+        if (!data) return;
+        state.proposals = {};
+        (data.proposals || []).forEach(function (p) { state.proposals[p.trip_id] = p; });
+        render();
+      })
+      .catch(function () { /* the page works without them */ });
   }
 
   // One row per rental, as a short list rather than a thirteen-column table:
@@ -698,7 +734,8 @@
       "File " + money(row.unfiled_cents) + " of tolls to " + (guest || "this guest") +
       " on Turo?\n\nYour browser's extension files it, with the evidence sheet attached."
     )) return;
-    queue({ kind: "file", trip_id: row.trip_id });
+    // The press is the approval of Claude's suggestion, if there was one.
+    queue({ kind: "file", trip_id: row.trip_id }).then(loadProposals);
   }
 
   el("pullTuro").addEventListener("click", function () { queue({ kind: "pull" }); });
@@ -758,6 +795,7 @@
         el("stamp").textContent = n + (n === 1 ? " rental to bill" : " rentals to bill");
         el("err").hidden = true;
         render();
+        loadProposals();
       })
       .catch(function (e) {
         el("stamp").textContent = "";

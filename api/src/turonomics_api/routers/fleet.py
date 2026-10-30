@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -29,6 +29,7 @@ from turonomics_api.db.models import (
 from turonomics_api.ingest.parking import SEARCH_RADIUS_M, confirm_side, resolve_side
 from turonomics_api.ingest.spots import DEFAULT_RADIUS_M, suggest_spots
 from turonomics_api.ingest.tasks import active_trip, refresh_move_task
+from turonomics_api.routers.tolls import require_token
 from turonomics_api.settings import fleet_timezone, map_tiles
 
 router = APIRouter(prefix="/api", tags=["fleet"])
@@ -36,6 +37,9 @@ router = APIRouter(prefix="/api", tags=["fleet"])
 # Annotated rather than a Depends() default: same behaviour, and it does not
 # read as a mutable default argument to a linter.
 DbSession = Annotated[Session, Depends(get_session)]
+# Behind TOLLS_TOKEN like the pages that name guests: this says where every
+# car is, which guest has it, and lets anyone who can reach it tick off work.
+Auth = Annotated[str | None, Header()]
 
 
 class Position(BaseModel):
@@ -275,7 +279,13 @@ def _parking_state(session: Session, vehicle: Vehicle) -> ParkingState | None:
 
 
 @router.get("/fleet", response_model=FleetResponse)
-def get_fleet(session: DbSession) -> FleetResponse:
+def get_fleet(session: DbSession, authorization: Auth = None) -> FleetResponse:
+    require_token(authorization)
+    return fleet_state(session)
+
+
+def fleet_state(session: Session) -> FleetResponse:
+    """Every car now, for the route above and for the writes that answer with one."""
     now = datetime.now(UTC)
     states: list[VehicleState] = []
     untracked = 0
@@ -338,12 +348,14 @@ def confirm_parking_side(
     session_id: uuid.UUID,
     body: ConfirmRequest,
     session: DbSession,
+    authorization: Auth = None,
 ) -> VehicleState:
     """Apply the operator's answer to 'which side are you on?'.
 
     This is the step that turns a coin-flip guess into a deadline, so it is the
     only thing that can produce one.
     """
+    require_token(authorization)
     parking = session.get(ParkingSession, session_id)
     if parking is None or parking.ended_at is not None:
         raise HTTPException(404, "no open parking session with that id")
@@ -360,7 +372,7 @@ def confirm_parking_side(
     refresh_move_task(session, vehicle=vehicle, now=datetime.now(UTC))
     session.commit()
 
-    fleet = get_fleet(session)
+    fleet = fleet_state(session)
     for v in fleet.vehicles:
         if v.id == vehicle.id:
             return v
@@ -369,14 +381,16 @@ def confirm_parking_side(
 
 def _vehicle_after(session: Session, vehicle_id: uuid.UUID) -> VehicleState:
     """The car's whole state, so the client re-renders from one round trip."""
-    for v in get_fleet(session).vehicles:
+    for v in fleet_state(session).vehicles:
         if v.id == vehicle_id:
             return v
     raise HTTPException(500, "vehicle vanished mid-request")
 
 
 @router.post("/tasks/{task_id}/done", response_model=VehicleState)
-def complete_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
+def complete_task(
+    task_id: uuid.UUID, session: DbSession, authorization: Auth = None
+) -> VehicleState:
     """Tick a task off.
 
     Idempotent: ticking an already-done task is success, not a 409. The button
@@ -387,6 +401,7 @@ def complete_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
     to the next sweep, because that is a new obligation rather than the same
     one. See ``refresh_move_task``.
     """
+    require_token(authorization)
     task = session.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "no task with that id")
@@ -398,7 +413,9 @@ def complete_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
 
 
 @router.post("/tasks/{task_id}/undo", response_model=VehicleState)
-def reopen_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
+def reopen_task(
+    task_id: uuid.UUID, session: DbSession, authorization: Auth = None
+) -> VehicleState:
     """Put a task back, for the tap that was meant for the one below it.
 
     Only reopens something that was done. A cancelled task is one a module
@@ -406,6 +423,7 @@ def reopen_task(task_id: uuid.UUID, session: DbSession) -> VehicleState:
     left — and resurrecting that from the UI would put a lie back on the run
     sheet.
     """
+    require_token(authorization)
     task = session.get(Task, task_id)
     if task is None:
         raise HTTPException(404, "no task with that id")
@@ -448,6 +466,7 @@ def suggest_parking(
     vehicle_id: uuid.UUID,
     session: DbSession,
     radius_m: float = DEFAULT_RADIUS_M,
+    authorization: Auth = None,
 ) -> SpotsResponse:
     """Where to move this car, ranked by how long it could then be forgotten.
 
@@ -456,6 +475,7 @@ def suggest_parking(
     drive the car somewhere. Running it for four cars on every sixty-second
     refresh would cost the database real work to answer a question nobody asked.
     """
+    require_token(authorization)
     vehicle = session.get(Vehicle, vehicle_id)
     if vehicle is None:
         raise HTTPException(404, "no vehicle with that id")

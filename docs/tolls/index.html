@@ -777,7 +777,7 @@
   el("r-save").addEventListener("click", saveRental);
 
   // The car names, so the field does not have to be typed from memory.
-  fetch(API + "/api/fleet")
+  fetch(API + "/api/fleet", { headers: TN.authHeaders() })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) {
       if (!data) return;

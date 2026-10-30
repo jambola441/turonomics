@@ -617,8 +617,13 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(_tolls_payload())
         elif "/spots" in self.path:
+            if not self._authorized(record=False):
+                return
             self._send(SPOTS)
         else:
+            # Where every car is: behind the token, as the real one is.
+            if not self._authorized(record=False):
+                return
             self._send(FLEET)
 
     def _authorized(self, record: bool = True) -> bool:
@@ -642,6 +647,10 @@ class Handler(BaseHTTPRequestHandler):
                 or path.startswith("/api/invoices") or path.startswith("/api/messages")
                 or path.startswith("/api/commands") or path.startswith("/api/filings")
                 ) and not self._authorized():
+            return
+        # The fleet page's writes: behind the token, not counted with the rest.
+        if (path.startswith("/api/tasks") or path.startswith("/api/parking")) \
+                and not self._authorized(record=False):
             return
         if path == "/api/commands":
             body = json.loads(self._read_body() or b"{}")

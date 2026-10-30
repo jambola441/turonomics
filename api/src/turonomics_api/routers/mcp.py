@@ -311,7 +311,7 @@ def tool_message_drafts(session: Session, auth: str, args: dict[str, Any]) -> di
 def tool_fleet(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
     from turonomics_api.routers.fleet import get_fleet
 
-    data = _dump(get_fleet(session), exclude={"map_tiles"})
+    data = _dump(get_fleet(session, authorization=auth), exclude={"map_tiles"})
     for vehicle in data["vehicles"]:
         # A plate is not needed to talk about a car here, and is the one thing
         # on this page that identifies it to a stranger.
@@ -342,21 +342,21 @@ def tool_confirm_parking(session: Session, auth: str, args: dict[str, Any]) -> d
     parking = _uuid(args.get("session_id"), "session_id")
     side = _uuid(args.get("segment_side_id"), "segment_side_id")
     return _not_found(lambda: confirm_parking_side(
-        parking, ConfirmRequest(segment_side_id=side), session))
+        parking, ConfirmRequest(segment_side_id=side), session, authorization=auth))
 
 
 def tool_complete_task(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
     from turonomics_api.routers.fleet import complete_task
 
     task = _uuid(args.get("task_id"), "task_id")
-    return _not_found(lambda: complete_task(task, session))
+    return _not_found(lambda: complete_task(task, session, authorization=auth))
 
 
 def tool_reopen_task(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
     from turonomics_api.routers.fleet import reopen_task
 
     task = _uuid(args.get("task_id"), "task_id")
-    return _not_found(lambda: reopen_task(task, session))
+    return _not_found(lambda: reopen_task(task, session, authorization=auth))
 
 
 def tool_mark_charge_checked(

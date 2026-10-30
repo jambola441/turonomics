@@ -1233,7 +1233,7 @@
   });
   el("a-save").addEventListener("click", saveRental);
 
-  fetch(API + "/api/fleet")
+  fetch(API + "/api/fleet", { headers: TN.authHeaders() })
     .then(function (r) { return r.ok ? r.json() : null; })
     .then(function (data) {
       state.tiles = (data && data.map_tiles) || null;

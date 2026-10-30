@@ -588,7 +588,7 @@
   function loadSpots(v, el) {
     el.disabled = true;
     el.textContent = "Looking\u2026";
-    fetch(API + "/api/vehicles/" + encodeURIComponent(v.id) + "/spots")
+    fetch(API + "/api/vehicles/" + encodeURIComponent(v.id) + "/spots", { headers: TN.authHeaders() })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -636,7 +636,8 @@
   // a minute reads as a tick that did not work, and gets tapped again.
   function taskAction(id, action, el) {
     el.disabled = true;
-    fetch(API + "/api/tasks/" + encodeURIComponent(id) + "/" + action, { method: "POST" })
+    fetch(API + "/api/tasks/" + encodeURIComponent(id) + "/" + action,
+          { method: "POST", headers: TN.authHeaders() })
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -695,7 +696,8 @@
 
     fetch(API + "/api/parking/" + encodeURIComponent(sessionId) + "/confirm", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      headers: Object.assign({ "Content-Type": "application/json", Accept: "application/json" },
+                             TN.authHeaders()),
       body: JSON.stringify({ segment_side_id: segmentSideId }),
     })
       .then(function (r) {
@@ -718,7 +720,10 @@
   }
 
   function load() {
-    fetch(API + "/api/fleet", { headers: { Accept: "application/json" } })
+    // Where every car is and who has it: behind the token like the guests'
+    // pages, asked for once and then saved.
+    TN.authed("/api/fleet", { headers: { Accept: "application/json" } },
+              "This page shows where the cars are, so it needs the tolls token.")
       .then(function (r) {
         if (!r.ok) throw new Error("HTTP " + r.status);
         return r.json();
@@ -974,7 +979,10 @@
   initAlerts();
 
   // Telemetry only changes when a car moves, so this is a gentle refresh, not a poll.
-  setInterval(load, 60000);
+  // Not while the token is missing: each refresh would put the panel back up
+  // every minute after it was closed. Saving one loads straight away.
+  setInterval(function () { if (fleet || TN.token()) load(); }, 60000);
+  window.addEventListener("tn-token-saved", function () { load(); });
 })();
 </script>
 </body>

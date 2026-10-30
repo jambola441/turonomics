@@ -189,6 +189,53 @@ test("an account setting needs no car, and a read writes nothing", async () => {
   assert.deepEqual(off.detail?.restore, { operation: "sms", values: { sms: true } });
 });
 
+test("clearing a description is a change made, though Turo stores it as null", async () => {
+  let description: string | null = "A car";
+  const call = async (c: TuroCall): Promise<TuroReply> => {
+    if (c.method === "GET") return { status: 200, body: { name: "Jolene", description } };
+    const sent = (c.form as Record<string, string>).description;
+    description = sent === "" ? null : sent;
+    return { status: 200, body: null };
+  };
+  const out = await runSetting({ operation: "listing_text", mode: "write", vehicle_id: CAR, values: { description: "" } }, call);
+  assert.equal(out.ok, true, out.result);
+});
+
+test("a trip preference Turo ignores says the name it was sent as", async () => {
+  const turo = fakeTuro();
+  const out = await runSetting({ operation: "trip_preferences", mode: "write", vehicle_id: CAR, values: { bufferTime: "4 hours!" } }, turo.call);
+  assert.equal(out.ok, true, "FOUR_HOURS is taken");
+  const odd = await runSetting({ operation: "trip_preferences", mode: "write", vehicle_id: CAR, values: { bufferTime: "two weeks" } }, async (c) => {
+    if (c.method === "GET") return { status: 200, body: { bufferTime: { currentName: "THREE_HOURS" } } };
+    return { status: 200, body: null };
+  });
+  assert.equal(odd.ok, false);
+  assert.match(odd.result, /bufferTime \(sent as TWO_WEEKS\)/);
+});
+
+test("turning an extra off alone uses the toggle call", async () => {
+  const turo = fakeTuro();
+  await runSetting({ operation: "extra_update", mode: "write", vehicle_id: CAR, values: { extraId: 7, enabled: false } }, turo.call);
+  const write = writes(turo.calls)[0];
+  assert.equal(write.method, "PATCH");
+  assert.equal(write.path, "/api/your_car/extras/7?enabled=false");
+  const turo2 = fakeTuro();
+  await runSetting({ operation: "extra_update", mode: "write", vehicle_id: CAR, values: { extraId: 7, description: "Big cooler" } }, turo2.call);
+  assert.equal(writes(turo2.calls)[0].method, "PUT");
+});
+
+test("a notification Turo ignores is not reported as changed", async () => {
+  const read = { themes: [{ theme: "TRIPS", channels: [{ channel: "EMAIL", enabled: true }] }] };
+  const ignoring = async (c: TuroCall): Promise<TuroReply> =>
+    c.method === "GET" ? { status: 200, body: read } : { status: 204, body: null };
+  const out = await runSetting({
+    operation: "notifications", mode: "write",
+    values: { preferences: [{ communication_theme: "TRIPS", delivery_channel: "EMAIL", value: false }] },
+  }, ignoring);
+  assert.equal(out.ok, false);
+  assert.deepEqual(out.detail?.restore?.values, { preferences: [{ communication_theme: "TRIPS", delivery_channel: "EMAIL", value: true }] });
+});
+
 test("display text becomes the enum name; a name is kept", () => {
   assert.equal(enumName("3 hours"), "THREE_HOURS");
   assert.equal(enumName("1 day"), "ONE_DAY");

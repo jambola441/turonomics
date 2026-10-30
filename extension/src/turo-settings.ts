@@ -251,7 +251,12 @@ const WHOLE: Record<string, WholeSetting> = {
       });
     },
     restore: (current, values) => pick(current, Object.keys(values)),
-    readBack: (after, values) => pick(after, Object.keys(values)),
+    // An empty description is sent as "" and stored as null: the same thing.
+    readBack: (after, values) => {
+      const out: Values = {};
+      for (const key of Object.keys(values)) out[key] = (after[key] ?? "") === (values[key] ?? "") ? values[key] : after[key];
+      return out;
+    },
   },
   badges: {
     scope: "car",
@@ -367,17 +372,14 @@ const WHOLE: Record<string, WholeSetting> = {
       if (!valid) throw new Refused("preferences is a list of {communication_theme, delivery_channel, value}");
       await send(call, { method: "POST", path: "/api/me/notification-preferences", json: prefs });
     },
-    restore(current, values) {
-      const themes = list(current, "themes");
-      const was = (theme: string, channel: string): boolean | undefined => {
-        const t = themes.find((x) => x.theme === theme);
-        const c = t ? list(t, "channels").find((x) => x.channel === channel) : undefined;
-        return c && typeof c.enabled === "boolean" ? c.enabled : undefined;
-      };
-      const back = (values.preferences as { communication_theme: string; delivery_channel: string }[])
-        .map((p) => ({ ...p, value: was(p.communication_theme, p.delivery_channel) }))
-        .filter((p) => p.value !== undefined);
-      return { preferences: back };
+    restore: (current, values) => ({
+      preferences: notificationsAsRead(current, values).filter((p) => p.value !== undefined),
+    }),
+    // The POST answers 204 with nothing, so the read is the only confirmation.
+    readBack(after, values) {
+      const asked = values.preferences as Notification[];
+      const shown = notificationsAsRead(after, values);
+      return { preferences: asked.every((p, i) => p.value === shown[i].value) ? values.preferences : shown };
     },
   },
   sms: {
@@ -400,6 +402,22 @@ const WHOLE: Record<string, WholeSetting> = {
   },
 };
 
+interface Notification {
+  communication_theme: string;
+  delivery_channel: string;
+  value: unknown;
+}
+
+/** Each asked pair as the read shows it now: themes[].channels[] by (theme, channel). */
+function notificationsAsRead(read: Record<string, unknown>, values: Values): Notification[] {
+  const themes = list(read, "themes");
+  return (values.preferences as Notification[]).map((p) => {
+    const theme = themes.find((t) => t.theme === p.communication_theme);
+    const channel = theme ? list(theme, "channels").find((c) => c.channel === p.delivery_channel) : undefined;
+    return { ...p, value: channel && typeof channel.enabled === "boolean" ? channel.enabled : undefined };
+  });
+}
+
 /** The host's driver id: /api/me's driver.id. */
 async function driverId(call: Caller): Promise<string> {
   const me = await get(call, "/api/me");
@@ -421,7 +439,8 @@ interface ItemList {
   fields(item: Record<string, unknown>): Values;
   /** Turo's answer: the new item (questions, feature lines) or the whole list (extras). */
   add(ctx: Ctx, values: Values): Promise<unknown>;
-  update(ctx: Ctx, itemId: string, values: Values): Promise<void>;
+  /** `values` is the whole item as it should be; `changed` the keys asked for. */
+  update(ctx: Ctx, itemId: string, values: Values, changed: string[]): Promise<void>;
   remove(ctx: Ctx, itemId: string): Promise<void>;
 }
 
@@ -463,8 +482,13 @@ const LISTS: Record<string, ItemList> = {
       for (const key of EXTRA_KEYS) form[key] = str(values[key], key);
       return send(call, { method: "POST", path: "/api/your_car/extras", form });
     },
-    // A query string and no body, as Turo's own page sends it.
-    async update({ call }, itemId, values) {
+    // A query string and no body, as Turo's own page sends it. Turning one on
+    // or off alone uses the call Turo's own toggle makes.
+    async update({ call }, itemId, values, changed) {
+      if (changed.length === 1 && changed[0] === "enabled") {
+        await send(call, { method: "PATCH", path: `/api/your_car/extras/${enc(itemId)}?enabled=${values.enabled === true}` });
+        return;
+      }
       await send(call, { method: "PUT", path: `/api/your_car/extras/${enc(itemId)}?${extraQuery(values)}` });
     },
     async remove({ call }, itemId) {
@@ -567,7 +591,7 @@ async function runItem(kind: string, action: string, ctx: Ctx): Promise<SettingO
     const changes = { ...ctx.values };
     delete changes[spec.idKey];
     const merged = { ...was, ...only(changes, keys) };
-    await spec.update(ctx, wanted, merged);
+    await spec.update(ctx, wanted, merged, Object.keys(changes));
     const after = (await spec.read(ctx)).items;
     return {
       ok: true,
@@ -630,9 +654,13 @@ export async function runSetting(payload: SettingPayload, call: Caller): Promise
     // made once the read shows it; the restore is kept either way, in case
     // part of it took.
     const missed = spec.readBack ? notTaken(asked, spec.readBack(after, asked)) : [];
+    // For a trip preference, the name it was sent as: a display text this
+    // turned into a name Turo does not use shows up here, to be fixed.
+    const sent = operation === "trip_preferences" ? tripPreferences(asked) : asked;
+    const said = missed.map((key) => (sent[key] !== asked[key] ? `${key} (sent as ${String(sent[key])})` : key));
     return {
       ok: missed.length === 0,
-      result: missed.length ? `Turo accepted the write but did not change ${missed.join(", ")}` : `${operation} changed`,
+      result: missed.length ? `Turo accepted the write but did not change ${said.join(", ")}` : `${operation} changed`,
       detail: { before: current, after, restore },
     };
   } catch (error) {

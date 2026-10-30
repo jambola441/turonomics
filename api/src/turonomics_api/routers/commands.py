@@ -55,8 +55,9 @@ DbSession = Annotated[Session, Depends(get_session)]
 KINDS = frozenset({"pull", "file", "tolls"})
 MESSAGE = "message"
 TURO = "turo"
-# The first extension that knows the Turo setting operations.
-TURO_MIN_VERSION = (1, 21, 0)
+# The first extension that knows every Turo operation the API can name:
+# 1.22.0 added calendar prices. One older would refuse the newer ones.
+TURO_MIN_VERSION = (1, 22, 0)
 # The first extension that can send a message. An older one would claim the
 # command, fail it with "this version cannot message", and leave the draft
 # failed for no reason; it is never handed one.

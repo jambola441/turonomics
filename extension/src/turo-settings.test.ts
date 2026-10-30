@@ -82,8 +82,9 @@ test("an operation not on the list runs nothing", async () => {
   assert.equal(turo.calls.length, 0, "not even a read");
 });
 
-test("the list has no prices, blocked days, reservations, money or messages", () => {
-  for (const op of OPERATIONS) assert.doesNotMatch(op, /price|pricing|unavailab|reserv|reimburs|refund|message|review|cancel|delete_listing/);
+test("the list has no blocked days, reservations, money or messages", () => {
+  // Prices are in, by the operator's decision; turo-pricing.test.ts covers them.
+  for (const op of OPERATIONS) assert.doesNotMatch(op, /unavailab|reserv|reimburs|refund|message|review|cancel|delete_listing/);
 });
 
 test("a car's setting needs the car", async () => {

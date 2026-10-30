@@ -59,7 +59,7 @@ def main() -> int:
     )
     failures: list[str] = []
     try:
-        _wait_for(f"{API}/api/fleet")
+        _wait_for(f"{API}/api/commands")
         _wait_for(f"{SITE}/fleet/")
 
         with sync_playwright() as pw:
@@ -120,6 +120,11 @@ def main() -> int:
                     here.count() == 1 and here.inner_text().lower() == current
                     if current else here.count() == 0)
 
+            # Where every car is and who has it: the page asks for the token
+            # before it shows any of it.
+            check("the fleet page asks for the token before showing the cars",
+                  page.locator(".chip").count() == 0 and give_token())
+            page.wait_for_timeout(600)
             check("the fleet page has the same nav as the others", nav_ok("fleet"))
             # Tiles are blocked here, so none ever paints: the map says it is
             # loading rather than sitting there dark and empty.
@@ -190,6 +195,9 @@ def main() -> int:
                 and page.locator("#grab").get_attribute("aria-expanded") == "true"
                 and page.locator(".task").count() >= 1,
             )
+
+            # The pages after this one test asking for the token themselves.
+            page.evaluate("localStorage.removeItem('turonomics.tolls.token')")
 
             # ---- the tolls page -------------------------------------------
             # Its own page on purpose: reconciling a statement is a monthly

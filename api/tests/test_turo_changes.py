@@ -25,7 +25,7 @@ from .conftest import requires_db
 pytestmark = requires_db
 
 AUTH = {"Authorization": "Bearer s3cret"}
-NEW = {**AUTH, "X-Extension-Version": "1.21.0"}
+NEW = {**AUTH, "X-Extension-Version": "1.22.0"}
 LISTING = "3218625"
 
 
@@ -46,7 +46,7 @@ def jolene(session) -> Vehicle:
     return car
 
 
-def _checked_in(session, version: str = "1.21.0", ago: timedelta = timedelta(hours=1)) -> None:
+def _checked_in(session, version: str = "1.22.0", ago: timedelta = timedelta(hours=1)) -> None:
     session.merge(ExtensionCheckin(id=1, seen_at=datetime.now(UTC) - ago, version=version))
     session.commit()
 
@@ -68,9 +68,11 @@ def data(client: Any, name: str, **arguments: Any) -> dict[str, Any]:
 def test_nothing_is_queued_for_an_extension_that_cannot_run_it(api_client, session, jolene) -> None:
     missing = call(api_client, "read_turo_setting", setting="guest_instructions", car="Jolene")
     assert missing["isError"] and "no browser extension" in missing["content"][0]["text"]
-    _checked_in(session, "1.20.0")
-    old = call(api_client, "read_turo_setting", setting="guest_instructions", car="Jolene")
-    assert old["isError"] and "1.21.0" in old["content"][0]["text"]
+    for version in ("1.20.0", "1.21.0"):
+        # 1.21.0 knows the settings but not prices, which it would refuse.
+        _checked_in(session, version)
+        old = call(api_client, "read_turo_setting", setting="guest_instructions", car="Jolene")
+        assert old["isError"] and "1.22.0" in old["content"][0]["text"]
     assert session.query(ExtensionCommand).count() == 0
 
 
@@ -89,7 +91,7 @@ def test_a_change_names_the_operation_the_listing_and_the_values(
 
 
 @pytest.mark.parametrize(("arguments", "said"), [
-    ({"setting": "prices", "car": "Jolene", "values": {"x": 1}}, "setting is one of"),
+    ({"setting": "blocked_days", "car": "Jolene", "values": {"x": 1}}, "setting is one of"),
     ({"setting": "guest_instructions", "car": "Nobody", "values": {"a": 1}}, "no car called"),
     ({"setting": "guest_instructions", "values": {"a": 1}}, "which car"),
     ({"setting": "guest_instructions", "car": "Jolene", "values": {}}, "nothing to change"),
@@ -130,7 +132,7 @@ def test_the_values_go_only_to_the_extension_that_claims_it(api_client, session,
     public = api_client.get("/api/commands").text
     assert "4321" not in public and "guest_instructions" in public
     old = api_client.post("/api/commands/claim",
-                          headers={**AUTH, "X-Extension-Version": "1.20.0"})
+                          headers={**AUTH, "X-Extension-Version": "1.21.0"})
     assert old.status_code == 204, "an older extension would not know the operation"
     claimed = api_client.post("/api/commands/claim", headers=NEW).json()
     assert claimed["kind"] == "turo"
@@ -206,3 +208,27 @@ def test_the_tool_waits_for_a_listening_extension_and_answers_with_its_report(
     out = data(api_client, "read_turo_setting", setting="sms")
     worker.join()
     assert out["state"] == "done" and out["current"] == {"sms": True}
+
+
+def test_a_price_change_names_its_dates_for_the_extension_to_check(
+    api_client, session, jolene
+) -> None:
+    _checked_in(session)
+    prices = [{"date": "2027-05-01", "amount": 95}]
+    data(api_client, "change_turo_setting", setting="prices", car="Jolene",
+         values={"prices": prices, "automatic": ["2027-05-02"]})
+    payload = session.query(ExtensionCommand).one().payload
+    assert payload == {"operation": "prices", "mode": "write", "vehicle_id": LISTING,
+                       "values": {"prices": prices, "automatic": ["2027-05-02"]}}
+
+
+def test_the_calendar_read_takes_a_range_and_prices_are_not_a_read(
+    api_client, session, jolene
+) -> None:
+    _checked_in(session)
+    data(api_client, "read_turo_setting", setting="price_calendar", car="Jolene",
+         values={"startDate": "2026-12-01", "days": 30})
+    assert session.query(ExtensionCommand).one().payload["values"] == {
+        "startDate": "2026-12-01", "days": 30}
+    refused = call(api_client, "read_turo_setting", setting="prices", car="Jolene")
+    assert refused["isError"]

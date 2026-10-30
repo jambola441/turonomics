@@ -11,9 +11,11 @@ reports before and after with the values that would put it back. That report
 is kept on the command, so the commands table is the log of every change, and
 undoing one replays its restore values as a new change.
 
-What is here is the part the operator's rule allows directly: settings a
-change to which can be reversed and that no guest books against. Prices,
-blocked days, and anything that cannot be taken back are not.
+What is here is what the operator chose to allow directly: settings a change
+to which can be reversed, and calendar prices, set on dates no reservation
+touches and within Turo's own bounds (the extension checks both against the
+live calendar). Blocked days, and anything that cannot be taken back, are
+not.
 """
 
 from __future__ import annotations
@@ -88,6 +90,21 @@ SETTINGS: dict[str, Setting] = {
     "feature_add": Setting(CAR, "Add a feature line. values: feature.", readable=False),
     "feature_update": Setting(CAR, "Change one. values: featureId, feature.", readable=False),
     "feature_remove": Setting(CAR, "Remove one. values: featureId.", readable=False),
+    "price_calendar": Setting(CAR, (
+        "The car's calendar, a day per row: price and source (OWNER, the host's; DYNAMIC, "
+        "Turo's automatic), whether it is booked, blocked or editable, Turo's min and max, "
+        "the price Turo calls high for the day (overpriced), and Turo's automatic price "
+        "(automatic, next 90 days). Read only. values: startDate (YYYY-MM-DD, default "
+        "today), days (default 60, at most 120).")),
+    "market": Setting(CAR, (
+        "Comparable cars near this one by month: median, weekday and weekend prices, how "
+        "many there are and how booked (utilization_percent). Read only.")),
+    "prices": Setting(CAR, (
+        "Set calendar prices. values: prices, a list of {date: YYYY-MM-DD, amount: whole "
+        "dollars}, and/or automatic, a list of dates to give back to Turo's automatic "
+        "price. Refused whole, naming the dates, if any is booked, past, over a year out, "
+        "or outside Turo's min and max; each date's outcome is reported."),
+        readable=False),
     "business_hours": Setting(ACCOUNT, (
         "When guests can pick up and return. values: alwaysAvailable and/or week, the "
         "whole week as read shows it.")),

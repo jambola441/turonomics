@@ -16,6 +16,8 @@
  * against an injected caller so they can be tested without a browser.
  */
 
+import { PRICING_OPERATIONS, runPricing } from "./turo-pricing.js";
+
 /** One request to Turo, made from inside a Turo page with its cookies. */
 export interface TuroCall {
   method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
@@ -614,18 +616,29 @@ async function runItem(kind: string, action: string, ctx: Ctx): Promise<SettingO
 
 /** Every operation the API may name, for the API's list to be checked against. */
 export const OPERATIONS: readonly string[] = [
+  ...PRICING_OPERATIONS,
   ...Object.keys(WHOLE),
   ...Object.values(LISTS).map((l) => l.setting),
   ...Object.keys(LISTS).flatMap((k) => [`${k}_add`, `${k}_update`, `${k}_remove`]),
 ];
 
-export async function runSetting(payload: SettingPayload, call: Caller): Promise<SettingOutcome> {
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+export async function runSetting(
+  payload: SettingPayload,
+  call: Caller,
+  wait: (ms: number) => Promise<void> = sleep
+): Promise<SettingOutcome> {
   const operation = typeof payload.operation === "string" ? payload.operation : "";
   const mode = payload.mode === "write" ? "write" : "read";
   const values = (payload.values && typeof payload.values === "object" ? payload.values : {}) as Values;
   const vehicle = typeof payload.vehicle_id === "string" || typeof payload.vehicle_id === "number" ? String(payload.vehicle_id) : "";
   const ctx: Ctx = { vehicle, values, call };
   try {
+    if ((PRICING_OPERATIONS as readonly string[]).includes(operation)) {
+      if (!/^\d+$/.test(vehicle)) return { ok: false, result: "no Turo vehicle id for this car" };
+      return await runPricing(operation, mode, vehicle, values, call, wait);
+    }
     const whole = WHOLE[operation];
     const listed = Object.entries(LISTS).find(([, l]) => l.setting === operation);
     const item = /^(extra|faq|feature)_(add|update|remove)$/.exec(operation);

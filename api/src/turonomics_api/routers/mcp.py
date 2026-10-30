@@ -81,7 +81,12 @@ INSTRUCTIONS = (
     "read_turo_setting and change_turo_setting read and change Turo's own listing and "
     "account settings (guest instructions, description, extras, trip rules, business "
     "hours and the like) through the extension; every change reports before and after "
-    "and undo_turo_change puts it back. Read a setting before changing it."
+    "and undo_turo_change puts it back. Read a setting before changing it. To price the "
+    "calendar: read price_calendar (Turo's automatic price, its bounds, what is booked) "
+    "and market (comparable cars by month), look at past demand with find_trips, then "
+    "set prices with change_turo_setting setting=prices; a date set back with automatic "
+    "follows Turo's own pricing again. Prices are whole dollars and only on dates no "
+    "reservation touches."
 )
 
 
@@ -518,7 +523,10 @@ def _turo(session: Session, setting: Any, mode: str, car: Any,
 
 
 def tool_read_turo_setting(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
-    return _turo(session, args.get("setting"), "read", args.get("car"), {})
+    values = args.get("values") or {}
+    if not isinstance(values, dict):
+        raise _ToolError("values is an object, for a read that takes some (price_calendar)")
+    return _turo(session, args.get("setting"), "read", args.get("car"), values)
 
 
 def tool_change_turo_setting(
@@ -747,6 +755,8 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
         "inputSchema": _schema({
             "setting": {"type": "string"},
             "car": {"type": "string", "description": "The car's nickname, for a car's setting."},
+            "values": {"type": "object",
+                       "description": "For price_calendar: startDate and days."},
         }, ["setting"]),
     }),
     "change_turo_setting": (tool_change_turo_setting, {
@@ -755,7 +765,7 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
             "Change one of Turo's listing or account settings through the operator's browser "
             "extension. It reads the setting, writes the values given, reads it back and "
             "returns before and after; undo_turo_change puts it back. Read it first. "
-            "Settings and their values: " + _setting_list() + " Prices, blocked days, "
+            "Settings and their values: " + _setting_list() + " Blocked days, "
             "reservations, money, reviews and messages are not here."
         ),
         "inputSchema": _schema({

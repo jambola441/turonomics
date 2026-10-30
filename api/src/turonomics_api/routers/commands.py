@@ -11,6 +11,9 @@ The kinds:
 * ``tolls`` — read E-ZPass.
 * ``message`` — send an approved message to a rental's guest. Never queued
   here directly: only Send on an approved draft queues one (routers/messages).
+* ``turo`` — change one of Turo's listing or account settings, an operation
+  the extension knows by name, and report it before and after. Queued only by
+  the MCP endpoint (routers/turo_changes), never here.
 
 What keeps this from being a way to bill a guest twice:
 
@@ -28,7 +31,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from pydantic import BaseModel
@@ -51,6 +54,9 @@ DbSession = Annotated[Session, Depends(get_session)]
 # E-ZPass: the phone has no E-ZPass session and the site has no E-ZPass password.
 KINDS = frozenset({"pull", "file", "tolls"})
 MESSAGE = "message"
+TURO = "turo"
+# The first extension that knows the Turo setting operations.
+TURO_MIN_VERSION = (1, 21, 0)
 # The first extension that can send a message. An older one would claim the
 # command, fail it with "this version cannot message", and leave the draft
 # failed for no reason; it is never handed one.
@@ -86,6 +92,11 @@ class CommandOut(BaseModel):
     # For a message, given only to the extension that claims it: the text to
     # send. Never in the public list.
     message: str | None = None
+    # For a Turo change: the operation's name, in the list too, and its
+    # values, given only to the extension that claims it (guest instructions
+    # can hold a lockbox code).
+    operation: str | None = None
+    payload: dict[str, Any] | None = None
 
 
 class CommandsResponse(BaseModel):
@@ -101,6 +112,8 @@ class CommandsResponse(BaseModel):
 class DoneIn(BaseModel):
     ok: bool
     result: str
+    # For a Turo change: before, after and how to put it back.
+    detail: dict[str, Any] | None = None
 
 
 def _out(command: ExtensionCommand) -> CommandOut:
@@ -116,6 +129,7 @@ def _out(command: ExtensionCommand) -> CommandOut:
         claimed_at=command.claimed_at,
         finished_at=command.finished_at,
         result=command.result,
+        operation=str(command.payload.get("operation")) if command.payload else None,
     )
 
 
@@ -147,6 +161,8 @@ def _abandon_stale(session: Session, now: datetime) -> None:
             else "the browser never reported back — check the thread on Turo before "
             "sending this again"
             if command.kind == MESSAGE
+            else "the browser never reported back — read the setting before changing it again"
+            if command.kind == TURO
             else "the browser never reported back"
         )
         if command.kind == MESSAGE:
@@ -188,6 +204,8 @@ def queue_command(
         raise HTTPException(
             status_code=422, detail="a message is sent with Send on its approved draft"
         )
+    if payload.kind == TURO:
+        raise HTTPException(status_code=422, detail="a Turo change is made through the MCP tools")
     if payload.kind not in KINDS:
         raise HTTPException(status_code=422, detail=f"no such command: {payload.kind}")
     if payload.kind == "file":
@@ -263,6 +281,8 @@ def claim(
     query = select(ExtensionCommand).where(ExtensionCommand.state == QUEUED)
     if not version_at_least(x_extension_version, MESSAGE_MIN_VERSION):
         query = query.where(ExtensionCommand.kind != MESSAGE)
+    if not version_at_least(x_extension_version, TURO_MIN_VERSION):
+        query = query.where(ExtensionCommand.kind != TURO)
     command = session.scalar(
         query.order_by(ExtensionCommand.requested_at).limit(1).with_for_update(skip_locked=True)
     )
@@ -275,6 +295,8 @@ def claim(
     if command.kind == MESSAGE:
         draft = _draft_for(session, command)
         out.message = draft.body if draft is not None else None
+    if command.kind == TURO:
+        out.payload = command.payload
     session.commit()
     log.info("command %s claimed: %s", command.id, command.kind)
     return out
@@ -299,6 +321,8 @@ def done(
     command.state = DONE if payload.ok else FAILED
     command.finished_at = datetime.now(UTC)
     command.result = payload.result[:2000]
+    if command.kind == TURO and payload.detail is not None:
+        command.detail = payload.detail
     if command.kind == MESSAGE:
         draft = _draft_for(session, command)
         if draft is not None:

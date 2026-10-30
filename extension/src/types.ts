@@ -146,6 +146,8 @@ export interface SiteCommand {
   guest_name: string | null;
   /** For a message: the approved text, given only to the extension claiming it. */
   message?: string | null;
+  /** For a Turo setting: which operation, for which car, with what. */
+  payload?: Record<string, unknown> | null;
 }
 
 export interface FileInvoiceResult {

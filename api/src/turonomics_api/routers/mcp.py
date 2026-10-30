@@ -18,8 +18,10 @@ books. The operator's rule: a write that can be reversed is fine, and one that
 cannot waits for a person.
 
 * Done directly: confirming which side of the street a car is on, ticking a
-  task done or back, marking Turo's charge on a rental checked, and asking the
-  extension to pull from Turo or read E-ZPass (both only read).
+  task done or back, marking Turo's charge on a rental checked, asking the
+  extension to pull from Turo or read E-ZPass (both only read), and changing
+  Turo's own listing and account settings that no guest books against, each
+  change recorded with what it replaced so it can be put back.
 * Proposed, never done: a message to a guest is a draft until the operator
   presses Send, and a toll filing is a proposal until they press File, on the
   site. Both ask something of a guest that cannot be taken back. There is no
@@ -72,7 +74,11 @@ INSTRUCTIONS = (
     "filed until they press File. fleet shows each car, where it is parked and its "
     "tasks; confirm_parking, complete_task, reopen_task and mark_charge_checked change "
     "the books directly and can be undone. pull_from_turo and read_ezpass ask the "
-    "operator's browser extension to refresh the data; they only read."
+    "operator's browser extension to refresh the data; they only read. "
+    "read_turo_setting and change_turo_setting read and change Turo's own listing and "
+    "account settings (guest instructions, description, extras, trip rules, business "
+    "hours and the like) through the extension; every change reports before and after "
+    "and undo_turo_change puts it back. Read a setting before changing it."
 )
 
 
@@ -443,6 +449,60 @@ def tool_filing_proposals(session: Session, auth: str, args: dict[str, Any]) -> 
             "more": max(len(proposals) - limit, 0)}
 
 
+def _turo(session: Session, setting: Any, mode: str, car: Any,
+          values: Any) -> dict[str, Any]:
+    from turonomics_api.routers import turo_changes
+
+    if not isinstance(setting, str):
+        raise _ToolError("setting names one; turo_changes' description lists them")
+    if car is not None and not isinstance(car, str):
+        raise _ToolError("car is a nickname")
+    try:
+        command = turo_changes.queue(session, setting, mode, car, values or {})
+    except turo_changes.ChangeError as exc:
+        raise _ToolError(str(exc)) from exc
+    turo_changes.wait(session, command)
+    return turo_changes.view(command)
+
+
+def tool_read_turo_setting(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    return _turo(session, args.get("setting"), "read", args.get("car"), {})
+
+
+def tool_change_turo_setting(
+    session: Session, auth: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    values = args.get("values")
+    if not isinstance(values, dict):
+        raise _ToolError("values is an object of what to change")
+    return _turo(session, args.get("setting"), "write", args.get("car"), values)
+
+
+def tool_undo_turo_change(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers import turo_changes
+
+    change = _uuid(args.get("change_id"), "change_id")
+    try:
+        command = turo_changes.undo(session, change)
+    except turo_changes.ChangeError as exc:
+        raise _ToolError(str(exc)) from exc
+    turo_changes.wait(session, command)
+    return turo_changes.view(command)
+
+
+def tool_turo_changes(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers import turo_changes
+
+    limit = _limit(args.get("limit"), 20, 100)
+    return {"changes": [turo_changes.view(c) for c in turo_changes.recent(session, limit)]}
+
+
+def _setting_list() -> str:
+    from turonomics_api.routers.turo_changes import SETTINGS
+
+    return " ".join(f"{name} ({spec.scope}): {spec.about}" for name, spec in SETTINGS.items())
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     schema: dict[str, Any] = {"type": "object", "properties": properties,
                               "additionalProperties": False}
@@ -624,6 +684,51 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
         "description": "Ask the browser extension to read E-ZPass crossings. Only reads.",
         "inputSchema": _schema({}),
         "annotations": WRITES,
+    }),
+    "read_turo_setting": (tool_read_turo_setting, {
+        "title": "Read a Turo setting",
+        "description": (
+            "Read one of Turo's listing or account settings through the operator's browser "
+            "extension, as Turo has it now, with its options where Turo gives them. Takes "
+            "a few seconds. Settings: " + _setting_list()
+        ),
+        "inputSchema": _schema({
+            "setting": {"type": "string"},
+            "car": {"type": "string", "description": "The car's nickname, for a car's setting."},
+        }, ["setting"]),
+    }),
+    "change_turo_setting": (tool_change_turo_setting, {
+        "title": "Change a Turo setting",
+        "description": (
+            "Change one of Turo's listing or account settings through the operator's browser "
+            "extension. It reads the setting, writes the values given, reads it back and "
+            "returns before and after; undo_turo_change puts it back. Read it first. "
+            "Settings and their values: " + _setting_list() + " Prices, blocked days, "
+            "reservations, money, reviews and messages are not here."
+        ),
+        "inputSchema": _schema({
+            "setting": {"type": "string"},
+            "car": {"type": "string", "description": "The car's nickname, for a car's setting."},
+            "values": {"type": "object", "description": "What to change, as the setting says."},
+        }, ["setting", "values"]),
+        "annotations": {**WRITES, "idempotentHint": False},
+    }),
+    "undo_turo_change": (tool_undo_turo_change, {
+        "title": "Undo a Turo change",
+        "description": (
+            "Put a setting back as it was before a change, from the values the extension "
+            "recorded when it made it. The undo is itself a change, and can be undone."
+        ),
+        "inputSchema": _schema({"change_id": {"type": "string"}}, ["change_id"]),
+        "annotations": {**WRITES, "idempotentHint": False},
+    }),
+    "turo_changes": (tool_turo_changes, {
+        "title": "Turo changes made",
+        "description": (
+            "Turo setting reads and changes, newest first: what was asked, its state, "
+            "before and after, and whether it can be undone."
+        ),
+        "inputSchema": _schema({"limit": _LIMIT}),
     }),
     "propose_filing": (tool_propose_filing, {
         "title": "Propose filing a rental's tolls",

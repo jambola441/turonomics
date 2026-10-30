@@ -49,6 +49,8 @@ import {
   type Embedded,
   type SeenCall,
 } from "./turo.js";
+import { runSetting } from "./turo-settings.js";
+import type { TuroCall, TuroReply } from "./turo-settings.js";
 import type {
   Draft,
   FileInvoiceResult,
@@ -1214,9 +1216,20 @@ async function runCommands(): Promise<void> {
   }
 }
 
-async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: string }> {
+async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: string; detail?: unknown }> {
   if (command.kind === "tolls") return runTollsCommand();
   try {
+    if (command.kind === "turo") {
+      // Only an operation turo-settings.ts knows is run; it builds every
+      // request itself from the values, so the command names, never addresses.
+      const payload = command.payload ?? {};
+      return await withTuroTab(undefined, (tabId) =>
+        runSetting(payload, async (call) => {
+          const [injected] = await chrome.scripting.executeScript({ target: { tabId }, func: turoRequestInPage, args: [call] });
+          return (injected?.result as TuroReply | undefined) ?? { status: 0, body: null };
+        })
+      );
+    }
     if (command.kind === "pull") {
       return { ok: true, result: describePull(await withTuroTab(undefined, pullTuro)) };
     }
@@ -1245,6 +1258,37 @@ async function runCommand(command: SiteCommand): Promise<{ ok: boolean; result: 
     return { ok: false, result: `this version of the extension cannot ${command.kind}` };
   } catch (error) {
     return { ok: false, result: error instanceof Error ? error.message : String(error) };
+  }
+}
+
+/**
+ * One request to Turo from inside a Turo page, with its cookies, as Turo's
+ * own pages make them. Runs in the page and can import nothing.
+ */
+async function turoRequestInPage(call: TuroCall): Promise<TuroReply> {
+  try {
+    const init: RequestInit = { method: call.method, credentials: "include", headers: { Accept: "application/json" } };
+    if (call.json !== undefined) {
+      init.body = JSON.stringify(call.json);
+      init.headers = { ...init.headers, "Content-Type": "application/json" };
+    } else if (call.form) {
+      const form = new URLSearchParams();
+      for (const [key, value] of Object.entries(call.form)) {
+        for (const one of Array.isArray(value) ? value : [value]) form.append(key, one);
+      }
+      init.body = form;
+    }
+    const response = await fetch(call.path, init);
+    const text = await response.text();
+    let body: unknown = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = null;
+    }
+    return { status: response.status, body };
+  } catch {
+    return { status: 0, body: null };
   }
 }
 

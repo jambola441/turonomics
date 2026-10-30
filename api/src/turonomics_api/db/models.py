@@ -27,6 +27,7 @@ from __future__ import annotations
 import enum
 import uuid
 from datetime import date, datetime, time
+from typing import Any
 
 from geoalchemy2 import Geography
 from sqlalchemy import (
@@ -883,6 +884,12 @@ class ExtensionCommand(Base):
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # What the extension said it did, in the same one line its popup shows.
     result: Mapped[str | None] = mapped_column(Text)
+    # A Turo setting change: {"operation", "vehicle_id", "values"}. The
+    # extension holds the list of operations; this only names one.
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # What the extension reported for it: the setting before and after, and
+    # the values that would put it back.
+    detail: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
     trip: Mapped[Trip | None] = relationship()
 

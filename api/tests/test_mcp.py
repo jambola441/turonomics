@@ -169,7 +169,8 @@ def test_what_is_not_offered_is_said_so(api_client, token) -> None:
 
 
 WRITERS = {"draft_message", "propose_filing", "confirm_parking", "complete_task",
-           "reopen_task", "mark_charge_checked", "pull_from_turo", "read_ezpass"}
+           "reopen_task", "mark_charge_checked", "pull_from_turo", "read_ezpass",
+           "change_turo_setting", "undo_turo_change"}
 
 
 @requires_db
@@ -177,7 +178,8 @@ def test_only_the_writing_tools_are_listed_as_writing(api_client, token) -> None
     tools = rpc(api_client, "tools/list").json()["result"]["tools"]
     assert {t["name"] for t in tools} == {
         "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status",
-        "message_drafts", "fleet", "filing_proposals"} | WRITERS
+        "message_drafts", "fleet", "filing_proposals", "read_turo_setting",
+        "turo_changes"} | WRITERS
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITERS)
         # Each write is undone by another call or only waits for a person.

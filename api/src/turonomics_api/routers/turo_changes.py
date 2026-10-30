@@ -202,7 +202,9 @@ def view(command: ExtensionCommand) -> dict[str, Any]:
     for key in ("before", "after", "current", "options"):
         if key in detail:
             out[key] = detail[key]
-    out["can_undo"] = bool(detail.get("restore")) and command.state == DONE
+    # A change reported failed can be partly made (some dates priced, not
+    # others), so it can be undone too: the restore covers everything asked.
+    out["can_undo"] = bool(detail.get("restore")) and command.state in (DONE, FAILED)
     if command.state == QUEUED:
         out["next"] = ("The extension has not picked it up yet; turo_changes shows it "
                        "when it does.")
@@ -214,8 +216,8 @@ def undo(session: Session, change_id: uuid.UUID) -> ExtensionCommand:
     if command is None or command.kind != TURO:
         raise ChangeError("no Turo change with that id")
     restore = (command.detail or {}).get("restore")
-    if command.state != DONE or not restore:
-        raise ChangeError("that change cannot be undone: it did not complete, or it was a read")
+    if command.state not in (DONE, FAILED) or not restore:
+        raise ChangeError("that change cannot be undone: it is still running, or it was a read")
     payload = command.payload or {}
     vehicle = payload.get("vehicle_id")
     values = restore.get("values") or {}

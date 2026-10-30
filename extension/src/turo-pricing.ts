@@ -29,8 +29,13 @@ type Money = { amount?: unknown } | null | undefined;
 
 export const PRICING_OPERATIONS = ["price_calendar", "market", "prices"] as const;
 
-/** At most this many days in one calendar read. */
+/** At most this many days a price_calendar read returns. */
 const MAX_DAYS = 120;
+/** Turo answers a calendar read of more than about 60 days with a 400. */
+const PAGE_DAYS = 60;
+/** Turo's status says SUCCESS before its calendar shows the new price. */
+const CATCH_UP_TRIES = 6;
+const CATCH_UP_MS = 2000;
 /** How far ahead a price may be set. */
 const MAX_AHEAD_DAYS = 366;
 
@@ -224,15 +229,18 @@ function span(dates: string[]): { start: string; days: number } {
   return { start: sorted[0], days: daysBetween(sorted[0], sorted[sorted.length - 1]) + 1 };
 }
 
-async function readSpan(call: Caller, vehicle: string, dates: string[]): Promise<Map<string, CalendarDay>> {
-  const { start, days } = span(dates);
-  const out = new Map<string, CalendarDay>();
-  // In pages, for a change that spans more than one calendar read.
-  for (let offset = 0; offset < days; offset += MAX_DAYS) {
-    const page = await readCalendar(call, vehicle, addDays(start, offset), Math.min(MAX_DAYS, days - offset));
-    for (const day of page) out.set(day.date, day);
+/** The calendar from `start` for `days`, in pages Turo will answer. */
+async function readDays(call: Caller, vehicle: string, start: string, days: number): Promise<CalendarDay[]> {
+  const out: CalendarDay[] = [];
+  for (let offset = 0; offset < days; offset += PAGE_DAYS) {
+    out.push(...(await readCalendar(call, vehicle, addDays(start, offset), Math.min(PAGE_DAYS, days - offset))));
   }
   return out;
+}
+
+async function readSpan(call: Caller, vehicle: string, dates: string[]): Promise<Map<string, CalendarDay>> {
+  const { start, days } = span(dates);
+  return new Map((await readDays(call, vehicle, start, days)).map((day) => [day.date, day]));
 }
 
 export async function runPricing(
@@ -249,7 +257,7 @@ export async function runPricing(
       if (mode === "write") return { ok: false, result: "price_calendar is read; prices changes it" };
       const start = typeof values.startDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(values.startDate) ? values.startDate : today;
       const days = Math.max(1, Math.min(MAX_DAYS, Number(values.days) || 60));
-      const calendar = await readCalendar(call, vehicle, start, days);
+      const calendar = await readDays(call, vehicle, start, days);
       const automatic = await readAutomatic(call, vehicle);
       for (const day of calendar) if (automatic.has(day.date)) day.automatic = automatic.get(day.date);
       const booked = calendar.filter((d) => d.booked).length;
@@ -292,18 +300,24 @@ export async function runPricing(
       for (const [date, status] of await settle(call, wait, vehicle, String(requestId), true)) outcomes.set(date, status);
     }
 
-    const after = await readSpan(call, vehicle, dates);
+    const notShown = (after: Map<string, CalendarDay>): string[] => [
+      ...[...ask.fixed].filter(([date, value]) => after.get(date)?.price !== value || after.get(date)?.source !== "OWNER").map(([date]) => date),
+      ...ask.automatic.filter((date) => after.get(date)?.source !== "DYNAMIC"),
+    ];
+    // Read back until the calendar shows what Turo's status says it took: it
+    // lags the status by seconds. A date Turo failed is not waited for.
+    const took = (date: string) => ["SUCCESS", "CEILING_OVERRIDE", "FLOOR_OVERRIDE"].includes(outcomes.get(date) ?? "");
+    let after = await readSpan(call, vehicle, dates);
+    for (let tries = 1; tries < CATCH_UP_TRIES && notShown(after).some(took); tries++) {
+      await wait(CATCH_UP_MS);
+      after = await readSpan(call, vehicle, dates);
+    }
     const shown = (map: Map<string, CalendarDay>) =>
       Object.fromEntries(dates.sort().map((d) => [d, { price: map.get(d)?.price ?? null, source: map.get(d)?.source ?? null }]));
-    const missed: string[] = [];
-    for (const [date, value] of ask.fixed) {
-      const now = after.get(date);
-      const status = outcomes.get(date) ?? "no status";
-      if (now?.price !== value || now?.source !== "OWNER") missed.push(`${date} (${status}${now?.price != null ? `, now ${now.price}` : ""})`);
-    }
-    for (const date of ask.automatic) {
-      if (after.get(date)?.source !== "DYNAMIC") missed.push(`${date} (${outcomes.get(date) ?? "no status"})`);
-    }
+    const missed = notShown(after).map((date) => {
+      const now = after.get(date)?.price;
+      return `${date} (${outcomes.get(date) ?? "no status"}${now != null ? `, now ${now}` : ""})`;
+    });
     // What puts every asked date back, whether or not it took.
     const restore = {
       operation: "prices",

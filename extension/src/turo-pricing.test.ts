@@ -24,7 +24,7 @@ function day(n: number): string {
 
 interface Day { price: number; source: "OWNER" | "DYNAMIC"; booked: boolean }
 
-function fakeTuro(options: { fail?: string[] } = {}) {
+function fakeTuro(options: { fail?: string[]; lagReads?: number } = {}) {
   const calls: TuroCall[] = [];
   const days = new Map<string, Day>();
   for (let n = -5; n < 400; n++) days.set(day(n), { price: 60, source: "DYNAMIC", booked: false });
@@ -32,6 +32,9 @@ function fakeTuro(options: { fail?: string[] } = {}) {
   days.set(day(5), { price: 70, source: "DYNAMIC", booked: true });
   const requests = new Map<string, { date: string; dateStatus: string }[]>();
   let nextRequest = 1;
+  // The calendar as it was before the last write, shown for this many reads.
+  let stale: Map<string, Day> | null = null;
+  let staleReads = 0;
   const money = (amount: number) => ({ amount, currencyCode: "USD" });
 
   async function call(c: TuroCall): Promise<TuroReply> {
@@ -39,12 +42,16 @@ function fakeTuro(options: { fail?: string[] } = {}) {
     const path = c.path.split("?")[0];
     if (c.method === "POST" && path === "/api/fleet/calendar") {
       const body = c.json as { startDate: string; daysPerPage: number };
+      // Turo answers a long calendar read with a 400.
+      if (body.daysPerPage > 60) return { status: 400, body: null };
+      const shownDays = staleReads > 0 && stale ? stale : days;
+      if (staleReads > 0) staleReads--;
       const dailyData = [];
       for (let i = 0; i < body.daysPerPage; i++) {
         const d = new Date(`${body.startDate}T00:00:00Z`);
         d.setUTCDate(d.getUTCDate() + i);
         const date = d.toISOString().slice(0, 10);
-        const x = days.get(date) ?? { price: 60, source: "DYNAMIC", booked: false };
+        const x = shownDays.get(date) ?? { price: 60, source: "DYNAMIC", booked: false };
         dailyData.push({
           date,
           price: { price: money(x.price), source: x.source },
@@ -63,6 +70,10 @@ function fakeTuro(options: { fail?: string[] } = {}) {
     if (c.method === "PUT" && (path === "/api/fleet/pricing" || path === "/api/fleet/default-pricing")) {
       const body = c.json as { updateAmount?: number; vehicleDates: { dates: string[] }[] };
       const id = String(nextRequest++);
+      if (options.lagReads) {
+        stale = new Map([...days].map(([k, v]) => [k, { ...v }]));
+        staleReads = options.lagReads;
+      }
       const statuses = body.vehicleDates[0].dates.map((date) => {
         if (options.fail?.includes(date)) return { date, dateStatus: "FAILED" };
         const x = days.get(date) as Day;
@@ -154,6 +165,42 @@ test("a date Turo fails is named, and the rest are kept", async () => {
   assert.match(out.result, new RegExp(`1 of 2 dates changed; not: ${day(7)} \\(FAILED`));
   assert.equal(turo.days.get(day(6))?.price, 99);
   assert.ok(out.detail?.restore, "the date that took can still be put back");
+});
+
+test("a calendar slow to show the new prices is waited for, not reported failed", async () => {
+  const turo = fakeTuro({ lagReads: 2 });
+  const waits: number[] = [];
+  const out = await runSetting(
+    { operation: "prices", mode: "write", vehicle_id: CAR, values: { prices: [{ date: day(2), amount: 95 }] } },
+    turo.call, async (ms) => { waits.push(ms); }
+  );
+  assert.equal(out.ok, true, out.result);
+  assert.deepEqual((out.detail?.after as Record<string, { price: number }>)[day(2)].price, 95);
+  assert.ok(waits.filter((ms) => ms === 2000).length >= 2, "it waited for the calendar");
+});
+
+test("a date Turo failed is not waited for", async () => {
+  const turo = fakeTuro({ fail: [day(2)] });
+  const waits: number[] = [];
+  await runSetting(
+    { operation: "prices", mode: "write", vehicle_id: CAR, values: { prices: [{ date: day(2), amount: 95 }] } },
+    turo.call, async (ms) => { waits.push(ms); }
+  );
+  assert.equal(waits.filter((ms) => ms === 2000).length, 0);
+});
+
+test("a long calendar read is made in pages Turo answers", async () => {
+  const turo = fakeTuro();
+  const out = await runSetting({ operation: "price_calendar", mode: "read", vehicle_id: CAR, values: { days: 120 } }, turo.call, noWait);
+  assert.equal(out.ok, true, out.result);
+  assert.equal((out.detail?.current as unknown[]).length, 120);
+  const pages = turo.calls.filter((c) => c.path === "/api/fleet/calendar");
+  assert.ok(pages.every((c) => (c.json as { daysPerPage: number }).daysPerPage <= 60));
+  const wide = await runSetting(
+    { operation: "prices", mode: "write", vehicle_id: CAR, values: { prices: [{ date: day(2), amount: 95 }, { date: day(100), amount: 95 }] } },
+    turo.call, noWait
+  );
+  assert.equal(wide.ok, true, wide.result);
 });
 
 test("dates go back to Turo's automatic price", async () => {

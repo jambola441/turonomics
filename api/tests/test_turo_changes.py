@@ -166,14 +166,19 @@ def test_the_report_is_kept_and_undo_replays_its_restore(api_client, session, jo
     assert redo.payload["vehicle_id"] == LISTING and redo.payload["undoes"] == change["change_id"]
 
 
-def test_a_change_that_failed_or_a_read_cannot_be_undone(api_client, session, jolene) -> None:
+def test_a_change_reported_failed_can_be_undone_and_a_read_cannot(
+    api_client, session, jolene
+) -> None:
+    """Some dates of a price change can take while others do not; its restore
+    covers every date asked, so it is offered either way."""
     _checked_in(session)
     change = data(api_client, "change_turo_setting", setting="guest_instructions",
                   car="Jolene", values={"welcomeMessage": "Welcome!"})
     claimed = api_client.post("/api/commands/claim", headers=NEW).json()
     _report(api_client, claimed["id"], ok=False)
-    failed = call(api_client, "undo_turo_change", change_id=change["change_id"])
-    assert failed["isError"] and "cannot be undone" in failed["content"][0]["text"]
+    assert data(api_client, "turo_changes")["changes"][0]["can_undo"] is True
+    undo = data(api_client, "undo_turo_change", change_id=change["change_id"])
+    assert undo["values"] == {"welcomeMessage": "Hi"}
 
     read = data(api_client, "read_turo_setting", setting="sms")
     refused = call(api_client, "undo_turo_change", change_id=read["change_id"])

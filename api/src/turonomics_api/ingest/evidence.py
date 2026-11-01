@@ -72,6 +72,20 @@ class RoadLine:
     points: Sequence[tuple[float, float]]
 
 
+@dataclass(frozen=True)
+class WaterShape:
+    """Water inside an inset: a lake drawn filled, or a stretch of shore."""
+
+    # True for an outline wholly inside the query (a lake, a pond): filled.
+    # False for a shore of something bigger (a river, the harbour): a line.
+    area: bool
+    points: Sequence[tuple[float, float]]
+
+
+_WATER_FILL = "#dbeafe"
+_SHORE = "#93c5fd"
+
+
 # How each class of road is drawn: width in pixels and colour. Quiet greys, so
 # the blue track is what the eye finds and the roads only say where it is.
 _ROAD_STYLE = {
@@ -107,6 +121,8 @@ class Inset:
     # Roads inside the circle, drawn faintly beneath the track. Empty when none
     # could be fetched, and the inset is then exactly what it was without them.
     roads: Sequence[RoadLine] = ()
+    # Water inside the circle, under the roads. Empty when none could be had.
+    water: Sequence[WaterShape] = ()
     # For a charging zone (CRZ): its whole outline, cut to the circle when
     # drawn, and the sentence that replaces "tracker came within N m", which
     # means nothing for a zone. The marker is then where the drive went in.
@@ -292,6 +308,19 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
             for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in outline)
         )
         out.append(f'<polygon points="{drawn}" fill="#f3e8ff" stroke="none"/>')
+    # Water under the roads: lakes filled, the shores of rivers and the harbour
+    # as lines, which is how a bridge or a tunnel plaza reads as one.
+    for shape in inset.water:
+        drawn = " ".join(
+            f"{px:.1f},{py:.1f}"
+            for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in shape.points)
+        )
+        if shape.area:
+            out.append(f'<polygon points="{drawn}" fill="{_WATER_FILL}" stroke="{_SHORE}" '
+                       f'stroke-width="1"/>')
+        else:
+            out.append(f'<polyline points="{drawn}" fill="none" stroke="{_SHORE}" '
+                       f'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>')
     for kind in _ROAD_ORDER:
         width, colour = _ROAD_STYLE[kind]
         for road in inset.roads:
@@ -481,8 +510,10 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
             f'<text x="32" y="{top + 31}" font-size="10.5" fill="#6b7280">'
             f"The rest of the trip is not shown."
             + (
-                " Roads: \u00a9 OpenStreetMap contributors."
-                if any(inset.roads for inset in sheet.insets)
+                (" Roads and water: \u00a9 OpenStreetMap contributors."
+                 if any(inset.water for inset in sheet.insets)
+                 else " Roads: \u00a9 OpenStreetMap contributors.")
+                if any(inset.roads or inset.water for inset in sheet.insets)
                 else ""
             )
             + "</text>"

@@ -26,6 +26,7 @@ from turonomics_api.ingest.evidence import (
     EvidenceSheet,
     Inset,
     RoadLine,
+    WaterShape,
     _road_labels,
     evidence_svg,
 )
@@ -153,12 +154,54 @@ def test_a_good_answer_is_returned_and_the_asker_identifies_itself(monkeypatch) 
         seen.update(url=url, **kwargs)
         return _Response(200, BODY)
 
-    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(osm_roads, "_post", post)
     monkeypatch.setenv("OVERPASS_URL", "https://overpass.example/api")
     assert fetch_overpass(*AT, 1300) == BODY
     assert seen["url"] == "https://overpass.example/api"
     assert "Turonomics" in seen["headers"]["User-Agent"]
-    assert 'around:1300' in seen["data"]["data"]
+    query = seen["data"]["data"]
+    assert "around:1300" in query
+    assert "natural=water" in query and "natural=coastline" in query, "and the water"
+    assert re.search(r"out geom\([\d.-]+,[\d.-]+,[\d.-]+,[\d.-]+\);$", query), (
+        "cut to a box: a river's outline is hundreds of kilometres")
+
+
+def test_an_instance_that_cannot_be_reached_falls_back_to_another(monkeypatch) -> None:
+    """What happened in production: the main instance unreachable, every map bare."""
+    asked: list[str] = []
+
+    def post(url, **kwargs):
+        asked.append(url)
+        if len(asked) == 1:
+            raise httpx.ConnectError("[Errno 101] Network is unreachable")
+        return _Response(200, BODY)
+
+    monkeypatch.setattr(osm_roads, "_post", post)
+    monkeypatch.delenv("OVERPASS_URL", raising=False)
+    assert fetch_overpass(*AT, 1300) == BODY
+    assert asked == ["https://overpass-api.de/api/interpreter", osm_roads.FALLBACK_URLS[0]]
+
+
+def test_requests_go_over_ipv4(monkeypatch) -> None:
+    seen: dict[str, Any] = {}
+
+    class Client:
+        def __init__(self, transport):
+            seen["transport"] = transport
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def post(self, url, **kwargs):
+            return _Response(200, BODY)
+
+    monkeypatch.setattr(httpx, "Client", Client)
+    osm_roads._post("https://overpass.example/api", data={})
+    pool = seen["transport"]._pool
+    assert pool._local_address == "0.0.0.0"
 
 
 @pytest.mark.parametrize(
@@ -172,15 +215,22 @@ def test_a_good_answer_is_returned_and_the_asker_identifies_itself(monkeypatch) 
     ],
 )
 def test_anything_but_a_good_answer_is_none(monkeypatch, reply) -> None:
-    monkeypatch.setattr(httpx, "post", lambda *a, **k: reply)
+    asked: list[str] = []
+
+    def post(url, **kwargs):
+        asked.append(url)
+        return reply
+
+    monkeypatch.setattr(osm_roads, "_post", post)
     assert fetch_overpass(*AT, 1300) is None
+    assert len(asked) == 1 + len(osm_roads.FALLBACK_URLS), "every instance tried once"
 
 
 def test_a_service_that_cannot_be_reached_is_none_not_an_error(monkeypatch) -> None:
     def boom(*a, **k):
         raise httpx.ConnectTimeout("slow")
 
-    monkeypatch.setattr(httpx, "post", boom)
+    monkeypatch.setattr(osm_roads, "_post", boom)
     assert fetch_overpass(*AT, 1300) is None
 
 
@@ -396,4 +446,83 @@ def test_the_cache_key_is_the_plaza_not_the_filing(session) -> None:
     fetch = _Counting()
     add_roads(session, [_inset(times=[T0])], fetcher=fetch, now=T0)
     add_roads(session, [_inset(times=[T0 + td(days=40)])], fetcher=fetch, now=T0)
+    assert len(fetch.calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# Water
+# ---------------------------------------------------------------------------
+def _ring(radius_m: float) -> list[tuple[float, float]]:
+    step = radius_m * DEG
+    pts = [(VNB.lat + step, VNB.lon), (VNB.lat, VNB.lon + step / 0.757),
+           (VNB.lat - step, VNB.lon), (VNB.lat, VNB.lon - step / 0.757)]
+    return [*pts, pts[0]]
+
+
+def _water_way(points, tags=None, cut: int | None = None) -> dict:
+    geometry: list[Any] = [{"lat": lat, "lon": lon} for lat, lon in points]
+    if cut is not None:
+        geometry[cut] = None  # a point Overpass left out, outside the box
+    return {"type": "way", "id": 9, "tags": tags or {"natural": "water"}, "geometry": geometry}
+
+
+def test_a_lake_wholly_inside_is_an_area() -> None:
+    [shape] = osm_roads.compact_water({"elements": [_water_way(_ring(200))]})
+    assert shape["w"] == "area" and shape["g"][0] == shape["g"][-1]
+
+
+def test_a_river_cut_by_the_box_is_shore_split_at_the_cut() -> None:
+    river = _east_west(3000, 300) + _east_west(3000, -300)[::-1]
+    shapes = osm_roads.compact_water({"elements": [_water_way(river, cut=3)]})
+    assert [s["w"] for s in shapes] == ["shore", "shore"]
+    assert all(len(s["g"]) >= 2 for s in shapes)
+
+
+def test_a_river_relation_and_the_coastline_give_shores() -> None:
+    relation = {"type": "relation", "tags": {"natural": "water", "water": "river"},
+                "members": [{"type": "way", "role": "outer",
+                             "geometry": [{"lat": p[0], "lon": p[1]} for p in _east_west(3000, 300)]}]}
+    coast = _water_way(_east_west(3000, -300), tags={"natural": "coastline"})
+    shapes = osm_roads.compact_water({"elements": [relation, coast, _way("motorway", "X", _east_west(3000))]})
+    assert [s["w"] for s in shapes] == ["shore", "shore"], "and not the road"
+
+
+def test_water_is_drawn_under_the_roads_and_credited() -> None:
+    water = osm_roads.water_shapes(
+        osm_roads.compact_water({"elements": [_water_way(_ring(200)),
+                                              _water_way(_east_west(3000, 300), tags={"natural": "coastline"})]}),
+        AT, INSET_RADIUS_M)
+    svg = evidence_svg(_sheet(_inset(_lines(), water=water)))
+    minidom.parseString(svg)
+    assert svg.count('fill="#dbeafe"') == 1, "the lake, filled"
+    assert 'stroke="#93c5fd" stroke-width="1.8"' in svg, "the shore, a line"
+    assert svg.index("#dbeafe") < svg.index("#94a3b8"), "under the motorway"
+    assert "Roads and water: \u00a9 OpenStreetMap contributors" in svg
+
+
+def test_water_alone_is_drawn_and_credited() -> None:
+    water = [WaterShape(area=False, points=[(VNB.lat, VNB.lon - 0.01), (VNB.lat, VNB.lon + 0.01)])]
+    svg = evidence_svg(_sheet(_inset(water=water)))
+    assert "#93c5fd" in svg and "OpenStreetMap" in svg
+
+
+@requires_db
+def test_water_is_remembered_with_the_roads(session) -> None:
+    body = {"elements": [*BODY["elements"], _water_way(_ring(200))]}
+    fetch = _Counting(body=body)
+    first = add_roads(session, [_inset()], fetcher=fetch, now=T0)
+    assert first[0].water and first[0].roads
+    again = add_roads(session, [_inset()], fetcher=fetch, now=T0 + td(days=1))
+    assert again[0].water and len(fetch.calls) == 1
+
+
+@requires_db
+def test_a_cache_entry_from_before_water_is_fetched_again(session) -> None:
+    """Six months of road-only answers would otherwise keep the maps dry."""
+    plain = _inset()
+    session.add(MapCache(key=f"roads:{plain.lat:.5f},{plain.lon:.5f},1300",
+                         data={"ways": compact_ways(BODY)}, fetched_at=T0))
+    session.commit()
+    fetch = _Counting()
+    add_roads(session, [plain], fetcher=fetch, now=T0 + td(days=1))
     assert len(fetch.calls) == 1

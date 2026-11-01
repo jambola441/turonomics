@@ -130,3 +130,4 @@ def _no_real_map_service(monkeypatch):
     every CI run. A test that wants roads patches this itself.
     """
     monkeypatch.setattr("turonomics_api.ingest.osm_roads.fetch_overpass", lambda *a: None)
+    monkeypatch.setattr("turonomics_api.ingest.basemap.fetch_tile", lambda *a: None)

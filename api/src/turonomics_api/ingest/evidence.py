@@ -73,6 +73,23 @@ class RoadLine:
 
 
 @dataclass(frozen=True)
+class BaseTile:
+    """One map tile under an inset, as an embedded image, and where it lies."""
+
+    north: float
+    west: float
+    south: float
+    east: float
+    # A data: URI, so the sheet stays one self-contained image.
+    image: str
+
+
+def inset_metres_per_pixel() -> float:
+    """The inset's scale: its circle is the evidence radius."""
+    return INSET_RADIUS_M / (min(_INSET_W, _INSET_MAP_H) / 2 - 6)
+
+
+@dataclass(frozen=True)
 class WaterShape:
     """Water inside an inset: a lake drawn filled, or a stretch of shore."""
 
@@ -123,6 +140,13 @@ class Inset:
     roads: Sequence[RoadLine] = ()
     # Water inside the circle, under the roads. Empty when none could be had.
     water: Sequence[WaterShape] = ()
+    # Map tiles under everything, which carry water, roads and their names;
+    # the drawn roads and water are left off when there are tiles. Empty when
+    # tiles could not be had (or were not asked for), and the inset is then
+    # drawn as before.
+    basemap: Sequence[BaseTile] = ()
+    # The tile provider's attribution, for the sheet.
+    basemap_credit: str | None = None
     # For a charging zone (CRZ): its whole outline, cut to the circle when
     # drawn, and the sentence that replaces "tracker came within N m", which
     # means nothing for a zone. The marker is then where the drive went in.
@@ -282,6 +306,18 @@ def _fit(text: str, limit: int) -> str:
     return cut.rstrip(" ([,\u00b7-") + "\u2026"
 
 
+def _map_credit(sheet: EvidenceSheet) -> str:
+    """The licence line for whatever map is drawn under the tracks."""
+    tiled = next((i.basemap_credit for i in sheet.insets if i.basemap and i.basemap_credit), None)
+    if tiled:
+        return f" Map: {escape(tiled)}."
+    if any(inset.water for inset in sheet.insets):
+        return " Roads and water: \u00a9 OpenStreetMap contributors."
+    if any(inset.roads for inset in sheet.insets):
+        return " Roads: \u00a9 OpenStreetMap contributors."
+    return ""
+
+
 def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
     cx, cy = x + _INSET_W / 2, y + _INSET_MAP_H / 2
     radius_px = min(_INSET_W, _INSET_MAP_H) / 2 - 6
@@ -299,6 +335,16 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         f'<clipPath id="inset-clip-{index}"><circle cx="{cx}" cy="{cy}" r="{radius_px:.1f}"/>'
         f'</clipPath><g clip-path="url(#inset-clip-{index})">'
     )
+    # The map, under everything. Each tile is placed by its corners, on the
+    # inset's own projection, which at this scale is Mercator to a pixel.
+    for tile in inset.basemap:
+        left, top = _project(tile.north, tile.west, centre, scale, cx, cy)
+        right, bottom = _project(tile.south, tile.east, centre, scale, cx, cy)
+        out.append(
+            f'<image href="{tile.image}" x="{left:.1f}" y="{top:.1f}" '
+            f'width="{right - left:.1f}" height="{bottom - top:.1f}" '
+            f'preserveAspectRatio="none" opacity="0.9"/>'
+        )
     # The zone, shaded so it is plain which side of the line is inside. Drawn
     # whole and cut by the circle like everything else; it is public, and
     # nothing of the guest's.
@@ -310,7 +356,7 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         out.append(f'<polygon points="{drawn}" fill="#f3e8ff" stroke="none"/>')
     # Water under the roads: lakes filled, the shores of rivers and the harbour
     # as lines, which is how a bridge or a tunnel plaza reads as one.
-    for shape in inset.water:
+    for shape in () if inset.basemap else inset.water:
         drawn = " ".join(
             f"{px:.1f},{py:.1f}"
             for px, py in (_project(lat, lon, centre, scale, cx, cy) for lat, lon in shape.points)
@@ -321,7 +367,7 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         else:
             out.append(f'<polyline points="{drawn}" fill="none" stroke="{_SHORE}" '
                        f'stroke-width="1.8" stroke-linejoin="round" stroke-linecap="round"/>')
-    for kind in _ROAD_ORDER:
+    for kind in () if inset.basemap else _ROAD_ORDER:
         width, colour = _ROAD_STYLE[kind]
         for road in inset.roads:
             if road.kind != kind or len(road.points) < 2:
@@ -356,7 +402,9 @@ def _inset_svg(inset: Inset, x: float, y: float, index: int = 0) -> str:
         )
     # Names go on top of the track, haloed: the car often drove the very road
     # being named, and a label hidden under the line names nothing.
-    for text, lx, ly, angle in _road_labels(inset.roads, centre, scale, cx, cy):
+    for text, lx, ly, angle in (
+        [] if inset.basemap else _road_labels(inset.roads, centre, scale, cx, cy)
+    ):
         out.append(
             f'<text transform="translate({lx:.1f} {ly:.1f}) rotate({angle:.1f})" '
             f'text-anchor="middle" dominant-baseline="central" font-size="8" fill="#475569" '
@@ -509,13 +557,7 @@ def evidence_svg(sheet: EvidenceSheet) -> str:
             f"marker is where the plaza is, not where the car was when it was charged.</text>"
             f'<text x="32" y="{top + 31}" font-size="10.5" fill="#6b7280">'
             f"The rest of the trip is not shown."
-            + (
-                (" Roads and water: \u00a9 OpenStreetMap contributors."
-                 if any(inset.water for inset in sheet.insets)
-                 else " Roads: \u00a9 OpenStreetMap contributors.")
-                if any(inset.roads or inset.water for inset in sheet.insets)
-                else ""
-            )
+            + _map_credit(sheet)
             + "</text>"
         )
         zone_line = _zone_line(sheet)

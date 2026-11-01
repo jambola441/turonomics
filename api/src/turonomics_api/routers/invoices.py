@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session, selectinload
 from turonomics_api.db.base import get_session
 from turonomics_api.db.models import ReimbursementInvoice, Toll, Trip, TripState
 from turonomics_api.gmail.parse import names_tolls
+from turonomics_api.ingest.basemap import add_basemap
 from turonomics_api.ingest.distance import distance_lines_cents, summarise
 from turonomics_api.ingest.evidence import EvidenceRow, EvidenceSheet, Inset, evidence_svg
 from turonomics_api.ingest.evidence_map import build_insets
@@ -390,7 +391,7 @@ def _unfiled(session: Session, invoice: Invoice) -> list[InvoiceLine]:
 
 
 def _location_insets(
-    session: Session, trip: Trip | None, lines: list[InvoiceLine]
+    session: Session, trip: Trip | None, lines: list[InvoiceLine], basemap: bool = False
 ) -> tuple[list[Inset], int, str | None]:
     """The tracker's positions near each plaza, or nothing at all.
 
@@ -414,13 +415,19 @@ def _location_insets(
         # Roads beneath the tracks, where they could be had. Its own failures
         # never reach here, and a draft without them is what it was before.
         insets = add_roads(session, insets)
+        # Map tiles under them, for a caller that can carry the larger image
+        # (extension 1.22.2 and later ask for it).
+        if basemap:
+            insets = add_basemap(session, insets)
         return insets, omitted, route.source if insets else None
     except Exception:  # noqa: BLE001 - see the docstring
         log.warning("evidence map left out for trip %s", trip.id, exc_info=True)
         return [], 0, None
 
 
-def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> DraftResponse:
+def _draft(
+    session: Session, invoice: Invoice, now: datetime, window: int, basemap: bool = False
+) -> DraftResponse:
     lines = _unfiled(session, invoice)
     if not lines:
         raise HTTPException(
@@ -430,7 +437,7 @@ def _draft(session: Session, invoice: Invoice, now: datetime, window: int) -> Dr
     trip = session.get(Trip, invoice.trip_id)
     from_turo = trip.can_file_reimbursement if trip is not None else None
     left = invoice.days_left(window, now)
-    insets, omitted, track_source = _location_insets(session, trip, lines)
+    insets, omitted, track_source = _location_insets(session, trip, lines, basemap)
     sheet = EvidenceSheet(
         reservation_id=invoice.turo_trip_id,
         guest_name=invoice.guest_name,
@@ -921,7 +928,7 @@ def _quiet_rentals(
 
 
 @router.get("/next-draft", response_model=DraftResponse)
-def next_draft(session: DbSession) -> DraftResponse:
+def next_draft(session: DbSession, basemap: bool = False) -> DraftResponse:
     """The rental most worth filing for, drafted.
 
     Which one that is belongs here rather than in the extension: it is a
@@ -963,11 +970,11 @@ def next_draft(session: DbSession) -> DraftResponse:
     if not fileable:
         raise HTTPException(status_code=404, detail="nothing to file")
     fileable.sort(key=lambda row: (row[0], row[1]))
-    return _draft(session, fileable[0][2], now, window)
+    return _draft(session, fileable[0][2], now, window, basemap)
 
 
 @router.get("/{trip_id}/draft", response_model=DraftResponse)
-def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
+def draft(trip_id: uuid.UUID, session: DbSession, basemap: bool = False) -> DraftResponse:
     now = datetime.now(UTC)
     window = toll_filing_window_days()
     built = build_invoices(session, now=now)
@@ -977,7 +984,7 @@ def draft(trip_id: uuid.UUID, session: DbSession) -> DraftResponse:
         # and a rental whose crossings are all recovered has no invoice to
         # draft rather than an invoice for zero.
         raise HTTPException(status_code=404, detail="no outstanding crossings on that rental")
-    out = _draft(session, invoice, now, window)
+    out = _draft(session, invoice, now, window, basemap)
     held = hold_reason(session, invoice, now=now, window=window)
     out.fileable = held is None
     out.held_because = held

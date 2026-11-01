@@ -1,9 +1,15 @@
-"""Roads around a plaza, from OpenStreetMap, for the evidence maps.
+"""Roads and water around a plaza, from OpenStreetMap, for the evidence maps.
 
 A track on a blank square says very little: nothing shows that a plaza is on a
 bridge approach, or that a line 600 m away is the highway alongside it. This
-fetches the major roads inside each inset's circle so the sheet can draw them
-faintly beneath the track, named.
+fetches the major roads and the water inside each inset's circle so the sheet
+can draw them faintly beneath the track, the roads named. In New York the water
+is half of what places a plaza: a bridge or a tunnel is a road meeting a river.
+
+Water comes two ways. A lake or pond wholly inside the query box is a closed
+outline and is drawn filled. A river, a bay or the sea is far bigger than the
+box, arrives cut to it, and cannot be filled from the pieces, so its shores
+are drawn as lines: two blue lines either side of a bridge say river plainly.
 
 What it does and does not do:
 
@@ -28,6 +34,7 @@ The response shape is Overpass's ``out geom``::
 from __future__ import annotations
 
 import logging
+import math
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import replace
@@ -38,7 +45,7 @@ import httpx
 from sqlalchemy.orm import Session
 
 from turonomics_api.db.models import MapCache
-from turonomics_api.ingest.evidence import INSET_RADIUS_M, Inset, RoadLine
+from turonomics_api.ingest.evidence import INSET_RADIUS_M, Inset, RoadLine, WaterShape
 from turonomics_api.ingest.evidence_map import clip_polyline
 from turonomics_api.settings import overpass_url
 
@@ -52,42 +59,133 @@ USER_AGENT = "Turonomics/1.0 (+https://github.com/jambola441/turonomics; toll ev
 _QUERY_RADIUS_M = int(INSET_RADIUS_M + 100)
 
 QUERY = (
-    "[out:json][timeout:20];"
+    "[out:json][timeout:20];("
     "way(around:{radius},{lat},{lon})"
     '[highway~"^(motorway|trunk|primary|secondary|tertiary)(_link)?$"];'
-    "out geom;"
+    "way(around:{radius},{lat},{lon})[natural=water];"
+    "way(around:{radius},{lat},{lon})[waterway=riverbank];"
+    "relation(around:{radius},{lat},{lon})[natural=water];"
+    "way(around:{radius},{lat},{lon})[natural=coastline];"
+    # Cut to the box: a river's outline is hundreds of kilometres long.
+    ");out geom({south},{west},{north},{east});"
+)
+
+# Tried in turn when one cannot be reached or answers badly. The public
+# instances are run by volunteers and one being down is ordinary.
+FALLBACK_URLS = (
+    "https://overpass.private.coffee/api/interpreter",
+    "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
 )
 
 _KINDS = frozenset({"motorway", "trunk", "primary", "secondary", "tertiary"})
 
 # Roads change slowly; a plaza's surroundings, slower. Refetched after this.
 CACHE_TTL = timedelta(days=180)
+# Bumped when what is fetched changes, so entries without water are fetched
+# again rather than kept for six months.
+CACHE_VERSION = "map2"
 
 # How long all the misses together may take before the filing goes ahead without
-# them. Each request has its own, shorter, timeout.
-DEADLINE_SECONDS = 12.0
+# them. Each request has its own, shorter, timeout; a fallback instance gets one
+# too, so this leaves room for two tries.
+DEADLINE_SECONDS = 20.0
 REQUEST_TIMEOUT_SECONDS = 8.0
+
+
+def _post(url: str, **kwargs: Any) -> httpx.Response:
+    """A POST over IPv4.
+
+    The main Overpass instance publishes IPv6 addresses, and from the API's host
+    every fetch failed with "Network is unreachable" while the evidence went out
+    without a map under the track. Binding to an IPv4 address keeps a host with
+    no IPv6 route from trying it.
+    """
+    transport = httpx.HTTPTransport(local_address="0.0.0.0")
+    with httpx.Client(transport=transport) as client:
+        return client.post(url, **kwargs)
+
+
+def _box(lat: float, lon: float, radius_m: int) -> dict[str, float]:
+    dlat = radius_m / 111_320.0
+    dlon = radius_m / (111_320.0 * math.cos(math.radians(lat)))
+    return {"south": round(lat - dlat, 6), "west": round(lon - dlon, 6),
+            "north": round(lat + dlat, 6), "east": round(lon + dlon, 6)}
 
 Fetcher = Callable[[float, float, int], Mapping[str, Any] | None]
 
 
 def fetch_overpass(lat: float, lon: float, radius_m: int) -> Mapping[str, Any] | None:
-    """The roads around a point, or None for any reason it could not be had."""
-    try:
-        response = httpx.post(
-            overpass_url(),
-            data={"data": QUERY.format(radius=radius_m, lat=lat, lon=lon)},
-            headers={"User-Agent": USER_AGENT},
-            timeout=REQUEST_TIMEOUT_SECONDS,
-        )
-        if response.status_code != 200:
-            log.warning("overpass answered %s for %.5f,%.5f", response.status_code, lat, lon)
-            return None
-        body = response.json()
-    except (httpx.HTTPError, ValueError) as error:
-        log.warning("overpass fetch failed for %.5f,%.5f: %s", lat, lon, error)
-        return None
-    return body if isinstance(body, dict) and isinstance(body.get("elements"), list) else None
+    """The roads and water around a point, or None for any reason they could not be had.
+
+    The configured instance first, then the fallbacks, each once.
+    """
+    query = QUERY.format(radius=radius_m, lat=lat, lon=lon, **_box(lat, lon, radius_m))
+    for url in dict.fromkeys((overpass_url(), *FALLBACK_URLS)):
+        try:
+            response = _post(
+                url,
+                data={"data": query},
+                headers={"User-Agent": USER_AGENT},
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            if response.status_code != 200:
+                log.warning("overpass %s answered %s for %.5f,%.5f",
+                            url, response.status_code, lat, lon)
+                continue
+            body = response.json()
+        except (httpx.HTTPError, ValueError) as error:
+            log.warning("overpass %s failed for %.5f,%.5f: %s", url, lat, lon, error)
+            continue
+        if isinstance(body, dict) and isinstance(body.get("elements"), list):
+            return body
+    return None
+
+
+def _pieces(geometry: Sequence[Any]) -> list[list[list[float]]]:
+    """A way's points as runs, split where Overpass left out a point cut by the box."""
+    runs: list[list[list[float]]] = [[]]
+    for node in geometry:
+        if (
+            isinstance(node, Mapping)
+            and isinstance(node.get("lat"), int | float)
+            and isinstance(node.get("lon"), int | float)
+        ):
+            runs[-1].append([round(float(node["lat"]), 6), round(float(node["lon"]), 6)])
+        elif runs[-1]:
+            runs.append([])
+    return [run for run in runs if len(run) >= 2]
+
+
+def _water_of(geometry: Sequence[Any]) -> list[dict[str, Any]]:
+    """An outline whole and closed is an area; anything cut by the box is shore."""
+    whole = len(geometry) >= 4 and all(isinstance(n, Mapping) for n in geometry)
+    runs = _pieces(geometry)
+    if whole and len(runs) == 1 and runs[0][0] == runs[0][-1]:
+        return [{"w": "area", "g": runs[0]}]
+    return [{"w": "shore", "g": run} for run in runs]
+
+
+def compact_water(body: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Lakes as areas, and the shores of rivers, bays and the sea as lines."""
+    out: list[dict[str, Any]] = []
+    for element in body.get("elements") or []:
+        if not isinstance(element, Mapping):
+            continue
+        tags = element.get("tags")
+        tags = tags if isinstance(tags, Mapping) else {}
+        watery = (tags.get("natural") in ("water", "coastline")
+                  or tags.get("waterway") == "riverbank")
+        if not watery:
+            continue
+        if element.get("type") == "way" and isinstance(element.get("geometry"), list):
+            out.extend(_water_of(element["geometry"]))
+        elif element.get("type") == "relation":
+            for member in element.get("members") or []:
+                if (isinstance(member, Mapping) and member.get("type") == "way"
+                        and member.get("role") in ("outer", "inner", "")
+                        and isinstance(member.get("geometry"), list)):
+                    out.extend(_water_of(member["geometry"]))
+    return out
 
 
 def compact_ways(body: Mapping[str, Any]) -> list[dict[str, Any]]:
@@ -132,7 +230,22 @@ def road_lines(
 
 
 def _key(inset: Inset) -> str:
-    return f"roads:{inset.lat:.5f},{inset.lon:.5f},{_QUERY_RADIUS_M}"
+    return f"{CACHE_VERSION}:{inset.lat:.5f},{inset.lon:.5f},{_QUERY_RADIUS_M}"
+
+
+def water_shapes(
+    water: Sequence[Mapping[str, Any]], centre: tuple[float, float], radius_m: float
+) -> list[WaterShape]:
+    """Areas kept whole (the drawing's circle cuts them); shores clipped like roads."""
+    out: list[WaterShape] = []
+    for shape in water:
+        points = [(float(p[0]), float(p[1])) for p in shape.get("g", [])]
+        if shape.get("w") == "area":
+            out.append(WaterShape(area=True, points=points))
+            continue
+        for piece in clip_polyline(points, centre, radius_m):
+            out.append(WaterShape(area=False, points=piece))
+    return out
 
 
 def add_roads(
@@ -160,6 +273,7 @@ def _add_roads(
     session: Session, insets: Sequence[Inset], fetch: Fetcher, now: datetime
 ) -> list[Inset]:
     ways: dict[str, list[dict[str, Any]]] = {}
+    water: dict[str, list[dict[str, Any]]] = {}
     misses: dict[str, Inset] = {}
     for inset in insets:
         key = _key(inset)
@@ -167,6 +281,8 @@ def _add_roads(
         if cached is not None and cached.fetched_at > now - CACHE_TTL:
             stored = cached.data.get("ways")
             ways[key] = stored if isinstance(stored, list) else []
+            wet = cached.data.get("water")
+            water[key] = wet if isinstance(wet, list) else []
         else:
             misses[key] = inset
 
@@ -188,16 +304,22 @@ def _add_roads(
             if body is None:
                 continue  # not cached: the next filing asks again
             compact = compact_ways(body)
-            ways[key] = compact
-            session.merge(MapCache(key=key, data={"ways": compact}, fetched_at=now))
+            wet = compact_water(body)
+            ways[key], water[key] = compact, wet
+            session.merge(MapCache(key=key, data={"ways": compact, "water": wet}, fetched_at=now))
         session.commit()
 
     out: list[Inset] = []
     for inset in insets:
-        found = ways.get(_key(inset))
-        if not found:
+        key = _key(inset)
+        found, wet = ways.get(key), water.get(key)
+        if not found and not wet:
             out.append(inset)
             continue
-        roads = road_lines(found, (inset.lat, inset.lon), INSET_RADIUS_M)
-        out.append(replace(inset, roads=roads))
+        centre = (inset.lat, inset.lon)
+        out.append(replace(
+            inset,
+            roads=road_lines(found or [], centre, INSET_RADIUS_M),
+            water=water_shapes(wet or [], centre, INSET_RADIUS_M),
+        ))
     return out

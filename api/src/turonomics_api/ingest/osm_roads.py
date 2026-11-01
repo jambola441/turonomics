@@ -93,16 +93,8 @@ REQUEST_TIMEOUT_SECONDS = 8.0
 
 
 def _post(url: str, **kwargs: Any) -> httpx.Response:
-    """A POST over IPv4.
-
-    The main Overpass instance publishes IPv6 addresses, and from the API's host
-    every fetch failed with "Network is unreachable" while the evidence went out
-    without a map under the track. Binding to an IPv4 address keeps a host with
-    no IPv6 route from trying it.
-    """
-    transport = httpx.HTTPTransport(local_address="0.0.0.0")
-    with httpx.Client(transport=transport) as client:
-        return client.post(url, **kwargs)
+    """One POST; a seam for the tests."""
+    return httpx.post(url, **kwargs)
 
 
 def _box(lat: float, lon: float, radius_m: int) -> dict[str, float]:

@@ -601,9 +601,12 @@ const FILED_SETTLE_MS = 3_000;
 async function fileInvoice(tabId: number, tripId?: string): Promise<FileInvoiceResult> {
   const { apiBase, tollsToken } = await settings();
   // One rental when the site picked it, otherwise the API's choice.
+  // basemap=1: map tiles under the tracker on the evidence sheet. Asked for
+  // by 1.22.2 and later, which can encode the larger image; the API leaves
+  // them out for anything that does not ask.
   const route = tripId
-    ? `/api/invoices/${encodeURIComponent(tripId)}/draft`
-    : "/api/invoices/next-draft";
+    ? `/api/invoices/${encodeURIComponent(tripId)}/draft?basemap=1`
+    : "/api/invoices/next-draft?basemap=1";
   const response = await fetch(`${apiBase}${route}`);
   if (response.status === 404) return { filed: false, reason: "nothing to file" };
   if (!response.ok) throw new Error(`the API said ${response.status}`);
@@ -705,9 +708,14 @@ function fileInvoiceInPage(
   const rasterise = (): Promise<Blob> =>
     new Promise((resolve, reject) => {
       const image = new Image();
-      const encoded =
-        "data:image/svg+xml;base64," +
-        btoa(String.fromCharCode(...new TextEncoder().encode(svg)));
+      // In chunks: spreading every byte of a sheet with map tiles in it, half
+      // a megabyte, as arguments overflows the call stack.
+      const bytes = new TextEncoder().encode(svg);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 32768) {
+        binary += String.fromCharCode(...bytes.subarray(i, i + 32768));
+      }
+      const encoded = "data:image/svg+xml;base64," + btoa(binary);
       image.onload = () => {
         // Twice the natural size: Turo shows evidence at a few hundred pixels
         // wide and a guest reading a toll time should not have to squint.

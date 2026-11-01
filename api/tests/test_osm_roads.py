@@ -182,28 +182,6 @@ def test_an_instance_that_cannot_be_reached_falls_back_to_another(monkeypatch) -
     assert asked == ["https://overpass-api.de/api/interpreter", osm_roads.FALLBACK_URLS[0]]
 
 
-def test_requests_go_over_ipv4(monkeypatch) -> None:
-    seen: dict[str, Any] = {}
-
-    class Client:
-        def __init__(self, transport):
-            seen["transport"] = transport
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *exc):
-            return False
-
-        def post(self, url, **kwargs):
-            return _Response(200, BODY)
-
-    monkeypatch.setattr(httpx, "Client", Client)
-    osm_roads._post("https://overpass.example/api", data={})
-    pool = seen["transport"]._pool
-    assert pool._local_address == "0.0.0.0"
-
-
 @pytest.mark.parametrize(
     "reply",
     [

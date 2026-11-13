@@ -22,6 +22,7 @@ from turonomics_api.routers import (
     messages,
     push,
     sync,
+    tickets,
     tolls,
     trips,
     turo,
@@ -120,6 +121,7 @@ app.include_router(sync.router)
 app.include_router(gmail.router)
 app.include_router(push.router)
 app.include_router(tolls.router)
+app.include_router(tickets.router)
 app.include_router(trips.router)
 app.include_router(invoices.router)
 app.include_router(turo.router)

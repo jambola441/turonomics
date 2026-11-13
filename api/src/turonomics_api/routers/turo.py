@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 
 from turonomics_api.db.base import get_session
 from turonomics_api.ingest.reimbursements import relink_invoices
+from turonomics_api.ingest.tickets import rematch_tickets
 from turonomics_api.ingest.tolls import rematch_unattributed
 from turonomics_api.ingest.turo_detail import (
     DetailResult,
@@ -178,6 +179,7 @@ def post_details(
     rematched = 0
     if result.retimed:
         rematched = rematch_unattributed(session)
+        rematch_tickets(session)
         relink_invoices(session, now=now)
     session.commit()
 

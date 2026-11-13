@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from turonomics_api.bouncie.client import BouncieClient
 from turonomics_api.bouncie.sync import SyncResult, sync_vehicles
 from turonomics_api.ingest.mail import sync_trips_from_mail
+from turonomics_api.ingest.tickets import sync_tickets
 from turonomics_api.notify.dispatch import dispatch
 
 log = logging.getLogger("turonomics.poller")
@@ -46,6 +47,10 @@ def poll_once(session: Session, *, client: BouncieClient | None = None) -> SyncR
     # has it waits for a different clock.
     now = datetime.now(UTC)
     sync_trips_from_mail(session, now=now)
+    # The city's parking and camera tickets, every few hours rather than every
+    # poll: its data is days behind the street. After the trips, so a rental
+    # the mail just brought in can claim its tickets in the same cycle.
+    sync_tickets(session, now=now)
     # Alerts last, and in the same cycle: the deadline this decides on was
     # derived by the two syncs above, so telling the operator about it on a
     # separate timer would mean alerting on state up to one interval stale.

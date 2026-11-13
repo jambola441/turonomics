@@ -179,7 +179,7 @@ def test_only_the_writing_tools_are_listed_as_writing(api_client, token) -> None
     assert {t["name"] for t in tools} == {
         "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status",
         "message_drafts", "fleet", "filing_proposals", "read_turo_setting",
-        "turo_changes"} | WRITERS
+        "turo_changes", "tickets"} | WRITERS
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITERS)
         # Each write is undone by another call or only waits for a person,

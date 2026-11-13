@@ -33,6 +33,7 @@ from turonomics_api.db.models import (
     Vehicle,
 )
 from turonomics_api.ingest.distance import Distance, distance_lines_cents, summarise
+from turonomics_api.ingest.tickets import rematch_tickets
 from turonomics_api.ingest.tolls import rematch_unattributed
 from turonomics_api.ingest.trip_map import (
     TRACKER_MILES_RULE,
@@ -286,6 +287,8 @@ def create_trip(
     session.flush()
 
     matched = rematch_unattributed(session)
+    # Its tickets too, from the city's data already read.
+    rematch_tickets(session)
     session.commit()
     return CreateResponse(trip=_row(session, trip), tolls_matched=matched)
 

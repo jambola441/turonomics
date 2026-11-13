@@ -790,6 +790,66 @@ class Toll(Base):
     __table_args__ = (Index("ix_toll_unrecovered", "recovered_at", "occurred_at"),)
 
 
+class Ticket(Base):
+    """One New York City parking or camera ticket on a fleet plate.
+
+    From the city's "Open Parking and Camera Violations" data, by plate: parking
+    tickets and the speed, red-light and bus-lane cameras. A police stop is
+    issued to the driver, not the plate, and never appears here.
+
+    Its own table rather than rows in ``toll``: a toll is a fixed charge, and a
+    ticket changes after it is written. Penalties and interest are added, it is
+    paid or reduced, it goes to a hearing. So it is updated in place by the
+    city's summons number on every read, where a toll is inserted once.
+
+    Billed the way tolls are: to the rental running on the car at the minute it
+    was written, or to one returned late past it. The guest owes the fine as
+    written; a penalty for paying the city late is the host's.
+    """
+
+    __tablename__ = "ticket"
+
+    id: Mapped[uuid.UUID] = _uuid_pk()
+    # The city's own number: each read updates the row it already has.
+    summons_number: Mapped[str] = mapped_column(String(20), unique=True)
+    plate: Mapped[str] = mapped_column(String(16), index=True)
+    plate_state: Mapped[str | None] = mapped_column(String(4))
+    # parking, speed_camera, red_light_camera or bus_lane_camera.
+    kind: Mapped[str] = mapped_column(String(20))
+    violation: Mapped[str] = mapped_column(String(80))
+    # When it was written, New York time made absolute. A ticket with no time
+    # on it is kept at the start of its day with time_known false, and is only
+    # billed to a rental that had the car all of that day.
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    time_known: Mapped[bool] = mapped_column(Boolean, default=True)
+    county: Mapped[str | None] = mapped_column(String(20))
+    precinct: Mapped[str | None] = mapped_column(String(10))
+    issuing_agency: Mapped[str | None] = mapped_column(String(60))
+    # What the city says, kept as it last said it. Integer cents.
+    fine_cents: Mapped[int] = mapped_column(Integer, default=0)
+    penalty_cents: Mapped[int] = mapped_column(Integer, default=0)
+    interest_cents: Mapped[int] = mapped_column(Integer, default=0)
+    reduction_cents: Mapped[int] = mapped_column(Integer, default=0)
+    paid_cents: Mapped[int] = mapped_column(Integer, default=0)
+    due_cents: Mapped[int] = mapped_column(Integer, default=0)
+    status: Mapped[str | None] = mapped_column(String(60))
+    # The city's picture of the ticket, for evidence.
+    image_url: Mapped[str | None] = mapped_column(Text)
+
+    vehicle_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("vehicle.id", ondelete="SET NULL")
+    )
+    trip_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("trip.id", ondelete="SET NULL"))
+    # As for tolls: asked of the guest or Turo, and paid back.
+    filed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    recovered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+    vehicle: Mapped[Vehicle | None] = relationship()
+    trip: Mapped[Trip | None] = relationship()
+
+
 class ReimbursementInvoice(Base):
     """Money already asked of a guest through Turo.
 

@@ -275,6 +275,30 @@ def tool_tolls(session: Session, auth: str, args: dict[str, Any]) -> dict[str, A
     }
 
 
+def tool_tickets(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from turonomics_api.routers.tickets import get_tickets, sync_now
+
+    which = (args.get("filter") or "open").strip().lower()
+    if which not in ("open", "unattributed", "owed_to_city", "all"):
+        raise _ToolError("filter is one of open, unattributed, owed_to_city, all")
+    trip = _uuid(args["trip_id"]) if args.get("trip_id") else None
+    data = (sync_now if args.get("refresh") else get_tickets)(session, authorization=auth)
+    rows = []
+    for ticket in data.tickets:
+        if trip and ticket.trip_id != trip:
+            continue
+        if which == "open" and (ticket.trip_id is None or ticket.recovered_at is not None):
+            continue
+        if which == "unattributed" and ticket.trip_id is not None:
+            continue
+        if which == "owed_to_city" and not ticket.due_cents:
+            continue
+        rows.append(_dump(ticket))
+    limit = _limit(args.get("limit"), 50, 500)
+    return {"tickets": rows[:limit], "more": max(len(rows) - limit, 0),
+            "totals": _dump(data, exclude={"tickets"})}
+
+
 def tool_extension_status(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
     from turonomics_api.routers.commands import list_commands
 
@@ -644,6 +668,25 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
         "inputSchema": _schema({
             "filter": {"type": "string", "enum": ["open", "no_rental", "all"]},
             "trip_id": {"type": "string"},
+            "limit": _LIMIT,
+        }),
+    }),
+    "tickets": (tool_tickets, {
+        "title": "Parking and camera tickets",
+        "description": (
+            "New York City parking tickets and speed, red-light and bus-lane camera tickets "
+            "on the fleet's plates, from the city's open data, with the rental each is billed "
+            "to (the one that had the car at that minute). filter: open (on a rental, not "
+            "yet recovered; the default), unattributed (no rental claims it: the host's, or "
+            "a rental not yet recorded), owed_to_city (still unpaid to the city), all. "
+            "due_cents is what the city is owed, penalties included; billable_cents is what "
+            "the guest is asked for, the fine as written. refresh reads the city's data now. "
+            "Police stops and tickets outside the city are not in it."
+        ),
+        "inputSchema": _schema({
+            "filter": {"type": "string", "enum": ["open", "unattributed", "owed_to_city", "all"]},
+            "trip_id": {"type": "string"},
+            "refresh": {"type": "boolean"},
             "limit": _LIMIT,
         }),
     }),

@@ -111,7 +111,10 @@ _ALLOWED_ORIGINS = [
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_ALLOWED_ORIGINS,
-    allow_methods=["GET", "POST"],
+    # DELETE for the site's "Remove this rental" and the tolls page's removals;
+    # without it the browser's preflight fails and those buttons only ever
+    # report "Failed to fetch".
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
 

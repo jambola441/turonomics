@@ -22,12 +22,16 @@ cannot waits for a person.
   extension to pull from Turo or read E-ZPass (both only read), and changing
   Turo's own listing and account settings that no guest books against, each
   change recorded with what it replaced so it can be put back.
+* Off-platform rentals, the ones arranged outside Turo: recording one,
+  removing one typed in wrongly (it reports what it removed, so it can be
+  recorded again), and marking its tolls paid back by the guest, which can be
+  taken back. None of these reach Turo, and Turo's own rentals are refused.
 * Filed directly, by the operator's decision: a rental's toll reimbursement,
   through the same ledger check as the site's File button, and only once the
   E-ZPass data reaches past the trip (see ``tool_file_toll_invoice``).
 * Proposed, never done: a message to a guest is a draft until the operator
   presses Send on the site. There is no tool that sends a message, approves
-  anything, or marks money recovered.
+  anything, or marks money recovered on a Turo rental.
 
 Behind ``TOLLS_TOKEN`` like the pages that name guests, and stricter than
 they are: those let every request through when the token is unset, and this
@@ -69,6 +73,11 @@ INSTRUCTIONS = (
     "days_left is what remains of that window (negative once it has closed). "
     "Start with next_to_file for what to do, find_trips to locate a rental by guest, "
     "car, reservation number or date, and trip for everything about one rental. "
+    "add_rental records a rental arranged outside Turo (over WhatsApp, say) so its "
+    "crossings find the guest; remove_rental deletes one typed in wrongly and returns "
+    "add_rental's arguments to put it back. Turo's own rentals cannot be removed. "
+    "mark_tolls_recovered marks an off-platform rental's tolls paid back by the guest "
+    "(undo: true takes it back). trip_route gives a rental's tracked drives. "
     "draft_message writes a message to a rental's guest as a draft; it is not sent "
     "until the operator reads it and presses Send on the site, so say that it is a "
     "draft and is waiting for them. file_toll_invoice files a rental's tolls on Turo; "
@@ -248,6 +257,195 @@ def tool_trip(session: Session, auth: str, args: dict[str, Any]) -> dict[str, An
     if args.get("include_messages"):
         data["messages"] = [m.model_dump(mode="json") for m in messages]
     return data
+
+
+# ---------------------------------------------------------------------------
+# Off-platform rentals: typed in, taken back out, tolls paid back
+# ---------------------------------------------------------------------------
+# The site's "Add an off-platform rental" form and its Remove and Recovered
+# buttons, through the same route functions. A rental arranged over WhatsApp
+# leaves no trace in Turo's mail, so this is the only way its crossings find
+# a guest.
+
+_WHEN = "an ISO time with an offset, or New York local time like 2026-11-20 14:00"
+
+
+def _when(value: Any, name: str) -> datetime:
+    """A time as given. One without a zone is left so, and ``TripIn`` reads it
+    as fleet-local, the same as the site's datetime-local input."""
+    if not isinstance(value, str) or not value.strip():
+        raise _ToolError(f"{name} is {_WHEN}")
+    try:
+        return datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise _ToolError(f"{name} is {_WHEN}") from exc
+
+
+def _tolls_cents(session: Session, trip_id: uuid.UUID) -> int:
+    from sqlalchemy import func, select
+
+    from turonomics_api.db.models import Toll
+
+    return int(session.scalar(
+        select(func.coalesce(func.sum(Toll.amount_cents), 0)).where(Toll.trip_id == trip_id)
+    ) or 0)
+
+
+def tool_add_rental(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from fastapi import HTTPException
+    from pydantic import ValidationError
+
+    from turonomics_api.routers.trips import TripIn, create_trip
+
+    vehicle = args.get("vehicle")
+    if not isinstance(vehicle, str) or not vehicle.strip():
+        raise _ToolError("vehicle is the car's nickname, as fleet names it")
+    guest = args.get("guest_name")
+    if guest is not None and not isinstance(guest, str):
+        raise _ToolError("guest_name is the guest's name, as a string")
+    earnings = args.get("earnings_cents")
+    if earnings is not None and (isinstance(earnings, bool) or not isinstance(earnings, int)
+                                 or earnings < 0):
+        raise _ToolError("earnings_cents is what the rental paid, in whole cents, 0 or more")
+    try:
+        body = TripIn(vehicle=vehicle, guest_name=guest,
+                      starts_at=_when(args.get("starts_at"), "starts_at"),
+                      ends_at=_when(args.get("ends_at"), "ends_at"),
+                      earnings_cents=earnings)
+    except ValidationError as exc:
+        raise _ToolError(str(exc)) from exc
+    try:
+        out = create_trip(body, session, authorization=auth)
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            raise _ToolError(str(exc.detail)) from exc
+        raise
+    trip = _dump(out.trip)
+    trip["tolls_cents"] = _tolls_cents(session, out.trip.id)
+    return {
+        "trip": trip,
+        "tolls_matched": out.tolls_matched,
+        "next": "remove_rental with this trip_id takes it back out.",
+    }
+
+
+def tool_remove_rental(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from turonomics_api.db.models import Trip
+    from turonomics_api.routers.trips import delete_trip
+
+    trip_id = _uuid(args.get("trip_id"))
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise _ToolError("no rental with that id")
+    car = (trip.vehicle.nickname or trip.vehicle.plate) if trip.vehicle else None
+    # Exactly add_rental's arguments, so putting it back is one call.
+    re_add = {
+        "vehicle": car,
+        "guest_name": trip.guest_name,
+        "starts_at": trip.starts_at.isoformat(),
+        "ends_at": trip.ends_at.isoformat(),
+        "earnings_cents": trip.earnings_cents,
+    }
+    removed = {"trip_id": str(trip.id), "source": str(trip.source), **re_add,
+               "tolls_cents": _tolls_cents(session, trip.id)}
+    try:
+        out = delete_trip(trip_id, session, authorization=auth)
+    except HTTPException as exc:
+        if exc.status_code == 422:
+            raise _ToolError(
+                "that is a Turo rental: only an off-platform one typed in by hand can be "
+                "removed, and Turo's come back with the next sync anyway"
+            ) from exc
+        raise
+    return {
+        "removed": removed,
+        "tolls_released": out["tolls_released"],
+        "re_add": re_add,
+        "next": (
+            "add_rental with re_add puts it back under a new trip_id; its crossings, "
+            "now unattributed, attach to it again."
+        ),
+    }
+
+
+def tool_mark_tolls_recovered(
+    session: Session, auth: str, args: dict[str, Any]
+) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from turonomics_api.db.models import Trip, TripSource
+    from turonomics_api.routers.invoices import mark_invoice_recovered
+
+    trip_id = _uuid(args.get("trip_id"))
+    trip = session.get(Trip, trip_id)
+    if trip is None:
+        raise _ToolError("no rental with that id")
+    if trip.source is not TripSource.manual:
+        # Turo's rentals are paid back through Turo, and the ledger learns that
+        # from Turo's own charges; ticking one here would hide what is owed.
+        raise _ToolError(
+            "that is a Turo rental: its tolls are paid back through Turo "
+            "(file_toll_invoice), and only an off-platform rental's are marked here"
+        )
+    undo = bool(args.get("undo"))
+    try:
+        row = mark_invoice_recovered(trip_id, session, undo=undo, authorization=auth)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise _ToolError("no crossings are attributed to that rental") from exc
+        raise
+    data = _dump(row)
+    data["recovered"] = not undo
+    data["tolls_cents"] = _tolls_cents(session, trip_id)
+    return data
+
+
+def tool_trip_route(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
+    from fastapi import HTTPException
+
+    from turonomics_api.ingest.trip_map import _metres
+    from turonomics_api.routers.trips import trip_map
+
+    trip_id = _uuid(args.get("trip_id"))
+    try:
+        route = trip_map(trip_id, session, authorization=auth)
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            raise _ToolError("no rental with that id") from exc
+        raise
+    raw = bool(args.get("include_points"))
+    drives = []
+    for drive in route.drives:
+        points = drive.points
+        traced = sum(_metres((a[0], a[1]), (b[0], b[1]))
+                     for a, b in zip(points, points[1:], strict=False)) / 1609.344
+        summary: dict[str, Any] = {
+            "starts_at": drive.starts_at.isoformat(),
+            "ends_at": drive.ends_at.isoformat(),
+            "start": points[0] if points else None,
+            "end": points[-1] if points else None,
+            "point_count": len(points),
+            # Bouncie's figure where it gave one; otherwise the length of the
+            # sampled track, which runs a little short on curves.
+            "miles": round(drive.distance_mi if drive.distance_mi is not None else traced, 1),
+            "miles_from": "bouncie" if drive.distance_mi is not None else "points",
+        }
+        if raw:
+            summary["points"] = points
+        drives.append(summary)
+    return {
+        "trip_id": str(trip_id),
+        "starts_at": route.starts_at.isoformat(),
+        "ends_at": route.ends_at.isoformat(),
+        "route_source": route.route_source,
+        "note": route.note,
+        "drives": drives,
+        "drive_count": len(drives),
+        "miles": round(sum(d["miles"] for d in drives), 1),
+        "tolls": [_dump(t) for t in route.tolls],
+    }
 
 
 def tool_tolls(session: Session, auth: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -600,8 +798,10 @@ _LIMIT = {"type": "integer", "minimum": 1, "description": "At most this many row
 Tool = Callable[[Session, str, dict[str, Any]], dict[str, Any]]
 
 # Every writing tool is marked so, and a client that asks before a write asks
-# before these. None is destructive: each is undone by another call, or only
-# puts something in front of the operator.
+# before these. Each is undone by another call, or only puts something in
+# front of the operator. Two are marked destructive anyway: a filing, which
+# asks a guest for money, and removing a rental, which deletes a row that
+# add_rental can only put back under a new id.
 WRITES = {"readOnlyHint": False, "destructiveHint": False, "idempotentHint": True,
           "openWorldHint": False}
 
@@ -657,6 +857,69 @@ TOOLS: dict[str, tuple[Tool, dict[str, Any]]] = {
         "inputSchema": _schema({
             "trip_id": {"type": "string", "description": "From find_trips or the ledger."},
             "include_messages": {"type": "boolean"},
+        }, ["trip_id"]),
+    }),
+    "add_rental": (tool_add_rental, {
+        "title": "Record an off-platform rental",
+        "description": (
+            "Add a rental arranged outside Turo (over WhatsApp, say) to the books, as the "
+            "site's 'Add an off-platform rental' form does. Crossings and tickets already "
+            "on record that fall in its window on that car attach to it at once; the "
+            "result gives its toll_count and tolls_cents. Times are ISO with an offset, or "
+            "New York local time when given without one. Calling it twice records two "
+            "rentals, so look with find_trips first. remove_rental undoes it."
+        ),
+        "inputSchema": _schema({
+            "vehicle": {"type": "string",
+                        "description": "The car's nickname (Jerry, Jolene, Jimmy, Bubba...)."},
+            "guest_name": {"type": "string"},
+            "starts_at": {"type": "string", "description": "When the guest takes the car."},
+            "ends_at": {"type": "string", "description": "When the car comes back."},
+            "earnings_cents": {"type": "integer", "minimum": 0,
+                               "description": "What the rental paid, in cents."},
+        }, ["vehicle", "starts_at", "ends_at"]),
+        "annotations": {**WRITES, "idempotentHint": False},
+    }),
+    "remove_rental": (tool_remove_rental, {
+        "title": "Remove an off-platform rental",
+        "description": (
+            "Delete an off-platform rental typed in wrongly, as the Remove button on the "
+            "trips page does. Refused for a Turo rental. Its crossings are not deleted: "
+            "they go back to having no rental, keeping any recovered mark. Returns what was "
+            "removed and re_add, add_rental's arguments to put it back (under a new "
+            "trip_id)."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string", "description": "From find_trips or add_rental."},
+        }, ["trip_id"]),
+        "annotations": {**WRITES, "destructiveHint": True},
+    }),
+    "mark_tolls_recovered": (tool_mark_tolls_recovered, {
+        "title": "Mark an off-platform rental's tolls paid back",
+        "description": (
+            "Record that the guest of an off-platform rental has paid back its tolls, as "
+            "the Recovered button on the invoices page does: every crossing on the rental "
+            "is marked recovered and leaves what is owed. Refused for a Turo rental, whose "
+            "tolls are paid back through Turo. undo: true clears the mark from all of the "
+            "rental's crossings again."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string"},
+            "undo": {"type": "boolean"},
+        }, ["trip_id"]),
+        "annotations": WRITES,
+    }),
+    "trip_route": (tool_trip_route, {
+        "title": "A rental's route",
+        "description": (
+            "Where the car went during a rental, from the tracker (Bouncie, or telemetry): "
+            "each drive's start and end time, start and end [lat, lon], number of points "
+            "and miles, with the rental's crossings placed on the route. The raw points "
+            "only with include_points. Only reads."
+        ),
+        "inputSchema": _schema({
+            "trip_id": {"type": "string", "description": "From find_trips or the ledger."},
+            "include_points": {"type": "boolean"},
         }, ["trip_id"]),
     }),
     "tolls": (tool_tolls, {

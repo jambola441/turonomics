@@ -721,6 +721,9 @@ class MapDrive(BaseModel):
     starts_at: datetime
     ends_at: datetime
     points: list[list[float]]
+    # Bouncie's own distance for the drive, where it gave one: the figure the
+    # tracker's rental miles add up, not the sampled points' length.
+    distance_mi: float | None = None
 
 
 class TripMap(BaseModel):
@@ -775,6 +778,7 @@ def trip_map(
                 starts_at=d.starts_at,
                 ends_at=d.ends_at,
                 points=[[round(lat, 6), round(lon, 6)] for lat, lon in d.points],
+                distance_mi=d.distance_mi,
             )
             for d in route.drives
         ],

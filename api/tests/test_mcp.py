@@ -606,7 +606,9 @@ def test_a_removed_rental_reports_enough_to_put_it_back(
 
     again = data(api_client, "add_rental", **out["re_add"])["trip"]
     assert again["id"] != added["id"]
-    assert (again["starts_at"], again["ends_at"]) == (added["starts_at"], added["ends_at"])
+    # The same moments, whichever offset each is written with.
+    assert (_when_out(again["starts_at"]), _when_out(again["ends_at"])) == (
+        _when_out(added["starts_at"]), _when_out(added["ends_at"]))
     assert again["toll_count"] == 1 and again["tolls_cents"] == 690
 
     gone = call(api_client, "remove_rental", trip_id=added["id"])

@@ -170,7 +170,11 @@ def test_what_is_not_offered_is_said_so(api_client, token) -> None:
 
 WRITERS = {"draft_message", "propose_filing", "confirm_parking", "complete_task",
            "reopen_task", "mark_charge_checked", "pull_from_turo", "read_ezpass",
-           "change_turo_setting", "undo_turo_change", "file_toll_invoice"}
+           "change_turo_setting", "undo_turo_change", "file_toll_invoice",
+           "add_rental", "remove_rental", "mark_tolls_recovered"}
+# Marked destructive: a filing asks a guest for money, and a removed rental
+# comes back only under a new id.
+DESTRUCTIVE = {"file_toll_invoice", "remove_rental"}
 
 
 @requires_db
@@ -179,19 +183,23 @@ def test_only_the_writing_tools_are_listed_as_writing(api_client, token) -> None
     assert {t["name"] for t in tools} == {
         "next_to_file", "ledger", "find_trips", "trip", "tolls", "extension_status",
         "message_drafts", "fleet", "filing_proposals", "read_turo_setting",
-        "turo_changes", "tickets"} | WRITERS
+        "turo_changes", "tickets", "trip_route"} | WRITERS
     for tool in tools:
         assert tool["annotations"]["readOnlyHint"] is (tool["name"] not in WRITERS)
-        # Each write is undone by another call or only waits for a person,
-        # except a filing, which asks a guest for money.
-        assert tool["annotations"]["destructiveHint"] is (tool["name"] == "file_toll_invoice")
+        assert tool["annotations"]["destructiveHint"] is (tool["name"] in DESTRUCTIVE)
         assert tool["inputSchema"]["type"] == "object" and tool["description"]
 
 
 @requires_db
 def test_nothing_offered_sends_settles_or_refunds(api_client, token) -> None:
-    """Filing is the one irreversible thing the operator chose to hand over."""
+    """Filing is the one irreversible thing the operator chose to hand over.
+
+    The one tool that marks money recovered is for an off-platform rental,
+    paid back to the operator directly, and it can be taken back; it refuses a
+    Turo rental (test_a_turo_rentals_tolls_are_not_marked_recovered).
+    """
     names = {t["name"] for t in rpc(api_client, "tools/list").json()["result"]["tools"]}
+    names -= {"mark_tolls_recovered"}
     for word in ("send", "approve", "recovered", "settle", "refund", "cancel"):
         assert not any(word in name for name in names), word
 
@@ -506,3 +514,195 @@ def test_filing_settles_a_proposal_for_the_same_rental(api_client, token, fleet)
     data(api_client, "propose_filing", trip_id=str(fleet["soon"].id))
     data(api_client, "file_toll_invoice", trip_id=str(fleet["soon"].id))
     assert data(api_client, "filing_proposals", state="proposed")["proposals"] == []
+
+
+# ---------------------------------------------------------------------------
+# Off-platform rentals
+# ---------------------------------------------------------------------------
+
+# 2pm to 6pm in New York on a Sunday in October (EDT, UTC-4), and a crossing
+# at 3:30pm local during it.
+LOCAL_START, LOCAL_END = "2026-10-04 14:00", "2026-10-04 18:00"
+DURING = datetime(2026, 10, 4, 19, 30, tzinfo=UTC)
+
+
+def _loose_crossing(session, car: Vehicle, cents: int = 690, key: str = "wa1") -> Toll:
+    """A crossing on the car with no rental to bill it to."""
+    toll = Toll(fingerprint=key, occurred_at=DURING, plaza="GWB", amount_cents=cents,
+                transponder_id="99900000111", vehicle_id=car.id)
+    session.add(toll)
+    session.commit()
+    return toll
+
+
+def _when_out(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+@requires_db
+def test_an_off_platform_rental_is_recorded_and_its_crossings_attach(
+    api_client, token, fleet, session
+) -> None:
+    car = session.query(Vehicle).one()
+    toll = _loose_crossing(session, car)
+    out = data(api_client, "add_rental", vehicle="jolene", guest_name="Walt",
+               starts_at=LOCAL_START, ends_at=LOCAL_END, earnings_cents=15000)
+    trip = out["trip"]
+    assert trip["source"] == "manual" and trip["guest_name"] == "Walt"
+    assert trip["vehicle_nickname"] == "Jolene" and trip["earnings_cents"] == 15000
+    # A time without a zone is New York's, not UTC.
+    assert _when_out(trip["starts_at"]) == datetime(2026, 10, 4, 18, 0, tzinfo=UTC)
+    assert _when_out(trip["ends_at"]) == datetime(2026, 10, 4, 22, 0, tzinfo=UTC)
+    assert trip["toll_count"] == 1 and trip["tolls_cents"] == 690
+    assert out["tolls_matched"] == 1 and "as_of" in out
+    session.refresh(toll)
+    assert str(toll.trip_id) == trip["id"]
+    found = data(api_client, "find_trips", query="walt")["trips"]
+    assert [t["id"] for t in found] == [trip["id"]]
+
+    # An offset is taken as given.
+    other = data(api_client, "add_rental", vehicle="Jolene",
+                 starts_at="2026-10-10T09:00:00-04:00", ends_at="2026-10-10T17:00:00Z")
+    assert _when_out(other["trip"]["starts_at"]) == datetime(2026, 10, 10, 13, tzinfo=UTC)
+    assert other["trip"]["toll_count"] == 0 and other["trip"]["tolls_cents"] == 0
+
+
+@requires_db
+def test_a_rental_that_cannot_be_recorded_says_why(api_client, token, fleet, session) -> None:
+    before = session.query(Trip).count()
+    nobody = call(api_client, "add_rental", vehicle="Herbie", starts_at=LOCAL_START,
+                  ends_at=LOCAL_END)
+    assert nobody["isError"] and "Jolene" in nobody["content"][0]["text"], "names the cars"
+    backwards = call(api_client, "add_rental", vehicle="Jolene", starts_at=LOCAL_END,
+                     ends_at=LOCAL_START)
+    assert backwards["isError"] and "end after it starts" in backwards["content"][0]["text"]
+    garbled = call(api_client, "add_rental", vehicle="Jolene", starts_at="Sunday afternoon",
+                   ends_at=LOCAL_END)
+    assert garbled["isError"] and "New York local" in garbled["content"][0]["text"]
+    negative = call(api_client, "add_rental", vehicle="Jolene", starts_at=LOCAL_START,
+                    ends_at=LOCAL_END, earnings_cents=-5)
+    assert negative["isError"] and "cents" in negative["content"][0]["text"]
+    assert session.query(Trip).count() == before
+
+
+@requires_db
+def test_a_removed_rental_reports_enough_to_put_it_back(
+    api_client, token, fleet, session
+) -> None:
+    car = session.query(Vehicle).one()
+    toll = _loose_crossing(session, car)
+    added = data(api_client, "add_rental", vehicle="Jolene", guest_name="Walt",
+                 starts_at=LOCAL_START, ends_at=LOCAL_END, earnings_cents=15000)["trip"]
+
+    out = data(api_client, "remove_rental", trip_id=added["id"])
+    assert out["removed"]["trip_id"] == added["id"] and out["removed"]["tolls_cents"] == 690
+    assert out["tolls_released"] == 1
+    assert out["re_add"] == {"vehicle": "Jolene", "guest_name": "Walt",
+                             "starts_at": out["re_add"]["starts_at"],
+                             "ends_at": out["re_add"]["ends_at"], "earnings_cents": 15000}
+    assert session.get(Trip, uuid.UUID(added["id"])) is None
+    session.refresh(toll)
+    assert toll.trip_id is None, "the crossing is kept, with nobody to bill"
+
+    again = data(api_client, "add_rental", **out["re_add"])["trip"]
+    assert again["id"] != added["id"]
+    # The same moments, whichever offset each is written with.
+    assert (_when_out(again["starts_at"]), _when_out(again["ends_at"])) == (
+        _when_out(added["starts_at"]), _when_out(added["ends_at"]))
+    assert again["toll_count"] == 1 and again["tolls_cents"] == 690
+
+    gone = call(api_client, "remove_rental", trip_id=added["id"])
+    assert gone["isError"] and "no rental" in gone["content"][0]["text"]
+
+
+@requires_db
+def test_a_turo_rental_is_not_removed(api_client, token, fleet, session) -> None:
+    turo = fleet["soon"]
+    refused = call(api_client, "remove_rental", trip_id=str(turo.id))
+    assert refused["isError"] is True
+    assert "Turo rental" in refused["content"][0]["text"]
+    session.expire_all()
+    assert session.get(Trip, turo.id) is not None
+    assert session.query(Toll).filter(Toll.trip_id == turo.id).count() == 1
+
+
+@requires_db
+def test_an_off_platform_rentals_tolls_are_marked_paid_back_and_back(
+    api_client, token, fleet, session
+) -> None:
+    car = session.query(Vehicle).one()
+    toll = _loose_crossing(session, car)
+    trip_id = data(api_client, "add_rental", vehicle="Jolene", guest_name="Walt",
+                   starts_at=LOCAL_START, ends_at=LOCAL_END)["trip"]["id"]
+
+    out = data(api_client, "mark_tolls_recovered", trip_id=trip_id)
+    assert out["recovered"] is True and out["off_platform"] is True
+    assert out["trip_id"] == trip_id and out["tolls_cents"] == 690
+    session.refresh(toll)
+    assert toll.recovered_at is not None
+    open_ = data(api_client, "tolls", trip_id=trip_id)["tolls"]
+    assert open_ == [], "a recovered crossing is no longer open"
+
+    back = data(api_client, "mark_tolls_recovered", trip_id=trip_id, undo=True)
+    assert back["recovered"] is False
+    session.refresh(toll)
+    assert toll.recovered_at is None
+    assert len(data(api_client, "tolls", trip_id=trip_id)["tolls"]) == 1
+
+    empty = data(api_client, "add_rental", vehicle="Jolene", starts_at="2026-10-20 10:00",
+                 ends_at="2026-10-20 12:00")["trip"]["id"]
+    nothing = call(api_client, "mark_tolls_recovered", trip_id=empty)
+    assert nothing["isError"] and "no crossings" in nothing["content"][0]["text"]
+
+
+@requires_db
+def test_a_turo_rentals_tolls_are_not_marked_recovered(
+    api_client, token, fleet, session
+) -> None:
+    turo = fleet["soon"]
+    refused = call(api_client, "mark_tolls_recovered", trip_id=str(turo.id))
+    assert refused["isError"] and "Turo rental" in refused["content"][0]["text"]
+    session.expire_all()
+    assert all(t.recovered_at is None
+               for t in session.query(Toll).filter(Toll.trip_id == turo.id))
+
+
+# ---------------------------------------------------------------------------
+# A rental's route
+# ---------------------------------------------------------------------------
+
+@requires_db
+def test_a_route_is_summarised_per_drive_and_points_only_on_request(
+    api_client, token, fleet, monkeypatch
+) -> None:
+    from turonomics_api.ingest.trip_map import Drive, Route
+
+    rental = fleet["later"]
+    start = rental.starts_at + timedelta(hours=1)
+    # Two drives: one Bouncie measured, one it did not, about 1.4 miles of
+    # track north along a meridian (0.01 degree of latitude is 0.69 miles).
+    measured = Drive(starts_at=start, ends_at=start + timedelta(minutes=40),
+                     points=[(40.70, -73.99), (40.75, -73.98), (40.80, -73.97)],
+                     distance_mi=12.34)
+    traced = Drive(starts_at=start + timedelta(hours=5), ends_at=start + timedelta(hours=6),
+                   points=[(40.80, -73.97), (40.81, -73.97), (40.82, -73.97)])
+    route = Route(drives=[measured, traced], source="bouncie")
+    monkeypatch.setattr("turonomics_api.routers.trips.trip_route", lambda *_a, **_k: route)
+
+    out = data(api_client, "trip_route", trip_id=str(rental.id))
+    assert out["route_source"] == "bouncie" and out["drive_count"] == 2
+    first, second = out["drives"]
+    assert first["start"] == [40.7, -73.99] and first["end"] == [40.8, -73.97]
+    assert first["point_count"] == 3
+    assert first["miles"] == 12.3 and first["miles_from"] == "bouncie"
+    assert second["miles"] == 1.4 and second["miles_from"] == "points"
+    assert _when_out(first["starts_at"]) == start
+    assert out["miles"] == 13.7
+    assert "points" not in first and "points" not in second
+    assert len(out["tolls"]) == 2, "Bo's two crossings, on the route"
+
+    raw = data(api_client, "trip_route", trip_id=str(rental.id), include_points=True)
+    assert raw["drives"][1]["points"] == [[40.8, -73.97], [40.81, -73.97], [40.82, -73.97]]
+
+    missing = call(api_client, "trip_route", trip_id=str(uuid.uuid4()))
+    assert missing["isError"] and "no rental" in missing["content"][0]["text"]
